@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型设计 · 总览（msg 消息平台）</title>
+<link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css">
+</head>
+<body>
+
+<div class="topnav">
+  <a href="../../文档首页.md">文档首页</a> ›
+  <a href="../README.md">设计</a> ›
+  <span>原型设计 · 总览</span>
+</div>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>原型设计 · 总览</h1>
+      <p>msg 消息平台 · 管理台界面原型</p>
+    </div>
+    <nav>
+      <ul>
+        <li><a href="#purpose">1. 用途与口径</a></li>
+        <li><a href="#scope">2. 原型范围</a></li>
+        <li><a href="#pages">3. 页面规划</a></li>
+        <li><a href="#constraints">4. 设计约束</a></li>
+        <li><a href="#usage">5. 使用方式</a></li>
+        <li><a href="#later">6. 后续补充</a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <div class="content">
+    <main>
+
+      <h2 id="purpose">1. 用途与口径</h2>
+      <ul>
+        <li>本目录是 msg 的<strong>可交互界面原型</strong>（<code>.html</code> 资产）：<strong>原型即验收基准</strong>——界面类任务开工前须有对应原型，验收以原型为准（bms《AI开发规范》「界面先原型」红线）。</li>
+        <li><strong>当前只建总览</strong>：具体页面原型随 8B_06（管理台与运维）推进时补充；8B_01 PoC 与 8B_02 消息模型定稿前，页面结构可能变化，不做提前固化。</li>
+        <li>样式与脚本复用基座原型资源（<code>bms文档/设计/原型设计/资源/</code>，产品仓库根软链 <code>bms文档</code> 提供）；<strong>不在本目录复制 vendor 资产</strong>。</li>
+        <li>原型的视觉规范、组件、布局一律以 bms《布局设计》《前端开发规范》为准，msg 只声明消息平台特有页面。</li>
+      </ul>
+
+      <h2 id="scope">2. 原型范围</h2>
+      <table>
+        <tr><th>包含</th><th>不包含</th></tr>
+        <tr>
+          <td>消息平台管理台（console）：主题 / 消费组 / 分区 / 消息查询 / 死信 / 重放 / 配额</td>
+          <td>业务方自己的消息生产与消费界面（各业务服务负责）</td>
+        </tr>
+        <tr>
+          <td>平台概览与排障视图</td>
+          <td>bms 基座的系统管理页面（用户 / 角色 / 菜单等）</td>
+        </tr>
+        <tr>
+          <td>高危操作的确认与留痕交互</td>
+          <td>对外 OpenAPI 的调试工具（由网关提供）</td>
+        </tr>
+      </table>
+
+      <p>
+        范围依据：<a href="../架构设计/06_架构设计_控制面_元数据与运维.md">《架构设计 · 控制面：元数据与运维》</a>与
+        <a href="../概要设计/01_概要设计_总览.md">《概要设计 · 总览》</a>的控制面接口清单。
+      </p>
+
+      <h2 id="pages">3. 页面规划</h2>
+      <table>
+        <tr><th>序号</th><th>页面</th><th>主要内容</th><th>依赖</th><th>原型</th></tr>
+        <tr>
+          <td>02</td>
+          <td>平台概览</td>
+          <td>吞吐 / 积压 / 死信 / 磁盘四张核心卡片 + 趋势图 + 异常提示</td>
+          <td>8B_06</td>
+          <td>待补</td>
+        </tr>
+        <tr>
+          <td>03</td>
+          <td>主题管理</td>
+          <td>主题列表（分区数 / 消息量 / 保留期）+ 详情（分区 LEO / HW / ISR）+ 新建主题</td>
+          <td>8B_06</td>
+          <td>待补</td>
+        </tr>
+        <tr>
+          <td>04</td>
+          <td>消费组与积压</td>
+          <td>组列表 + 成员 + 分区积压明细 + 最后提交时间 + 位点重置入口</td>
+          <td>8B_06</td>
+          <td>待补</td>
+        </tr>
+        <tr>
+          <td>05</td>
+          <td>消息查询</td>
+          <td>按 offset / key / 时间检索；消息详情（头 + 载荷摘要，不展示敏感内容）</td>
+          <td>8B_06</td>
+          <td>待补</td>
+        </tr>
+        <tr>
+          <td>06</td>
+          <td>死信与重放</td>
+          <td>死信列表（原因 / 重试次数）+ 处置（重放 / 忽略 / 归档）+ 重放任务（限速 / 进度 / 暂停）</td>
+          <td>8B_06</td>
+          <td>待补</td>
+        </tr>
+        <tr>
+          <td>07</td>
+          <td>配额管理</td>
+          <td>租户 / 主题配额用量 + 软硬限提示 + 调整入口</td>
+          <td>8B_07</td>
+          <td>待补</td>
+        </tr>
+      </table>
+
+      <h2 id="constraints">4. 设计约束</h2>
+      <ul>
+        <li><strong>只读先于写操作</strong>：平台概览、主题、消费组、消息查询先做只读；写操作（建删主题、重放、位点重置）后置。</li>
+        <li><strong>重放任务化</strong>：重放必须展示限速、进度、暂停 / 取消，不能是「一键全放」。</li>
+        <li><strong>权限分层</strong>：只读页面挂 <code>msg:query</code>，写操作挂 <code>msg:manage</code>；无权限时按钮不渲染而非置灰。</li>
+        <li><strong>高危二次确认</strong>：删除主题、位点重置、批量重放必须二次确认并说明影响范围。</li>
+        <li><strong>不展示消息正文</strong>：消息查询只展示头信息与载荷摘要（长度 + 摘要），避免敏感数据在界面泄露。</li>
+        <li><strong>异常可定位</strong>：所有列表页支持按租户 / 主题 / 消费组过滤，并展示 <code>trace_id</code> 便于排障。</li>
+      </ul>
+
+      <h2 id="usage">5. 使用方式</h2>
+      <ul>
+        <li>直接以浏览器打开本总览，经页面规划表进入各页面原型（页面原型补充后生效）。</li>
+        <li>原型与《架构设计》《概要设计》冲突时，<strong>以架构设计 / 概要设计为准</strong>，并先修订原型再实现。</li>
+        <li>界面交付时按 bms《原型审查规范》做<strong>逐页对照</strong>（截图识图），并把结论登记任务测试记录。</li>
+      </ul>
+
+      <h2 id="later">6. 后续补充</h2>
+      <table>
+        <tr><th>补充时机</th><th>补充内容</th></tr>
+        <tr>
+          <td>8B_01 PoC 完成</td>
+          <td>确认订阅形态（长轮询 / 长驻流）后，补「消息查询」的交互细节</td>
+        </tr>
+        <tr>
+          <td>8B_02 消息模型定稿</td>
+          <td>补「主题管理」「消费组与积压」页面原型（依赖分区与位点模型）</td>
+        </tr>
+        <tr>
+          <td>8B_06 管理台开工前</td>
+          <td>补齐 02~06 页面原型与设计说明，作为验收基准</td>
+        </tr>
+        <tr>
+          <td>8B_07 多租户定稿</td>
+          <td>补「配额管理」页面原型</td>
+        </tr>
+      </table>
+
+      <p style="margin-top:24px;color:#666;font-size:13px;">
+        依《<a href="../../../bms文档/规范/文档生成规范.md">文档生成规范</a>》编写 · 视觉与组件以 bms《布局设计》《前端开发规范》为准
+      </p>
+
+    </main>
+  </div>
+
+</div>
+
+</body>
+</html>
