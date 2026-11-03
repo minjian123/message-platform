@@ -1,0 +1,16 @@
+# 本机裸跑规格（`../bms/scripts/tools/dev/本地全套.py` 装载；不参与容器部署）
+#
+# 口径与 bms / mdm 一致：各仓自持本机运行规格（仓根 `deploy/local_stack.toml`），
+# 本机全套脚本扫「自身仓 + 工作区平级仓」装载；产品仓不需要平台仓知道自己。
+#
+# 本服务：消息平台（`python -m bms_msg`），统一 8000 端口 + 回环别名区分；
+# 库落工作区根 `database/msg`（相对 backend/ 上两级）。
+
+[[services]]
+key = "msg"
+module = "bms_msg"
+backend = "backend"
+host = "127.0.0.9"
+db_dir = "../database/msg"
+# 启动前置：启动期要向平台上报声明并拉取权威快照；平台未就绪即拒启。
+after = ["platform"]

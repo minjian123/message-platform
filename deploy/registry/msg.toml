@@ -1,0 +1,38 @@
+# msg 产品自持声明（平台装载 + 装载期校验）
+#
+# 七段并列：产品档案 / 服务行 / 产品级路由 / 数据源 / 能力 / 种子 / 错误码。
+# 口径：基座 `bms_core.registry.products`（同源、同装载入口、同视图族、同唯一性纪律）。
+# 校验：`ops.check_modules` 与平台装配期复用同一实现；任一不满足即拒启。
+#
+# 8B_00 阶段：只登记产品档案、服务行与产品路由；数据源 / 能力 / 种子 / 错误码随实现补。
+# `errcode_segment = "35"` 为暂定值，最终以 07C 标识符登记为准。
+
+product_key = "msg"
+
+[[products]]
+product_key = "msg"
+name = "消息平台"
+frontend_package_source = "msg#frontend"
+status = "enabled"
+
+[[services]]
+module_key = "msg"
+service_key = "msg"
+name = "msg 消息平台服务"
+table_prefix = "msg_"
+business_code = "msg"
+errcode_segment = "35"
+event_domain = "msg"
+service_group = "product"
+build_batch = 4
+service_version = "0.1.0"
+contract_version = "0.1.0"
+tenant_base = true
+product_key = "msg"
+status = "enabled"
+
+[[product_routes]]
+product_key = "msg"
+domain = "msg"
+service_key = "msg"
+description = "msg 消息平台服务（对外 /api/msg/v1/msg/...）"

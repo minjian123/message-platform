@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[codz]
+*.so
+build/
+dist/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+.cache/
+htmlcov/
+
+# 依赖外置 / 本地工具产物
+node_modules/
+*.log
+
+# 本地凭据 / 资源
+deploy/.env
+msg文档/用户文档/本地资源.md
+
+# 基座文档软链不重复入库
+bms文档
+
+# 工作区 / IDE
+.idea/
+tmp/

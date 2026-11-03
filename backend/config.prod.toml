@@ -1,0 +1,19 @@
+# prod 环境覆盖（生产）：文档端点关闭（契约走 CI 快照）、自动建表关闭（结构走迁移）、
+# 连接串 / 密钥一律经 BMS_ 环境变量注入（不入库、不入镜像）
+
+[app]
+debug = false
+docs_enabled = false
+
+[log]
+level = "INFO"
+format = "json"
+
+[database]
+auto_create = false
+
+[tenant]
+allow_demo_fallback = false
+
+[cache]
+provider = "redis"

@@ -1,0 +1,24 @@
+# test 环境覆盖（CI 门禁）：CI 内 SQLite 临时库；结构真值由用例按需建表
+
+[app]
+debug = false
+
+[log]
+level = "INFO"
+format = "console"
+
+[database]
+auto_create = false
+sqlite_dir = "../../var/test-db"
+
+[database.platform]
+url = "sqlite+aiosqlite:///./msg_platform.db"
+
+[database.tenants]
+url = "sqlite+aiosqlite:///./msg_tenant_demo.db"
+
+[database.archive]
+url = "sqlite+aiosqlite:///./msg_archive.db"
+
+[topology]
+distribute = false

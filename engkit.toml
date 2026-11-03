@@ -1,0 +1,144 @@
+# msg 仓工程化工具包配置（唯一：文档根 / 工程清单 / 选测规则 / 预检步骤 / 拦截口径）
+# 口径见 engkit 文档《工程化工具包说明》§4 字段表。
+#
+# 8B_00 设计阶段：ops / 契约 / 域布局等门禁步骤在实现阶段启用（当前以注释保留），
+# 避免空仓预检因缺少 ops 包而误红。
+
+[repo]
+name = "msg"
+
+[docs]
+root = "msg文档"
+
+[docs.scope]
+whitelist_dirs = ["规范/", "资料/", "用户文档/"]
+plan_dir_pattern = "^项目/[^/]+/计划/"
+
+[backend]
+root = "backend"
+groups = ["services"]
+test_prefix = "test_"
+projects = ["services/msg"]
+coverage_packages = ["bms_msg", "services", "ops"]
+
+[selection]
+# 开发环依赖深度：direct = 只认直接 import；推送前预检固定用 closure
+depth = "direct"
+ruff_cmd = "uv run --project backend ruff"
+ruff_config = "backend/pyproject.toml"
+
+[pytest]
+cmd = "uv run pytest"
+cwd = "backend"
+
+[coverage]
+data_env = "MSG_COVERAGE_DATA"
+source_env = "MSG_COVERAGE_SOURCE"
+# 门禁阈值：行 + 分支 100%，与其他仓统一、不设例外（口径见 bms《AI开发规范》「覆盖率要求」节）
+fail_under = 100
+plugin = "engkit.coverage_plugin"
+data_file = ".cache/coverage/.coverage"
+interpreter = "uv run python"
+
+# ---- 场景闸门：预检是推送的内部步骤（`engkit push`），本地不设独立入口 ----
+[preflight.gate]
+dirty_tree = true
+audit_file = ".cache/preflight/audit.jsonl"
+
+# ---- 推送入口（`engkit push`）：预检通过后自动推送 ----
+[push]
+remote = "origin"
+branch = "main"
+doc_globs = ["*.md", "*.txt", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.webp", "*.pdf"]
+
+# ---- 预检步骤（声明序即执行序；`--fast` 只跑 always，`--full` 追加 full + scoped）----
+[[preflight.steps]]
+label = "行尾：工作树 CRLF 检查（应为 LF 的文件不得残留 CRLF）"
+cmd = ["uv", "run", "engkit", "eol", "--quiet"]
+
+[[preflight.steps]]
+label = "门禁冒烟：Python 版本"
+cmd = ["{python}", "-c", "import sys; assert sys.version_info >= (3, 14), 'Python < 3.14'"]
+
+[[preflight.steps]]
+label = "后端静态：ruff check"
+cmd = ["uv", "run", "ruff", "check", "."]
+cwd = "backend"
+
+[[preflight.steps]]
+label = "后端静态：ruff format --check"
+cmd = ["uv", "run", "ruff", "format", "--check", "."]
+cwd = "backend"
+
+[[preflight.steps]]
+label = "后端静态：pyright"
+cmd = ["uv", "run", "pyright"]
+cwd = "backend"
+
+# ---- 实现阶段启用（8B_01 起）----
+# [[preflight.steps]]
+# label = "门禁：check_modules（模块清单零漂移）"
+# cmd = ["uv", "run", "python", "-m", "ops.check_modules"]
+# cwd = "backend"
+#
+# [[preflight.steps]]
+# label = "契约：contract_snapshot check（公开契约零漂移）"
+# cmd = ["uv", "run", "python", "-m", "ops.contract_snapshot", "check"]
+# cwd = "backend"
+#
+# [[preflight.steps]]
+# label = "契约：event_contracts check（事件契约零漂移 + 兼容）"
+# cmd = ["uv", "run", "python", "-m", "ops.event_contracts", "check"]
+# cwd = "backend"
+
+[[preflight.steps]]
+label = "后端测试：定向（选测 + 覆盖率门禁 + 扩圈）"
+type = "scoped_tests"
+preset = "scoped"
+
+[[preflight.steps]]
+label = "后端测试：聚合全量（--full；仅 CI；含行 + 分支 100% 覆盖率门禁）"
+type = "full_tests"
+preset = "full"
+
+[guard]
+scripts = []
+repo_dirs = ["services", "ops", "alembic"]
+dir_test_threshold = 20
+full_test_dirs = []
+
+# ---- 基座校验器规则 ----
+[rules.test_db_isolation]
+scan_targets = ["backend/services", "backend/tests", "backend/tests_support"]
+allow_marker = "own_db"
+db_literal_prefixes = ["sqlite+aiosqlite:///", "sqlite:///"]
+engine_factories = ["create_async_engine", "create_engine"]
+db_file_suffixes = [".db"]
+id_columns = ["id"]
+cleanup_calls = ["drop_all"]
+exclude_parts = ["__pycache__", ".venv", "node_modules", ".git"]
+
+[rules.env_example]
+private_key_marker = "PRIVATE KEY"
+placeholder_marker = "..."
+
+[[rules.env_example.templates]]
+path = "deploy/.env.example"
+required_keys = [
+  "PLATFORM_NETWORK",
+  "MSG_REGISTRY_IMAGE_PREFIX",
+  "MSG_TAG",
+  "BMS_DATABASE__PLATFORM__URL_TEMPLATE",
+  "BMS_REDIS__URL",
+  "BMS_SERVICE_TOKEN__KEYS",
+]
+
+[rules.docs_status]
+project_dir = "msg文档/项目"
+stage = "08B_消息平台"
+statuses = ["未开始", "进行中", "部分完成", "已完成", "搁置"]
+todo_statuses = ["未开始", "进行中", "部分完成", "搁置"]
+done_status = "已完成"
+req_id_pattern = '^\d{2}-\d+$'
+task_id_pattern = '^\d{2}-\d+-\d+$'
+plan_id_pattern = '^\d{2}_\d{2}$'

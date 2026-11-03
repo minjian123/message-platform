@@ -1,0 +1,30 @@
+# dev 环境覆盖（可读日志 + 本地 SQLite 每服务库 + 放行本地前端开发服务器）
+
+[app]
+debug = true
+
+[log]
+level = "DEBUG"
+format = "console"
+slow_request_ms = 500
+
+[cors]
+allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[database]
+sqlite_dir = "../../database/msg"
+auto_create = true
+
+[database.platform]
+url = "sqlite+aiosqlite:///./msg_platform.db"
+url_template = "sqlite+aiosqlite:///./msg_{service}.db"
+
+[database.tenants]
+url = "sqlite+aiosqlite:///./msg_tenant_demo.db"
+url_template = "sqlite+aiosqlite:///./msg_{service}_{tenant}.db"
+
+[database.archive]
+url = "sqlite+aiosqlite:///./msg_archive.db"
+
+[tenant]
+dev_tenants = ["demo"]

@@ -1,0 +1,46 @@
+# msg 后端配置（基线；三环境差异见 config.dev.toml / config.test.toml / config.prod.toml）
+# 环境由 BMS_ENV 指定（缺省 dev）；环境变量（BMS_ 前缀）优先级最高。
+# 最小差异口径：本文件只写 msg 特有项，其余走基座 Settings 默认值。
+
+[app]
+name = "msg 消息平台"
+env = "dev"
+debug = false
+worker_id = 0
+# 服务标识（空则取服务包声明 `bms_msg.SERVICE_NAME` = msg）
+service = ""
+docs_enabled = true
+# 服务包名前缀：链的服务模型模块按 {package_prefix}_{service}.models 解析（msg → msg_msg.models）
+package_prefix = "msg"
+
+[server]
+host = "0.0.0.0"
+port = 8000
+workers = 1
+
+[database]
+# 库名前缀：平台库 {prefix}_{service} / 服务租户库 {prefix}_{service}_{tenant} / 归档库 {prefix}_archive
+# prefix == service 时基座去重 → msg / msg_{tenant} / msg_archive
+name_prefix = "msg"
+
+[tenant]
+resolve_cache_ttl = 60
+
+[cache]
+provider = "memory"
+options = {}
+
+[service_client]
+provider = "http"
+options = { attach_service_token = true }
+
+[service_token]
+provider = "jwt"
+issuer = "bms"
+ttl_seconds = 300
+active_kid = ""
+
+[service_token.keys]
+
+[token_verifier]
+provider = "unified"
