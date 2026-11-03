@@ -36,3 +36,17 @@ product_key = "msg"
 domain = "msg"
 service_key = "msg"
 description = "msg 消息平台服务（对外 /api/msg/v1/msg/...）"
+
+# ---- 数据源（第五段之前的产品数据源登记）----
+# 租户用量只读投影：bms 租户管理页按 `data_source_key` 装载只读板块，
+# 前端经网关直取 `path`（对应内部 `/api/v1/msg/tenant-usage`）。
+# 口径：配额单一事实源在 msg（`msg_quota`），bms 侧只读、不双写（见架构设计 07 篇第 6 节）。
+[[data_sources]]
+data_source_key = "msg_tenant_usage"
+name = "消息平台用量"
+kind = "form"
+data_source = "msg.msg.tenant_usage"
+origin = "product"
+product_key = "msg"
+path = "/tenant-usage"
+status = "enabled"
