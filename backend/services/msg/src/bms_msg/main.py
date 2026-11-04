@@ -1,7 +1,7 @@
 """msg 服务应用入口：共享基座 + 产品服务装配。
 
-> 8B_00 设计阶段：仅声明服务身份、产品服务清单与表归属清单；业务域 / 路由 / 消费组
-> 在 8B_01 起按详细设计逐步接入。当前不提供任何业务端点（探针由基座统一挂载）。
+> 8B_00 设计阶段声明服务身份、产品服务清单与表归属清单；01-1 起按详细设计接入业务模型与
+> 管理面路由（主题与分区）。数据面 / RPC / 其余控制面路由随对应任务追加。
 """
 
 from bms_core.application import BaseServiceApplicationFactory
@@ -12,6 +12,7 @@ from bms_core.services.table_registry import TableRecord
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
+from bms_msg.api.router import api_router
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
@@ -33,12 +34,12 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         return ConcurrentStableList(MSG_SERVICE_RECORDS)
 
     def table_records(self) -> ConcurrentStableList[TableRecord]:
-        """本产品表归属清单（8B_00 设计阶段为空，表随详细设计登记）。"""
+        """本产品表归属清单（元数据两表：`msg_topic` / `msg_partition`）。"""
         return ConcurrentStableList(MSG_TABLE_RECORDS)
 
     def service_routers(self) -> ConcurrentStableList[APIRouter]:
-        """业务路由（8B_01 起接入；当前无业务端点）。"""
-        return ConcurrentStableList()
+        """业务路由（主题管理路由，挂 `/api/v1/msg/admin/topics`）。"""
+        return ConcurrentStableList([api_router])
 
     def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
         """服务侧插件登记：租户守卫 `tenant_guard:msg` 与产品码覆盖 `error_mapper:msg`。

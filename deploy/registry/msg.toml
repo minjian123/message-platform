@@ -58,7 +58,7 @@ status = "enabled"
 # 文案键格式 `<product>.error.<snake>`；判定顺序：租户（350012 / 350011）→ 命名空间（350010）→ 主题。
 [[errcodes]]
 code = 350010
-domain = "tenant"
+domain = "msg"
 http_status = 400
 message_key = "msg.error.namespace_invalid"
 severity = "warning"
@@ -66,7 +66,7 @@ description = "命名空间未登记或未启用（须为服务目录中已启�
 
 [[errcodes]]
 code = 350011
-domain = "tenant"
+domain = "msg"
 http_status = 403
 message_key = "msg.error.tenant_suspended"
 severity = "warning"
@@ -74,8 +74,54 @@ description = "租户已停用（拒绝生产与消费，数据保留）"
 
 [[errcodes]]
 code = 350012
-domain = "tenant"
+domain = "msg"
 http_status = 404
 message_key = "msg.error.tenant_not_found"
 severity = "warning"
 description = "租户不存在（不泄露租户是否存在）"
+
+# ---- 主题与分区（任务 01-1；判定顺序：租户 → 命名空间 → 主题）----
+[[errcodes]]
+code = 350001
+domain = "msg"
+http_status = 404
+message_key = "msg.error.topic_not_found"
+severity = "warning"
+description = "主题不存在（或不属于当前租户）"
+
+[[errcodes]]
+code = 350008
+domain = "msg"
+http_status = 409
+message_key = "msg.error.topic_exists"
+severity = "warning"
+description = "主题已存在（同租户 / 命名空间 / 名称）"
+
+[[errcodes]]
+code = 350009
+domain = "msg"
+http_status = 400
+message_key = "msg.error.partition_count_invalid"
+severity = "warning"
+description = "分区数非法（≤0、超上限，或尝试减少）；保留期越界同码"
+
+# ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
+# 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
+# `deploy/boundaries/domain_layout.json` 是**生成物**（由清单渲染），本仓 ops 渲染命令归 8B_01，
+# 本阶段不手写；本地模型发现走服务包清单 `bms_msg.models`，域由表归属 owner 派生。
+# 新增业务域（如 01-2 的投递 / 05 的认证）时在此追加声明，勿跨产品复用他域键。
+[[domains]]
+domain_key = "msg"
+name = "消息平台"
+service_key = "msg"
+status = "placement"
+paths = [
+  "backend/services/msg/src/bms_msg/models/**/*.py",
+  "backend/services/msg/src/bms_msg/repositories/**/*.py",
+  "backend/services/msg/src/bms_msg/schemas/**/*.py",
+  "backend/services/msg/src/bms_msg/services/**/*.py",
+  "backend/services/msg/src/bms_msg/api/**/*.py",
+  "backend/services/msg/src/bms_msg/core/**/*.py",
+  "backend/services/msg/src/bms_msg/tenant/**/*.py",
+]
+public_api = []

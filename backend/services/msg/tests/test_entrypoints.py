@@ -6,9 +6,11 @@
 `__main__` 以 `run_name="__main__"` 执行并替换 `run_service`，避免真的监听端口。
 """
 
+import importlib
 import runpy
 
 import pytest
+from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.plugin import default_plugin_registry
 
 pytestmark = pytest.mark.kiwi_id(2411)
@@ -27,10 +29,20 @@ def test_module_entry_calls_run_service(monkeypatch: pytest.MonkeyPatch) -> None
     """`python -m bms_msg` 入口：以 `ApplicationFactory` 调 `run_service`（不真起服务）。"""
     import bms_core.core.run as run_module
 
-    called: list[object] = []
-    monkeypatch.setattr(run_module, "run_service", lambda factory: called.append(factory))
+    called: ConcurrentStableList[object] = ConcurrentStableList()
+
+    def _record(factory: object) -> None:
+        """记录 `run_service` 的入参（替身实现）。
+
+        Args:
+            factory: 被调方传入的工厂对象。
+        """
+        called.add(factory)
+
+    monkeypatch.setattr(run_module, "run_service", _record)
     default_plugin_registry().reset()
-    import bms_msg.__main__  # noqa: F401  # 普通导入：走 `__name__ != "__main__"` 分支（不启服务）
+    # 普通导入：走 `__name__ != "__main__"` 分支（不启服务）
+    importlib.import_module("bms_msg.__main__")
     runpy.run_module("bms_msg", run_name="__main__")
 
     assert len(called) == 1

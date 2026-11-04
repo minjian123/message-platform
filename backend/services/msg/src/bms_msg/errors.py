@@ -1,6 +1,7 @@
 """msg 错误码与产品码覆盖（段位 `35`：6 位码 = 2 位段 + 4 位序号）。
 
-- **码值口径**：租户接入三码按平台「产品码须 6 位（2 位段 + 4 位序号）、5 位属平台码区」定稿——
+- **码值口径**：产品码 6 位（2 位段 + 4 位序号），段位 `35`——
+  主题不存在 `350001`、主题已存在 `350008`、分区数非法 `350009`、
   命名空间非法 `350010`、租户已停用 `350011`、租户不存在 `350012`（设计原文 5 位 `35010` / `35011` /
   `35012` 已在详细设计「对齐记录」回写）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
@@ -8,7 +9,7 @@
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
   故由 `MsgErrorMapper` 经基座 `[error_mapper].provider = "msg"` 在**统一错误响应单点**
   （`build_error_response`）把这两码改写为 msg 码，管理面与数据面口径一致（详细设计 §3.2、§3.4）。
-- **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`3500xx`，职责见 01-1）。
+- **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）。
 """
 
 from enum import IntEnum
@@ -25,8 +26,11 @@ __all__ = [
     "MsgErrorCode",
     "MsgErrorMapper",
     "MsgNamespaceInvalidError",
+    "MsgPartitionCountInvalidError",
     "MsgTenantNotFoundError",
     "MsgTenantSuspendedError",
+    "MsgTopicExistsError",
+    "MsgTopicNotFoundError",
     "register_msg_error_mapper",
 ]
 
@@ -38,6 +42,15 @@ _LOGGER = get_logger("bms_msg.errors")
 
 class MsgErrorCode(IntEnum):
     """msg 错误码（段位 `35`；与 `deploy/registry/msg.toml` 的 `[[errcodes]]` 逐条对齐）。"""
+
+    TOPIC_NOT_FOUND = 350001
+    """主题不存在。"""
+
+    TOPIC_EXISTS = 350008
+    """主题已存在（同租户 / 命名空间 / 名称）。"""
+
+    PARTITION_COUNT_INVALID = 350009
+    """分区数非法（≤0、超上限，或尝试减少）；保留期越界同码。"""
 
     NAMESPACE_INVALID = 350010
     """命名空间非法（格式不符，或不是服务目录中已登记且启用的 `module_key`）。"""
@@ -72,6 +85,27 @@ class MsgNamespaceInvalidError(MsgError):
     """命名空间非法（350010 / 400）。"""
 
     code_: ClassVar[int] = MsgErrorCode.NAMESPACE_INVALID
+    http_status_: ClassVar[int] = 400
+
+
+class MsgTopicNotFoundError(MsgError):
+    """主题不存在（350001 / 404）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.TOPIC_NOT_FOUND
+    http_status_: ClassVar[int] = 404
+
+
+class MsgTopicExistsError(MsgError):
+    """主题已存在（350008 / 409）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.TOPIC_EXISTS
+    http_status_: ClassVar[int] = 409
+
+
+class MsgPartitionCountInvalidError(MsgError):
+    """分区数非法 / 保留期越界（350009 / 400）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.PARTITION_COUNT_INVALID
     http_status_: ClassVar[int] = 400
 
 

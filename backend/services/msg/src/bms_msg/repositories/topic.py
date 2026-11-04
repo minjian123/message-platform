@@ -1,0 +1,136 @@
+"""主题与分区仓储（`msg_topic` / `msg_partition`）：平台库同库多租户，按 `tenant_id` 列隔离。
+
+- 主题仓储声明 `tenant_scoped`：基座给 `create` 注入 `tenant_id`、给全部查询追加
+  `tenant_id = 当前租户`（平台库无库级隔离，这层条件就是隔离本身）；
+- 元数据表**不做软删除**（状态列表达），故 `soft_delete_enabled = False`；
+- 分区表无 `tenant_id` 列（按 `topic_id` 归属），隔离由主题查询保证；仓储只 `flush` 不 `commit`，
+  事务边界在服务层工作单元。
+"""
+
+from bms_core.core.concurrent import ConcurrentStableList, ConcurrentStableSet
+from bms_core.repositories.base_db_repository import BaseDbRepository
+from sqlalchemy import ColumnElement, func, select
+
+from bms_msg.models.partition import MsgPartition
+from bms_msg.models.topic import MsgTopic
+
+__all__ = ["PartitionRepository", "TopicRepository"]
+
+
+class TopicRepository(BaseDbRepository[MsgTopic]):
+    """主题仓储：按标识查重、分页列表（含总数）、同事务建主题 + 分区由服务层编排。"""
+
+    model = MsgTopic
+    tenant_scoped = True
+    soft_delete_enabled = False
+    sortable_fields = ConcurrentStableSet({"id", "name", "status", "created_at"})
+
+    async def get_by_identity(self, *, namespace: str, name: str) -> MsgTopic | None:
+        """按唯一键（当前租户 + 命名空间 + 名称）取主题。
+
+        Args:
+            namespace: 命名空间。
+            name: 主题名。
+
+        Returns:
+            MsgTopic | None: 主题；不存在返回 None。
+        """
+        statement = self._select().where(
+            self._column("namespace") == namespace,
+            self._column("name") == name,
+        )
+        return (await self._session.execute(statement)).scalar_one_or_none()
+
+    async def list_topics(
+        self, *, namespace: str | None, keyword: str | None, offset: int, limit: int
+    ) -> ConcurrentStableList[MsgTopic]:
+        """分页取主题（不含分区明细；按创建时间倒序、主键兜底稳定序）。
+
+        Args:
+            namespace: 命名空间过滤；None 不限制。
+            keyword: 名称模糊匹配；None / 空串不限制。
+            offset: 跳过条数（由页码换算）。
+            limit: 本页条数。
+
+        Returns:
+            ConcurrentStableList[MsgTopic]: 当页主题。
+        """
+        statement = (
+            self._select()
+            .where(*self._filters(namespace, keyword))
+            .order_by(self._column("created_at").desc(), self._column("id").desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
+
+    async def count_topics(self, *, namespace: str | None, keyword: str | None) -> int:
+        """取符合条件的主题总数（与 `list_topics` 同条件）。
+
+        Args:
+            namespace: 命名空间过滤；None 不限制。
+            keyword: 名称模糊匹配；None / 空串不限制。
+
+        Returns:
+            int: 总数。
+        """
+        statement = (
+            select(func.count()).select_from(self.model).where(*self._scope_where(), *self._filters(namespace, keyword))
+        )
+        return int((await self._session.execute(statement)).scalar_one())
+
+    def _filters(self, namespace: str | None, keyword: str | None) -> tuple[ColumnElement[bool], ...]:
+        """构造列表过滤条件（命名空间 / 名称模糊）。
+
+        Args:
+            namespace: 命名空间过滤；None 不限制。
+            keyword: 名称模糊匹配；None / 空串不限制。
+
+        Returns:
+            tuple[ColumnElement[bool], ...]: 条件元组（可能为空）。
+        """
+        conditions: ConcurrentStableList[ColumnElement[bool]] = ConcurrentStableList()
+        if namespace is not None:
+            conditions.add(self._column("namespace") == namespace)
+        if keyword:
+            conditions.add(self._column("name").contains(keyword, autoescape=True))
+        return tuple(conditions)
+
+
+class PartitionRepository(BaseDbRepository[MsgPartition]):
+    """分区仓储：按主题取分区、追加分区（只追加不重排）。"""
+
+    model = MsgPartition
+    soft_delete_enabled = False
+    sortable_fields = ConcurrentStableSet({"partition_no"})
+
+    async def list_by_topic(self, topic_id: int) -> ConcurrentStableList[MsgPartition]:
+        """取某主题的全部分区（按分区号升序）。
+
+        Args:
+            topic_id: 主题 ID。
+
+        Returns:
+            ConcurrentStableList[MsgPartition]: 分区列表。
+        """
+        statement = self._select().where(self._column("topic_id") == topic_id).order_by(self._column("partition_no"))
+        return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
+
+    async def add_partitions(
+        self, *, topic_id: int, start_no: int, count: int, leader: str
+    ) -> ConcurrentStableList[MsgPartition]:
+        """追加 `count` 个分区（分区号从 `start_no` 起连续，只追加不重排）。
+
+        Args:
+            topic_id: 主题 ID。
+            start_no: 起始分区号（= 主题原分区数）。
+            count: 追加数量（须为正）。
+            leader: 新分区的 leader 标识。
+
+        Returns:
+            ConcurrentStableList[MsgPartition]: 新建分区（插入序）。
+        """
+        created: ConcurrentStableList[MsgPartition] = ConcurrentStableList()
+        for partition_no in range(start_no, start_no + count):
+            created.add(await self.create(topic_id=topic_id, partition_no=partition_no, leader=leader))
+        return created

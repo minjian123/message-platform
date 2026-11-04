@@ -12,6 +12,7 @@ from bms_core.core.paths import resolve_backend_root
 
 from bms_msg.main import ApplicationFactory
 from services.table_registry import register as register_product_tables
+from services.table_registry import table_names
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 """后端工程根（本文件 `backend/services/msg/tests/` 上溯三级）。"""
@@ -57,17 +58,20 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 
 
 @pytest.mark.kiwi_id(2410)
+@pytest.mark.kiwi_id(2412)
 def test_factory_surface_lists_are_declared() -> None:
-    """工厂三张清单可用：服务行一条、表归属为空（8B_00）、业务路由为空（8B_01 起接入）。"""
+    """工厂三张清单可用：服务行一条、表归属两表（01-1）、业务路由一条（主题管理）。"""
     factory = ApplicationFactory()
 
     assert [record.module_key for record in factory.service_records()] == ["msg"]
-    assert list(factory.table_records()) == []
-    assert list(factory.service_routers()) == []
+    assert [record.table_name for record in factory.table_records()] == ["msg_topic", "msg_partition"]
+    assert len(factory.service_routers()) == 1
 
 
 @pytest.mark.kiwi_id(2410)
+@pytest.mark.kiwi_id(2412)
 def test_table_registry_register_is_idempotent() -> None:
-    """表归属装载入口可调用且幂等（8B_00 为空清单，首批表登记后自动生效）。"""
+    """表归属装载入口可调用且幂等（同值重复登记无副作用）。"""
     register_product_tables()
     register_product_tables()
+    assert table_names() == ("msg_topic", "msg_partition")

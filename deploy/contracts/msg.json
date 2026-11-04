@@ -27,6 +27,399 @@
         },
         "title": "ApiResponse",
         "type": "object"
+      },
+      "ApiResponse_TopicDetail_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[TopicDetail]",
+        "type": "object"
+      },
+      "ApiResponse_TopicItem_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[TopicItem]",
+        "type": "object"
+      },
+      "ApiResponse_TopicPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[TopicPage]",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PartitionItem": {
+        "additionalProperties": false,
+        "description": "分区明细（详情接口的 `partitions` 元素）。",
+        "properties": {
+          "checkpoint_hw": {
+            "description": "检查点 HW",
+            "title": "Checkpoint Hw",
+            "type": "integer"
+          },
+          "checkpoint_leo": {
+            "description": "检查点 LEO",
+            "title": "Checkpoint Leo",
+            "type": "integer"
+          },
+          "epoch": {
+            "description": "领导者任期（复制阶段使用）",
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "leader": {
+            "description": "当前 leader 标识",
+            "title": "Leader",
+            "type": "string"
+          },
+          "partition_no": {
+            "description": "分区号（0 起）",
+            "title": "Partition No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partition_no",
+          "leader",
+          "checkpoint_leo",
+          "checkpoint_hw",
+          "epoch"
+        ],
+        "title": "PartitionItem",
+        "type": "object"
+      },
+      "TopicCreateRequest": {
+        "additionalProperties": false,
+        "description": "创建主题请求（`tenant_id` **不在请求体**：由基座解析链注入，防客户端自报冒充）。",
+        "properties": {
+          "cleanup_policy": {
+            "default": "delete",
+            "description": "清理策略（首期只支持 delete）",
+            "maxLength": 16,
+            "title": "Cleanup Policy",
+            "type": "string"
+          },
+          "name": {
+            "description": "主题名（建议 {域}.{对象}.{动作}）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition_count": {
+            "description": "分区数（1~1024；只增不减）",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "retention_ms": {
+            "default": 2592000000,
+            "description": "保留时长（毫秒；默认 30 天，上限 366 天）",
+            "title": "Retention Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "namespace",
+          "name",
+          "partition_count"
+        ],
+        "title": "TopicCreateRequest",
+        "type": "object"
+      },
+      "TopicDetail": {
+        "additionalProperties": false,
+        "description": "主题详情（含分区列表）。",
+        "properties": {
+          "cleanup_policy": {
+            "description": "清理策略",
+            "title": "Cleanup Policy",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "创建时间（UTC）",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "description": "主题 ID（雪花，JSON 输出为字符串）",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "主题名",
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition_count": {
+            "description": "分区数",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "partitions": {
+            "description": "分区明细（按分区号升序）",
+            "items": {
+              "$ref": "#/components/schemas/PartitionItem"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "retention_ms": {
+            "description": "保留时长（毫秒）",
+            "title": "Retention Ms",
+            "type": "integer"
+          },
+          "status": {
+            "description": "状态（active / disabled）",
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "description": "租户内部身份（雪花，JSON 输出为字符串）",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "namespace",
+          "name",
+          "partition_count",
+          "retention_ms",
+          "cleanup_policy",
+          "status",
+          "created_at"
+        ],
+        "title": "TopicDetail",
+        "type": "object"
+      },
+      "TopicItem": {
+        "additionalProperties": false,
+        "description": "主题明细（列表行 / 创建与查询响应的主体）。",
+        "properties": {
+          "cleanup_policy": {
+            "description": "清理策略",
+            "title": "Cleanup Policy",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "创建时间（UTC）",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "description": "主题 ID（雪花，JSON 输出为字符串）",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "主题名",
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition_count": {
+            "description": "分区数",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "retention_ms": {
+            "description": "保留时长（毫秒）",
+            "title": "Retention Ms",
+            "type": "integer"
+          },
+          "status": {
+            "description": "状态（active / disabled）",
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "description": "租户内部身份（雪花，JSON 输出为字符串）",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "namespace",
+          "name",
+          "partition_count",
+          "retention_ms",
+          "cleanup_policy",
+          "status",
+          "created_at"
+        ],
+        "title": "TopicItem",
+        "type": "object"
+      },
+      "TopicPage": {
+        "additionalProperties": false,
+        "description": "主题列表响应（页码分页：`page` 从 1 起，`size` 默认 20）。",
+        "properties": {
+          "items": {
+            "description": "当前页主题",
+            "items": {
+              "$ref": "#/components/schemas/TopicItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "符合条件的总数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "TopicPage",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
       }
     }
   },
@@ -53,6 +446,359 @@
           }
         },
         "summary": "Root"
+      }
+    },
+    "/api/v1/msg/admin/topics": {
+      "get": {
+        "description": "主题列表（页码分页 + 命名空间 / 名称过滤）。\n\n需要 msg:query 权限；按租户隔离；命名空间过滤值非法返回 350010。",
+        "operationId": "list_topics_api_v1_msg_admin_topics_get",
+        "parameters": [
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名模糊匹配",
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名模糊匹配",
+              "title": "Keyword"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TopicPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Topics",
+        "tags": [
+          "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350011,
+          350012
+        ]
+      },
+      "post": {
+        "description": "创建主题（指定分区数，返回完整元数据）。\n\n需要 msg:manage 权限；`tenant_id` 取自基座解析链（请求体不接收）；同租户 / 命名空间下重名\n返回 350008，分区数或保留期越界返回 350009，命名空间非已启用 module_key 返回 350010。",
+        "operationId": "create_topic_api_v1_msg_admin_topics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TopicItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Create Topic",
+        "tags": [
+          "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350008,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/topics/{topic_id}": {
+      "get": {
+        "description": "主题详情（含分区列表）。\n\n需要 msg:query 权限；不存在或不属于当前租户返回 350001。",
+        "operationId": "get_topic_api_v1_msg_admin_topics__topic_id__get",
+        "parameters": [
+          {
+            "description": "主题 ID（雪花）",
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "description": "主题 ID（雪花）",
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TopicDetail_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Topic",
+        "tags": [
+          "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350011,
+          350012
+        ]
       }
     },
     "/healthz": {

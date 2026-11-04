@@ -10,8 +10,10 @@ worker_id = 0
 # 服务标识（空则取服务包声明 `bms_msg.SERVICE_NAME` = msg）
 service = ""
 docs_enabled = true
-# 服务包名前缀：链的服务模型模块按 {package_prefix}_{service}.models 解析（msg → msg_msg.models）
-package_prefix = "msg"
+# 服务包名前缀：链的服务模型模块按 {package_prefix}_{service}.models 解析
+# 本仓服务包名是 bms_msg（前缀 bms + 服务 msg）→ 前缀必须配 bms；配 msg 会解析出 msg.models
+# （同名去重）而取到空模型清单，迁移链与开发库自动建表都建不出表（2026-11-04 修正）
+package_prefix = "bms"
 
 [server]
 host = "0.0.0.0"
