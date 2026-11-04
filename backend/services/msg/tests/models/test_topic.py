@@ -30,7 +30,11 @@ def _table(name: str) -> Table:
 
 def test_model_modules_cover_all_model_files() -> None:
     """`MODEL_MODULES` 与本模块导出的模型一一对应（漏登记会让迁移链与自动建表漏表）。"""
-    assert tuple(MODEL_MODULES) == ("bms_msg.models.topic", "bms_msg.models.partition")
+    assert tuple(MODEL_MODULES) == (
+        "bms_msg.models.topic",
+        "bms_msg.models.partition",
+        "bms_msg.models.replay",
+    )
     assert {MsgTopic.__tablename__, MsgPartition.__tablename__} <= set(Base.metadata.tables)
 
 

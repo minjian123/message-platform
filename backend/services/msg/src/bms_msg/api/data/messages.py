@@ -6,6 +6,9 @@
   校验在入口（`_guard`）完成，`DeliveryService` 的投递语义与停等规则一行不改。
 - **延迟是发布的一个维度**（01-5）：`publish` 按 `delay_level` 分派——给值走 `DelayService`（入延迟区、
   无 offset、惰性启动推进器），缺省走原投递链路；两条分支共用同一份租户与主题校验口径。
+- **保留清理是请求驱动**（01-6）：`publish` 与 `consume` 入口各按主题 `retention_ms` / `retention_bytes`
+  幂等判定一次并前移可读区间起点。**放在 API 层而非 `DeliveryService` 内部**：01-2 / 01-3 的投递与停等
+  语义（尤其中 `_collect`）一行不改；代价是请求内主题解析多一次（与 01-4 同类遗留，8B_01 帧入口统一收敛）。
 - **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信 / 组 / 延迟区是进程级内存
   实现（`app.state` 注入）。
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
@@ -39,6 +42,7 @@ from bms_msg.broker.delivery import DeliveryService, DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.retention import RetentionService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.errors import MsgErrorCode
@@ -148,6 +152,51 @@ def _delay_service(uow: UnitOfWork, store: DelayStore, scheduler: DelayScheduler
     return DelayService(store=store, router=TopicRouter(TopicRepository(session)), wheel=scheduler.wheel)
 
 
+async def _apply_retention(
+    *,
+    tenant: CurrentTenant,
+    uow: UnitOfWork,
+    store: MessageStore,
+    namespace: str,
+    topic: str,
+    partition_no: int | None = None,
+    key: str | None = None,
+) -> None:
+    """按主题保留口径清理目标分区到期段（请求驱动，幂等）。
+
+    判定顺序与既有链路一致：命名空间（`350010`）→ 主题（`350001`）→ 分区号（`350009`）→ 清理；
+    因此**非法请求不会触发清理**，且错误码与投递链路同源（排障时两侧结论一致）。
+
+    分区号的两种给法（与两条链路对应）：`consume` 直接给 `partition_no`；`publish` 只给 `key`，
+    由 `route()` 算出目标分区（同 key 恒同分区，与随后的 `append` 落点一致）。
+
+    Args:
+        tenant: 当前租户。
+        uow: 平台库工作单元（取主题仓储会话）。
+        store: 消息存储（段元数据与起点前移）。
+        namespace: 命名空间。
+        topic: 主题名。
+        partition_no: 目标分区号（`consume` 用）；None 时按 `key` 路由。
+        key: 分区键（`publish` 用；可空）。
+
+    Raises:
+        MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
+        MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
+        MsgPartitionCountInvalidError: 分区号越界（350009）。
+    """
+    tenant.ensure_namespace(namespace)
+    session = cast("DbSession", uow.session)
+    router = TopicRouter(TopicRepository(session))
+    resolved = await router.resolve(namespace=namespace, name=topic)
+    target = router.partition(resolved, partition_no) if partition_no is not None else router.route(resolved, key)
+    await RetentionService(store=store).apply(
+        topic_id=int(resolved.id),
+        partition_no=target,
+        retention_ms=int(resolved.retention_ms),
+        retention_bytes=int(resolved.retention_bytes),
+    )
+
+
 async def _guard(
     *,
     tenant: CurrentTenant,
@@ -229,6 +278,7 @@ async def publish(
     命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。
     延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。
     首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。
+    入口按主题保留口径清理本分区到期段（幂等；见 01-6）。
     """
     if req.delay_level is not None:
         order = await _delay_service(uow, delay_store, delay_scheduler).publish(tenant=tenant, request=req)
@@ -243,6 +293,14 @@ async def publish(
                 deliver_at=order.deliver_at,
             )
         )
+    await _apply_retention(
+        tenant=tenant,
+        uow=uow,
+        store=store,
+        namespace=req.namespace,
+        topic=req.topic,
+        key=req.key,
+    )
     message = await _service(uow, store, offsets, dead_letters, state).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
@@ -275,7 +333,16 @@ async def consume(
     死信消息不再投递，其后的消息可继续（顺序性唯一破例）。
     主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，
     分区号越界 350009，位点已被保留期清理 350003。
+    入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。
     """
+    await _apply_retention(
+        tenant=tenant,
+        uow=uow,
+        store=store,
+        namespace=req.namespace,
+        topic=req.topic,
+        partition_no=req.partition,
+    )
     await _guard(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
     delivered = await _service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)
     return ApiResponse.ok(

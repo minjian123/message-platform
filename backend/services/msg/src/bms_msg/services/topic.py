@@ -15,6 +15,7 @@ from bms_core.db.unit_of_work import UnitOfWork
 
 from bms_msg.core.config import (
     MAX_PARTITION_COUNT,
+    MAX_RETENTION_BYTES,
     MAX_RETENTION_MS,
     MIN_PARTITION_COUNT,
     NAMESPACE_PATTERN,
@@ -72,6 +73,7 @@ class TopicService:
         self._ensure_topic_name(request.name)
         self._ensure_partition_count(request.partition_count)
         self._ensure_retention(request.retention_ms)
+        self._ensure_retention_bytes(request.retention_bytes)
         async with self._uow.begin():
             if await self._topics.get_by_identity(namespace=request.namespace, name=request.name) is not None:
                 raise MsgTopicExistsError(f"主题已存在：{request.namespace}/{request.name}")
@@ -81,6 +83,7 @@ class TopicService:
                 name=request.name,
                 partition_count=request.partition_count,
                 retention_ms=request.retention_ms,
+                retention_bytes=request.retention_bytes,
                 cleanup_policy=request.cleanup_policy or CLEANUP_DELETE,
             )
             await self._partitions.add_partitions(
@@ -238,6 +241,20 @@ class TopicService:
         """
         if not 0 < retention_ms <= MAX_RETENTION_MS:
             raise MsgPartitionCountInvalidError(f"保留期须在 1~{MAX_RETENTION_MS} 毫秒：{retention_ms}")
+
+    def _ensure_retention_bytes(self, retention_bytes: int) -> None:
+        """校验容量上限（`0` = 不限；上限内；越界同 `350009`，与保留期同码）。
+
+        Args:
+            retention_bytes: 容量上限（字节）。
+
+        Raises:
+            MsgPartitionCountInvalidError: 越界（350009）。
+        """
+        if not 0 <= retention_bytes <= MAX_RETENTION_BYTES:
+            raise MsgPartitionCountInvalidError(
+                f"容量上限须在 0~{MAX_RETENTION_BYTES} 字节（0 = 不限）：{retention_bytes}"
+            )
 
 
 def _leader_id() -> str:

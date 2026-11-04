@@ -13,16 +13,18 @@
 """
 
 import importlib
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
-from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.context import reset_tenant_context, set_tenant_context
 from bms_core.db.session import DbSession
 from bms_core.db.tenant import TenantContext
-from bms_core.db.unit_of_work import DbUnitOfWork
+from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
+from bms_core.events.base import EventEnvelope
 from bms_core.models.base import Base
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -35,10 +37,13 @@ from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.inspector import GroupInspector
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.replay import ReplayAuditor, ReplayRunner, ReplayService
+from bms_msg.broker.retention import RetentionService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.core.config import DEFAULT_RETENTION_MS
 from bms_msg.models.topic import MsgTopic
+from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 from bms_msg.schemas.group import MemberRequest
 from bms_msg.schemas.topic import TopicCreateRequest
@@ -161,15 +166,15 @@ def _tenant_context() -> Iterator[None]:
 
 @pytest.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
-    """内存库引擎（每用例一份；只建本模块两表）。
+    """内存库引擎（每用例一份；只建本模块三表）。
 
     Yields:
         AsyncEngine: 内存 SQLite 引擎。
     """
     created = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
     async with created.begin() as connection:
-        await connection.run_sync(Base.metadata.tables["msg_topic"].create)
-        await connection.run_sync(Base.metadata.tables["msg_partition"].create)
+        for table in ("msg_topic", "msg_partition", "msg_replay_task"):
+            await connection.run_sync(Base.metadata.tables[table].create)
     try:
         yield created
     finally:
@@ -578,6 +583,166 @@ def delay_scheduler(
         store=delay_store,
         messages=message_store,
         wheel=delay_wheel,
+        now=clock,
+        interval_ms=10,
+    )
+
+
+class FakeAuditSink:
+    """审计出口替身（满足 `AuditSink` 协议）：记录事件，可按次返回成功 / 失败。"""
+
+    def __init__(self) -> None:
+        """初始化（缺省成功、无事件）。"""
+        self.events: ConcurrentStableList[EventEnvelope] = ConcurrentStableList()
+        self.result = True
+
+    async def emit(self, event: EventEnvelope) -> bool:
+        """记录事件并返回当前设定的结果。
+
+        Args:
+            event: 审计事件信封。
+
+        Returns:
+            bool: `self.result`。
+        """
+        self.events.add(event)
+        return self.result
+
+
+class ExplodingAuditSink:
+    """审计出口替身：发射即抛异常（验证「审计出口实现异常也不影响重放」）。"""
+
+    async def emit(self, event: EventEnvelope) -> bool:
+        """恒抛异常。
+
+        Args:
+            event: 审计事件信封。
+
+        Returns:
+            bool: 不返回。
+
+        Raises:
+            RuntimeError: 恒抛。
+        """
+        del event
+        raise RuntimeError("审计出口不可用")
+
+
+@pytest.fixture
+def audit_sink() -> FakeAuditSink:
+    """审计出口替身（缺省成功）。
+
+    Returns:
+        FakeAuditSink: 空替身。
+    """
+    return FakeAuditSink()
+
+
+@pytest.fixture
+def retention_service(message_store: InMemoryMessageStore, clock: ManualClock) -> RetentionService:
+    """保留期清理服务（进程级存储 + 可推进时钟）。
+
+    Args:
+        message_store: 消息存储。
+        clock: 可推进时钟。
+
+    Returns:
+        RetentionService: 清理服务。
+    """
+    return RetentionService(store=message_store, now=clock)
+
+
+@pytest.fixture
+def replay_service(db_session: AsyncSession, message_store: InMemoryMessageStore, clock: ManualClock) -> ReplayService:
+    """重放任务服务（请求级平台库会话 + 进程级消息存储 + 可推进时钟）。
+
+    Args:
+        db_session: 请求级会话。
+        message_store: 消息存储。
+        clock: 可推进时钟。
+
+    Returns:
+        ReplayService: 重放服务。
+    """
+    session = cast("DbSession", db_session)
+    return ReplayService(
+        tasks=ReplayTaskRepository(session),
+        router=TopicRouter(TopicRepository(session)),
+        store=message_store,
+        uow=DbUnitOfWork(session),
+        now=clock,
+    )
+
+
+@pytest.fixture
+def replay_auditor(audit_sink: FakeAuditSink) -> ReplayAuditor:
+    """重放审计记录器（出口为替身）。
+
+    Args:
+        audit_sink: 审计出口替身。
+
+    Returns:
+        ReplayAuditor: 审计记录器。
+    """
+    return ReplayAuditor(sink=audit_sink)
+
+
+@pytest.fixture
+def exploding_auditor() -> ReplayAuditor:
+    """重放审计记录器（出口恒抛异常：验证「审计失败不影响重放结果」）。
+
+    Returns:
+        ReplayAuditor: 审计记录器。
+    """
+    return ReplayAuditor(sink=ExplodingAuditSink())
+
+
+@pytest.fixture
+def replay_uow(db_session: AsyncSession) -> Callable[[], AbstractAsyncContextManager[UnitOfWork]]:
+    """执行器用工作单元工厂（复用内存会话，不依赖请求上下文）。
+
+    Args:
+        db_session: 请求级会话。
+
+    Returns:
+        Callable[[], AbstractAsyncContextManager[UnitOfWork]]: 工作单元工厂。
+    """
+    session = cast("DbSession", db_session)
+
+    @asynccontextmanager
+    async def _uow() -> AsyncGenerator[UnitOfWork]:
+        """产出绑定内存会话的工作单元。
+
+        Yields:
+            UnitOfWork: 工作单元。
+        """
+        yield DbUnitOfWork(session)
+
+    return _uow
+
+
+@pytest.fixture
+def replay_runner(
+    message_store: InMemoryMessageStore,
+    replay_uow: Callable[[], AbstractAsyncContextManager[UnitOfWork]],
+    replay_auditor: ReplayAuditor,
+    clock: ManualClock,
+) -> ReplayRunner:
+    """重放执行器（10ms 周期：生命周期用例不必等 200ms；`run_once` 不受周期影响）。
+
+    Args:
+        message_store: 消息存储。
+        replay_uow: 工作单元工厂。
+        replay_auditor: 审计记录器。
+        clock: 可推进时钟。
+
+    Returns:
+        ReplayRunner: 未启动的执行器。
+    """
+    return ReplayRunner(
+        messages=message_store,
+        uow_factory=replay_uow,
+        auditor=replay_auditor,
         now=clock,
         interval_ms=10,
     )

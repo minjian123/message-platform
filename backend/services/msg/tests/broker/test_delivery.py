@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import cast
 
 import pytest
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.db.session import DbSession
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -204,104 +204,6 @@ class _FailingOffsetStore(OffsetStore):
         if self.fail:
             raise RuntimeError("位点存储不可用")
         await self._inner.commit(group=group, topic_id=topic_id, partition_no=partition_no, offset=offset)
-
-
-class _RetainedStore(MessageStore):
-    """消息存储替身：把日志起点抬到指定值（模拟保留期清理，`start_offset > 0`）。"""
-
-    def __init__(self, inner: MessageStore, *, start: int) -> None:
-        """初始化。
-
-        Args:
-            inner: 真实实现。
-            start: 伪装的日志起点。
-        """
-        self._inner = inner
-        self._start = start
-
-    async def append(
-        self,
-        *,
-        topic_id: int,
-        partition_no: int,
-        message_id: str,
-        log_id: str,
-        key: str | None,
-        payload: bytes,
-        headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
-        published_at: datetime,
-    ) -> StoredMessage:
-        """转调真实实现（签名同端口）。
-
-        Args:
-            topic_id: 主题主键。
-            partition_no: 分区号。
-            message_id: 消息 ID。
-            log_id: 记录 ID。
-            key: 分区键。
-            payload: 载荷。
-            headers: 结构化头。
-            trace_id: 链路标识。
-            published_at: 发布时间。
-
-        Returns:
-            StoredMessage: 追加后的记录。
-        """
-        return await self._inner.append(
-            topic_id=topic_id,
-            partition_no=partition_no,
-            message_id=message_id,
-            log_id=log_id,
-            key=key,
-            payload=payload,
-            headers=headers,
-            trace_id=trace_id,
-            published_at=published_at,
-        )
-
-    async def fetch(
-        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
-    ) -> ConcurrentStableList[StoredMessage]:
-        """转调真实实现。
-
-        Args:
-            topic_id: 主题主键。
-            partition_no: 分区号。
-            from_offset: 起始位点。
-            max_messages: 上限。
-
-        Returns:
-            ConcurrentStableList[StoredMessage]: 消息批次。
-        """
-        return await self._inner.fetch(
-            topic_id=topic_id, partition_no=partition_no, from_offset=from_offset, max_messages=max_messages
-        )
-
-    async def leo(self, *, topic_id: int, partition_no: int) -> int:
-        """转调真实实现。
-
-        Args:
-            topic_id: 主题主键。
-            partition_no: 分区号。
-
-        Returns:
-            int: LEO。
-        """
-        return await self._inner.leo(topic_id=topic_id, partition_no=partition_no)
-
-    async def start_offset(self, *, topic_id: int, partition_no: int) -> int:
-        """返回伪装的日志起点。
-
-        Args:
-            topic_id: 主题主键。
-            partition_no: 分区号。
-
-        Returns:
-            int: 伪装的起点。
-        """
-        del topic_id, partition_no
-        return self._start
 
 
 def _build_service(
@@ -542,27 +444,21 @@ async def test_consume_rejects_partition_out_of_range(
 
 
 async def test_consume_reports_retention_gap(
-    db_session: AsyncSession,
+    delivery_service: DeliveryService,
     message_store: InMemoryMessageStore,
-    offset_store: InMemoryOffsetStore,
-    dead_letters: InMemoryDeadLetterQueue,
-    delivery_state: DeliveryState,
-    clock: Callable[[], datetime],
     topic: MsgTopic,
     current_tenant: CurrentTenant,
 ) -> None:
-    """位点早于保留起点（消息已被清理）：`350003`。"""
-    del topic
-    service = _build_service(
-        db_session=db_session,
-        store=_RetainedStore(message_store, start=5),
-        offsets=offset_store,
-        dead_letters=dead_letters,
-        state=delivery_state,
-        now=clock,
-    )
+    """位点早于保留起点（消息已被清理）：`350003`。
+
+    01-6 起内存实现真正支持起点前移，故直接用 `truncate_before` 造「已清理」状态，
+    不再需要伪装 `start_offset` 的存储替身。
+    """
+    topic_id = int(topic.id)
+    await _publish_many(delivery_service, current_tenant, 3)
+    await message_store.truncate_before(topic_id=topic_id, partition_no=0, offset=3)
     with pytest.raises(MsgMessageNotFoundError) as excinfo:
-        await service.consume(tenant=current_tenant, request=_consume())
+        await delivery_service.consume(tenant=current_tenant, request=_consume())
     assert excinfo.value.code == MsgErrorCode.MESSAGE_NOT_FOUND
 
 

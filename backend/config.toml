@@ -55,3 +55,29 @@ active_kid = ""
 
 [token_verifier]
 provider = "unified"
+
+[outbox_store]
+# 事务性发件箱（审计链的写入载体）：不配则落 NullOutboxStore —— 审计事件被**静默丢弃**（01-6 实测现状）
+provider = "sql"
+options = {}
+
+[audit_log]
+# 操作审计中间件（bms 06_01）：写方法全记；这里显式排除数据面高频路径与重放端点。
+# - 排除数据面：需求 05-6「普通读写不逐条留痕」，publish / consume / ack / 成员心跳逐条写会洪泛；
+# - 排除 /msg/admin/replay：重放由 msg 自身写「创建 + 终态」两条结果级审计（含范围与首末 log_id），
+#   中间件那条只有请求体，留着就是同一操作两条留痕；
+# - 本键是**整表覆盖**，默认 4 条认证排除路径必须一并写回（少写即丢默认值）。
+enabled = true
+exclude_paths = [
+  "/api/v1/auth/login",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/logout",
+  "/api/v1/auth/introspect",
+  "/api/v1/msg/publish",
+  "/api/v1/msg/consume",
+  "/api/v1/msg/ack",
+  "/api/v1/msg/join",
+  "/api/v1/msg/heartbeat",
+  "/api/v1/msg/leave",
+  "/api/v1/msg/admin/replay",
+]

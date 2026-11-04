@@ -68,11 +68,15 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 @pytest.mark.kiwi_id(2410)
 @pytest.mark.kiwi_id(2412)
 def test_factory_surface_lists_are_declared() -> None:
-    """工厂三张清单可用：服务行一条、表归属两表（01-1）、业务路由一条（主题管理）。"""
+    """工厂三张清单可用：服务行一条、表归属三表（01-1 / 01-6）、业务路由一条（主题管理）。"""
     factory = ApplicationFactory()
 
     assert [record.module_key for record in factory.service_records()] == ["msg"]
-    assert [record.table_name for record in factory.table_records()] == ["msg_topic", "msg_partition"]
+    assert [record.table_name for record in factory.table_records()] == [
+        "msg_topic",
+        "msg_partition",
+        "msg_replay_task",
+    ]
     assert len(factory.service_routers()) == 1
 
 
@@ -82,7 +86,7 @@ def test_table_registry_register_is_idempotent() -> None:
     """表归属装载入口可调用且幂等（同值重复登记无副作用）。"""
     register_product_tables()
     register_product_tables()
-    assert table_names() == ("msg_topic", "msg_partition")
+    assert table_names() == ("msg_topic", "msg_partition", "msg_replay_task")
 
 
 @pytest.mark.kiwi_id(2414)

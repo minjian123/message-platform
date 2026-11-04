@@ -1,7 +1,9 @@
 """消息存储端口与内存实现（msg 任务 01-2；Kiwi 2414）。
 
-覆盖：append 分配连续 offset（唯一分配方）、fetch 起点 / 上限 / 不足、leo 递增、跨分区隔离、
-start_offset 恒 0（保留期清理归 01-6 / 8B_02）。
+覆盖：append 分配连续 offset（唯一分配方）、fetch 起点 / 上限 / 不足、leo 递增、跨分区隔离。
+
+> 起点前移（`truncate_before`）与段元数据（`segments`）随 01-6 引入，覆盖在
+> `tests/broker/test_retention.py`（用例 R1~R7），本文件不再断言「起点恒 0」。
 """
 
 from datetime import UTC, datetime
@@ -99,6 +101,7 @@ async def test_partitions_are_isolated(message_store: InMemoryMessageStore) -> N
     assert await message_store.leo(topic_id=2, partition_no=0) == 1
 
 
-async def test_start_offset_is_zero_in_memory(message_store: InMemoryMessageStore) -> None:
-    """内存实现不做保留期清理，起点恒 0（保留期归 01-6 / 8B_02）。"""
+async def test_start_offset_is_zero_before_cleanup(message_store: InMemoryMessageStore) -> None:
+    """未清理时分区的起点为 0（前移入口与段边界见 `test_retention.py`）。"""
+    await _append(message_store)
     assert await message_store.start_offset(topic_id=1, partition_no=0) == 0

@@ -4,7 +4,7 @@
   主题不存在 `350001`、位点非法 `350002`、消息不存在 `350003`、重投超限 `350007`、
   主题已存在 `350008`、分区数 / 分区号非法 `350009`、命名空间非法 `350010`、
   租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`、
-  延迟区已满 `350015`
+  延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` / `350005` / `350006` 由架构 05 §5 预留为超时 / 背压 / 消息过大，本任务不得占用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
@@ -14,7 +14,7 @@
   （`build_error_response`）把这两码改写为 msg 码，管理面与数据面口径一致（详细设计 §3.2、§3.4）。
 - **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）
   → 组（`350013`）→ 分区号（`350009`）→ 成员与分区归属（`350014`）→ 位点 / 消息（`350002` / `350003` / `350007`）
-  → 延迟区容量（`350015`，发布侧排在主题与档位判定之后）。
+  → 延迟区容量（`350015`，发布侧排在主题与档位判定之后）→ 重放任务（`350016` / `350017`，排在租户判定之后）。
 """
 
 from enum import IntEnum
@@ -38,6 +38,8 @@ __all__ = [
     "MsgNamespaceInvalidError",
     "MsgOffsetInvalidError",
     "MsgPartitionCountInvalidError",
+    "MsgReplayTaskInvalidStateError",
+    "MsgReplayTaskNotFoundError",
     "MsgTenantNotFoundError",
     "MsgTenantSuspendedError",
     "MsgTopicExistsError",
@@ -89,6 +91,12 @@ class MsgErrorCode(IntEnum):
 
     DELAY_QUOTA_EXCEEDED = 350015
     """延迟区已满（每租户软上限到顶）；与全局背压 `350005` 分工：前者「延迟堆住了」，后者「整体过载」。"""
+
+    REPLAY_TASK_NOT_FOUND = 350016
+    """重放任务不存在（不属于当前租户，或已被清理）。"""
+
+    REPLAY_TASK_INVALID_STATE = 350017
+    """重放任务状态不允许该操作（终态不可逆；恢复只接受已暂停的任务）。"""
 
 
 class MsgError(BizError):
@@ -192,6 +200,20 @@ class MsgDelayQuotaExceededError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.DELAY_QUOTA_EXCEEDED
     http_status_: ClassVar[int] = 429
+
+
+class MsgReplayTaskNotFoundError(MsgError):
+    """重放任务不存在（350016 / 404）：按主键 + 当前租户查不到。"""
+
+    code_: ClassVar[int] = MsgErrorCode.REPLAY_TASK_NOT_FOUND
+    http_status_: ClassVar[int] = 404
+
+
+class MsgReplayTaskInvalidStateError(MsgError):
+    """重放任务状态不允许该操作（350017 / 409）：终态不可逆、恢复只接受已暂停。"""
+
+    code_: ClassVar[int] = MsgErrorCode.REPLAY_TASK_INVALID_STATE
+    http_status_: ClassVar[int] = 409
 
 
 class MsgErrorMapper(BaseErrorMapper):

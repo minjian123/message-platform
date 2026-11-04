@@ -19,11 +19,13 @@ from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.replay import AuditSink, ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
 __all__ = [
+    "AuditSinkDep",
     "CurrentTenantDep",
     "DataPlaneTenantDep",
     "DeadLetterQueueDep",
@@ -33,6 +35,8 @@ __all__ = [
     "GroupStoreDep",
     "MessageStoreDep",
     "OffsetStoreDep",
+    "ReplayRunnerDep",
+    "get_audit_sink",
     "get_current_tenant_context",
     "get_data_plane_tenant",
     "get_dead_letter_queue",
@@ -42,6 +46,7 @@ __all__ = [
     "get_group_store",
     "get_message_store",
     "get_offset_store",
+    "get_replay_runner",
 ]
 
 
@@ -175,6 +180,30 @@ def get_delay_scheduler(request: Request) -> DelayScheduler:
     return cast("DelayScheduler", request.app.state.delay_scheduler)
 
 
+def get_replay_runner(request: Request) -> ReplayRunner:
+    """取重放执行器（进程级单例；首个建任务请求触发惰性启动）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        ReplayRunner: 执行器。
+    """
+    return cast("ReplayRunner", request.app.state.replay_runner)
+
+
+def get_audit_sink(request: Request) -> AuditSink:
+    """取审计出口（装配期为基座 `AuditEventEmitter`，用例注入替身）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        AuditSink: 审计出口。
+    """
+    return cast("AuditSink", request.app.state.audit_sink)
+
+
 MessageStoreDep = Annotated[MessageStore, Depends(get_message_store)]
 """路由参数写法：`store: MessageStoreDep`。"""
 
@@ -195,3 +224,9 @@ DelayStoreDep = Annotated[DelayStore, Depends(get_delay_store)]
 
 DelaySchedulerDep = Annotated[DelayScheduler, Depends(get_delay_scheduler)]
 """路由参数写法：`scheduler: DelaySchedulerDep`（到期推进器）。"""
+
+ReplayRunnerDep = Annotated[ReplayRunner, Depends(get_replay_runner)]
+"""路由参数写法：`runner: ReplayRunnerDep`（重放执行器）。"""
+
+AuditSinkDep = Annotated[AuditSink, Depends(get_audit_sink)]
+"""路由参数写法：`sink: AuditSinkDep`（审计出口）。"""

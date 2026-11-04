@@ -321,3 +321,41 @@ async def test_permission_denied_blocks_both_endpoints(client: AsyncClient, api_
     listed = await client.get("/api/v1/msg/admin/topics", headers={"X-Tenant-ID": "demo"})
     assert (created.status_code, listed.status_code) == (403, 403)
     assert _body(created)["code"] == 30001
+
+
+@pytest.mark.kiwi_id(2418)
+async def test_retention_bytes_is_accepted_and_echoed(client: AsyncClient) -> None:
+    """01-6：容量上限随创建透传并在响应回显（缺省 0 = 不限）。"""
+    created = await client.post(
+        "/api/v1/msg/admin/topics",
+        json={
+            "namespace": "msg",
+            "name": "audit.capacity",
+            "partition_count": 1,
+            "retention_bytes": 1048576,
+        },
+        headers={"X-Tenant-ID": "demo"},
+    )
+    defaulted = await client.post(
+        "/api/v1/msg/admin/topics",
+        json={"namespace": "msg", "name": "audit.unlimited", "partition_count": 1},
+        headers={"X-Tenant-ID": "demo"},
+    )
+    assert _data(created)["retention_bytes"] == 1048576
+    assert _data(defaulted)["retention_bytes"] == 0
+
+
+@pytest.mark.kiwi_id(2418)
+async def test_retention_bytes_over_limit_returns_350009(client: AsyncClient) -> None:
+    """01-6：容量上限超上界 → `350009`（与保留期同码）。"""
+    response = await client.post(
+        "/api/v1/msg/admin/topics",
+        json={
+            "namespace": "msg",
+            "name": "audit.too-big",
+            "partition_count": 1,
+            "retention_bytes": 2_000_000_000_000,
+        },
+        headers={"X-Tenant-ID": "demo"},
+    )
+    assert (response.status_code, _body(response)["code"]) == (400, int(MsgErrorCode.PARTITION_COUNT_INVALID))

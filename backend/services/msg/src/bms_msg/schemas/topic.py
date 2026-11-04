@@ -27,6 +27,9 @@ class TopicCreateRequest(BaseSchema):
     name: str = Field(min_length=1, max_length=200, description="主题名（建议 {域}.{对象}.{动作}）")
     partition_count: int = Field(description="分区数（1~1024；只增不减）")
     retention_ms: int = Field(default=DEFAULT_RETENTION_MS, description="保留时长（毫秒；默认 30 天，上限 366 天）")
+    retention_bytes: int = Field(
+        default=0, ge=0, description="容量上限（字节；0 = 不限，缺省不限）。超限从最老段整段删除"
+    )
     cleanup_policy: str = Field(default=CLEANUP_DELETE, max_length=16, description="清理策略（首期只支持 delete）")
 
 
@@ -49,6 +52,7 @@ class TopicItem(BaseSchema):
     name: str = Field(description="主题名")
     partition_count: int = Field(description="分区数")
     retention_ms: int = Field(description="保留时长（毫秒）")
+    retention_bytes: int = Field(description="容量上限（字节；0 = 不限）")
     cleanup_policy: str = Field(description="清理策略")
     status: str = Field(description="状态（active / disabled）")
     created_at: datetime = Field(description="创建时间（UTC）")

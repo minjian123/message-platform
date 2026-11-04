@@ -27,7 +27,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.broker.delay import DelayRecord, DelayStore
-from bms_msg.broker.log import InMemoryMessageStore, MessageStore, StoredMessage
+from bms_msg.broker.log import InMemoryMessageStore, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 
 pytestmark = pytest.mark.kiwi_id(2417)
@@ -205,6 +205,31 @@ class _FailingMessageStore(MessageStore):
             int: 起点位点。
         """
         return await self._inner.start_offset(topic_id=topic_id, partition_no=partition_no)
+
+    async def segments(self, *, topic_id: int, partition_no: int) -> ConcurrentStableList[SegmentMeta]:
+        """转调真实实现（保留清理不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            ConcurrentStableList[SegmentMeta]: 段元数据。
+        """
+        return await self._inner.segments(topic_id=topic_id, partition_no=partition_no)
+
+    async def truncate_before(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """转调真实实现（保留清理不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点。
+
+        Returns:
+            int: 前移后的起点。
+        """
+        return await self._inner.truncate_before(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
 
 class _ExplodingWheel(DelayWheel):

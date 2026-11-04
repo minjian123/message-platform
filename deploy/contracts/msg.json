@@ -318,6 +318,33 @@
         "title": "ApiResponse[PublishResult]",
         "type": "object"
       },
+      "ApiResponse_ReplayTaskItem_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplayTaskItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[ReplayTaskItem]",
+        "type": "object"
+      },
       "ApiResponse_TopicDetail_": {
         "additionalProperties": false,
         "properties": {
@@ -1262,6 +1289,309 @@
         "title": "PublishResult",
         "type": "object"
       },
+      "ReplayRequest": {
+        "additionalProperties": false,
+        "description": "建重放任务请求（`tenant` 不在请求体：由基座解析链注入）。",
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区键精确匹配；null 不过滤",
+            "title": "Key"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset_from": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "起始 offset（含）；null 不限",
+            "title": "Offset From"
+          },
+          "offset_to": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "结束 offset（不含）；null 不限",
+            "title": "Offset To"
+          },
+          "partitions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区号列表（缺省 null = 全部分区；创建时固化为快照，主题扩分区不影响已建任务）",
+            "title": "Partitions"
+          },
+          "rate_per_second": {
+            "default": 100,
+            "description": "限速（条/秒，1~1000）",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rate Per Second",
+            "type": "integer"
+          },
+          "time_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "起始发布时间（含，UTC）；null 不限",
+            "title": "Time From"
+          },
+          "time_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "结束发布时间（不含，UTC）；null 不限",
+            "title": "Time To"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic"
+        ],
+        "title": "ReplayRequest",
+        "type": "object"
+      },
+      "ReplayTaskItem": {
+        "additionalProperties": false,
+        "description": "重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消的响应主体）。",
+        "properties": {
+          "created_at": {
+            "description": "创建时间（UTC）",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_msg": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "失败原因；非 failed 为 null",
+            "title": "Error Msg"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "终态时刻（UTC）；未终结为 null",
+            "title": "Finished At"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区键精确匹配条件；null 不过滤",
+            "title": "Key"
+          },
+          "log_id_first": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "首条成功写入的记录 ID（审计可凭它定位）",
+            "title": "Log Id First"
+          },
+          "log_id_last": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "末条成功写入的记录 ID（审计可凭它定位）",
+            "title": "Log Id Last"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "起始 offset（含）；null 不限",
+            "title": "Offset From"
+          },
+          "offset_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "结束 offset（不含）；null 不限",
+            "title": "Offset To"
+          },
+          "partitions": {
+            "description": "分区号列表（创建时固化的解析结果）",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "rate_per_second": {
+            "description": "限速（条/秒）",
+            "title": "Rate Per Second",
+            "type": "integer"
+          },
+          "replayed": {
+            "description": "已写入条数（进度分子）",
+            "title": "Replayed",
+            "type": "integer"
+          },
+          "status": {
+            "description": "状态（pending / running / paused / cancelled / completed / failed）",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "任务 ID（雪花，JSON 输出为字符串）",
+            "title": "Task Id",
+            "type": "string"
+          },
+          "time_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "起始发布时间（含，UTC）；null 不限",
+            "title": "Time From"
+          },
+          "time_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "结束发布时间（不含，UTC）；null 不限",
+            "title": "Time To"
+          },
+          "topic": {
+            "description": "主题名（创建时快照，主题停用后仍可展示）",
+            "title": "Topic",
+            "type": "string"
+          },
+          "total": {
+            "description": "选中总条数（进度分母；建任务时按条件精确计数）",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "namespace",
+          "topic",
+          "partitions",
+          "offset_from",
+          "offset_to",
+          "time_from",
+          "time_to",
+          "key",
+          "rate_per_second",
+          "status",
+          "total",
+          "replayed",
+          "log_id_first",
+          "log_id_last",
+          "created_at",
+          "finished_at",
+          "error_msg"
+        ],
+        "title": "ReplayTaskItem",
+        "type": "object"
+      },
       "TopicCreateRequest": {
         "additionalProperties": false,
         "description": "创建主题请求（`tenant_id` **不在请求体**：由基座解析链注入，防客户端自报冒充）。",
@@ -1290,6 +1620,13 @@
           "partition_count": {
             "description": "分区数（1~1024；只增不减）",
             "title": "Partition Count",
+            "type": "integer"
+          },
+          "retention_bytes": {
+            "default": 0,
+            "description": "容量上限（字节；0 = 不限，缺省不限）。超限从最老段整段删除",
+            "minimum": 0.0,
+            "title": "Retention Bytes",
             "type": "integer"
           },
           "retention_ms": {
@@ -1350,6 +1687,11 @@
             "title": "Partitions",
             "type": "array"
           },
+          "retention_bytes": {
+            "description": "容量上限（字节；0 = 不限）",
+            "title": "Retention Bytes",
+            "type": "integer"
+          },
           "retention_ms": {
             "description": "保留时长（毫秒）",
             "title": "Retention Ms",
@@ -1373,6 +1715,7 @@
           "name",
           "partition_count",
           "retention_ms",
+          "retention_bytes",
           "cleanup_policy",
           "status",
           "created_at"
@@ -1415,6 +1758,11 @@
             "title": "Partition Count",
             "type": "integer"
           },
+          "retention_bytes": {
+            "description": "容量上限（字节；0 = 不限）",
+            "title": "Retention Bytes",
+            "type": "integer"
+          },
           "retention_ms": {
             "description": "保留时长（毫秒）",
             "title": "Retention Ms",
@@ -1438,6 +1786,7 @@
           "name",
           "partition_count",
           "retention_ms",
+          "retention_bytes",
           "cleanup_policy",
           "status",
           "created_at"
@@ -2132,6 +2481,519 @@
         ]
       }
     },
+    "/api/v1/msg/admin/replay": {
+      "post": {
+        "description": "建重放任务（按条件把历史再写一遍，返回任务快照）。\n\n需要 msg:manage 权限；范围条件左闭右开、跨类相与，`partitions` 缺省为全部分区。\n命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。\n入口先写「建任务」审计，再惰性启动执行器（保证留痕顺序先创建后终态）。",
+        "operationId": "create_replay_api_v1_msg_admin_replay_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Create Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350016,
+          350017,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/replay/{task_id}": {
+      "get": {
+        "description": "查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识）。\n\n需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。",
+        "operationId": "get_replay_api_v1_msg_admin_replay__task_id__get",
+        "parameters": [
+          {
+            "description": "重放任务 ID（雪花）",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "description": "重放任务 ID（雪花）",
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350016,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/replay/{task_id}/cancel": {
+      "post": {
+        "description": "取消任务（非终态可取消；已写入的记录不回滚——重放是新增写入，消费端仍按 message_id 幂等）。\n\n需要 msg:manage 权限；任务不存在 350016，已是终态 350017。取消在请求侧写终态审计（操作人可查）。",
+        "operationId": "cancel_replay_api_v1_msg_admin_replay__task_id__cancel_post",
+        "parameters": [
+          {
+            "description": "重放任务 ID（雪花）",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "description": "重放任务 ID（雪花）",
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Cancel Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350016,
+          350017,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/replay/{task_id}/pause": {
+      "post": {
+        "description": "暂停任务（批边界生效：当前批写完才停，进度与写入始终一致）。\n\n需要 msg:manage 权限；任务不存在 350016，已暂停或已终态 350017。",
+        "operationId": "pause_replay_api_v1_msg_admin_replay__task_id__pause_post",
+        "parameters": [
+          {
+            "description": "重放任务 ID（雪花）",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "description": "重放任务 ID（雪花）",
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Pause Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350016,
+          350017,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/replay/{task_id}/resume": {
+      "post": {
+        "description": "恢复任务（仅接受已暂停的任务）。\n\n需要 msg:manage 权限；任务不存在 350016，未处于暂停 350017。",
+        "operationId": "resume_replay_api_v1_msg_admin_replay__task_id__resume_post",
+        "parameters": [
+          {
+            "description": "重放任务 ID（雪花）",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "description": "重放任务 ID（雪花）",
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Resume Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350016,
+          350017,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
     "/api/v1/msg/admin/topics": {
       "get": {
         "description": "主题列表（页码分页 + 命名空间 / 名称过滤）。\n\n需要 msg:query 权限；按租户隔离；命名空间过滤值非法返回 350010。",
@@ -2487,7 +3349,7 @@
     },
     "/api/v1/msg/consume": {
       "post": {
-        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。",
+        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。",
         "operationId": "consume_api_v1_msg_consume_post",
         "requestBody": {
           "content": {
@@ -2886,7 +3748,7 @@
     },
     "/api/v1/msg/publish": {
       "post": {
-        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。",
+        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
         "operationId": "publish_api_v1_msg_publish_post",
         "requestBody": {
           "content": {

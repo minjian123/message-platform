@@ -32,8 +32,15 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="分区定义与检查点（leader / 副本 / LEO / HW / epoch）",
     ),
+    TableRecord(
+        table_name="msg_replay_task",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="重放任务（范围 / 限速 / 进度 / 游标 / 终态）",
+    ),
 )
-"""msg 元数据两表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
+"""msg 元数据三表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 
 
 def register() -> None:

@@ -11,6 +11,7 @@
 import importlib
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -135,7 +136,7 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
         ),
     )
     app.state.tenant_source = tenant_source
-    app.state.message_store = InMemoryMessageStore()
+    app.state.message_store = InMemoryMessageStore(segment_records=2)
     app.state.offset_store = InMemoryOffsetStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
@@ -486,3 +487,40 @@ async def test_permission_denied_blocks_data_plane(
     consumed = await _consume(client)
     assert (published.status_code, consumed.status_code) == (403, 403)
     assert (_body(published)["code"], _body(consumed)["code"]) == (30001, 30001)
+
+
+@pytest.mark.kiwi_id(2418)
+async def test_entrypoints_trigger_retention_cleanup(client: AsyncClient, api_app: FastAPI) -> None:
+    """01-6：数据面入口触发保留清理——旧段被删、位点早于起点报 350003。
+
+    造法：直接向存储写入两条「1 小时前」的记录（端口级入队，不走发布链路以控制 `published_at`），
+    段替身为每 2 条一段，故这两条自成一段；随后发布一条新消息触发清理，旧段整段被删、起点前移到 2。
+    """
+    created = await client.post(
+        "/api/v1/msg/admin/topics",
+        json={"namespace": NAMESPACE, "name": TOPIC_NAME, "partition_count": 1, "retention_ms": 1_000},
+        headers={"X-Tenant-ID": "demo"},
+    )
+    topic_id = int(cast("str", _data(created)["id"]))
+    store = cast("InMemoryMessageStore", api_app.state.message_store)
+    expired_at = datetime.now(UTC) - timedelta(hours=1)
+    for index in range(2):
+        await store.append(
+            topic_id=topic_id,
+            partition_no=0,
+            message_id=f"old-{index}",
+            log_id=f"old-log-{index}",
+            key="order-1",
+            payload=b"payload",
+            headers=ConcurrentStableDict(),
+            trace_id=None,
+            published_at=expired_at,
+        )
+
+    published = await _publish(client)
+    assert published.status_code == 200
+    assert await store.start_offset(topic_id=topic_id, partition_no=0) == 2
+
+    await _join(client)
+    consumed = await _consume(client)
+    assert _body(consumed)["code"] == int(MsgErrorCode.MESSAGE_NOT_FOUND)

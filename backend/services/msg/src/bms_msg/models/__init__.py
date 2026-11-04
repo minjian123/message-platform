@@ -9,6 +9,16 @@
 """
 
 from bms_msg.models.partition import MsgPartition
+from bms_msg.models.replay import (
+    TASK_CANCELLED,
+    TASK_COMPLETED,
+    TASK_FAILED,
+    TASK_PAUSED,
+    TASK_PENDING,
+    TASK_RUNNING,
+    TASK_TERMINAL_STATUSES,
+    MsgReplayTask,
+)
 from bms_msg.models.topic import (
     CLEANUP_COMPACT,
     CLEANUP_DELETE,
@@ -27,12 +37,21 @@ __all__ = [
     "MODEL_MODULES",
     "STATUS_ACTIVE",
     "STATUS_DISABLED",
+    "TASK_CANCELLED",
+    "TASK_COMPLETED",
+    "TASK_FAILED",
+    "TASK_PAUSED",
+    "TASK_PENDING",
+    "TASK_RUNNING",
+    "TASK_TERMINAL_STATUSES",
     "MsgPartition",
+    "MsgReplayTask",
     "MsgTopic",
 ]
 
 MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.topic",
     "bms_msg.models.partition",
+    "bms_msg.models.replay",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

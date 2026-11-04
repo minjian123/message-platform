@@ -1,8 +1,11 @@
-"""消息存储端口与内存实现（详细设计 §5.1）。
+"""消息存储端口与内存实现（详细设计 §5.1；01-6 扩段元数据与起点前移）。
 
-- **端口** `MessageStore`：`append` / `fetch` / `leo` / `start_offset` 四个方法即数据面对存储的全部要求；
-  8B_02 以文件段 + 稀疏索引 + CRC 恢复替换 `InMemoryMessageStore`，**端口签名不变**（只换实现）。
+- **端口** `MessageStore`：`append` / `fetch` / `leo` / `start_offset` 是数据面对存储的基本要求；
+  01-6 增 `segments` / `truncate_before` 支撑「按段保留 + 可读区间起点前移」。8B_02 以文件段 +
+  稀疏索引 + CRC 恢复替换 `InMemoryMessageStore`，**端口签名不变**（只换实现）。
 - **offset 唯一分配方**：`append` 返回记录时已带上分区内序号；其他模块不得自行编号（概要设计 §5 约束）。
+- **可读区间 = `[start_offset, leo)`**：`truncate_before` 只前移起点、不改末端；`fetch` 早于起点时按
+  起点返回（**不抛错**——「位点早于起点」的业务判定只在 `consume` 一处给 `350003`，端口抛错会盖掉它）。
 - **两类 ID 分工**（架构 04 §2.2）：`message_id` 是**消息身份**（重投 / 重放 / 转投都不变），
   `log_id` 是**记录身份**（发布时分配、延迟转投沿用、重放新分配）——重放会合法地产生同一
   `message_id` 的多条记录，故记录级去重（延迟恢复期）只能按 `log_id` 判。
@@ -15,12 +18,16 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
+
+from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
 
 __all__ = [
     "InMemoryMessageStore",
     "MessageStore",
     "PartitionKey",
+    "SegmentMeta",
     "StoredMessage",
 ]
 
@@ -61,6 +68,26 @@ class StoredMessage(BaseValueObject):
 
     published_at: datetime
     """发布时间（UTC）。"""
+
+
+@dataclass(frozen=True)
+class SegmentMeta(BaseValueObject):
+    """段元数据（保留判定的唯一输入；真实段文件由 8B_02 提供同一份元数据）。
+
+    端口只暴露元数据、不暴露文件：内存实现按定长条数切段，文件实现由索引读段——`segments()` 签名不变。
+    """
+
+    base_offset: int
+    """段首 offset（含）。"""
+
+    end_offset: int
+    """段尾 offset（不含）。"""
+
+    max_published_at: datetime
+    """段内最大发布时间（时间维度判据：整段都过期才删）。"""
+
+    size_bytes: int
+    """段内字节合计（容量维度判据；内存实现为近似值，真实值由文件大小给）。"""
 
 
 class MessageStore(ABC):
@@ -127,27 +154,65 @@ class MessageStore(ABC):
 
     @abstractmethod
     async def start_offset(self, *, topic_id: int, partition_no: int) -> int:
-        """取分区日志起点（保留期清理后大于 0；内存实现恒 0）。
+        """取分区日志起点（保留期清理后大于 0；可读区间为 `[start_offset, leo)`）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
 
         Returns:
-            int: 起点位点（可读区间为 `[start_offset, leo)`）。
+            int: 起点位点。
+        """
+
+    @abstractmethod
+    async def segments(self, *, topic_id: int, partition_no: int) -> ConcurrentStableList[SegmentMeta]:
+        """按 offset 升序取段元数据（保留判定的输入；空分区返回空列表）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            ConcurrentStableList[SegmentMeta]: 段元数据（首段 `base_offset` 即 `start_offset`）。
+        """
+
+    @abstractmethod
+    async def truncate_before(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把可读区间起点前移到 `offset`（保留期清理的唯一写入口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新的起点（须为段边界；`<= 现起点` 幂等无操作，`> leo` 拒绝）。
+
+        Returns:
+            int: 前移后的起点。
+
+        Raises:
+            ParamError: `offset > leo`（10001）。
         """
 
 
 class InMemoryMessageStore(MessageStore):
     """内存消息存储（首期实现；8B_02 换文件段实现，端口与装配点不变）。
 
+    **内部状态**：`_logs[key]` 只保留可读记录（头部被截掉的直接不在列表里），`_starts[key]` 记起点；
+    由此 `leo = start + len(log)`、`append` 的 offset = `start + len(log)`——**offset 仍是绝对编号**，
+    起点前移不会让 offset 重排（重排会让已提交位点指向另一条消息）。
+
     单事件循环内追加与切片无 `await` 切换点，故不需要额外加锁；多副本 / 多线程不在此层考虑
     （首期 `workers = 1`，多副本归 8B_02 / 8B_05）。
     """
 
-    def __init__(self) -> None:
-        """初始化（无分区即空日志）。"""
+    def __init__(self, *, segment_records: int = RETENTION_SEGMENT_RECORDS) -> None:
+        """初始化（无分区即空日志）。
+
+        Args:
+            segment_records: 段替身条数（缺省取常量；用例注入小值验证段边界，8B_02 换文件实现后不再使用）。
+        """
+        self._segment_records = segment_records
         self._logs: dict[PartitionKey, list[StoredMessage]] = {}
+        self._starts: dict[PartitionKey, int] = {}
 
     async def append(
         self,
@@ -162,7 +227,7 @@ class InMemoryMessageStore(MessageStore):
         trace_id: str | None,
         published_at: datetime,
     ) -> StoredMessage:
-        """追加一条消息并分配 offset（= 当前日志长度）。
+        """追加一条消息并分配 offset（= 起点 + 当前可读条数）。
 
         Args:
             topic_id: 主题主键。
@@ -178,13 +243,14 @@ class InMemoryMessageStore(MessageStore):
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
         """
-        log = self._logs.setdefault((topic_id, partition_no), [])
+        bucket: PartitionKey = (topic_id, partition_no)
+        log = self._logs.setdefault(bucket, [])
         message = StoredMessage(
             message_id=message_id,
             log_id=log_id,
             topic_id=topic_id,
             partition_no=partition_no,
-            offset=len(log),
+            offset=self._starts.get(bucket, 0) + len(log),
             key=key,
             payload=payload,
             headers=headers,
@@ -202,37 +268,103 @@ class InMemoryMessageStore(MessageStore):
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
-            from_offset: 起始位点（含）；负数按 0 处理。
+            from_offset: 起始位点（含）；早于起点（含负数）按起点处理。
             max_messages: 本次上限。
 
         Returns:
             ConcurrentStableList[StoredMessage]: 按 offset 升序的消息。
         """
-        log = self._logs.get((topic_id, partition_no), [])
-        start = max(from_offset, 0)
-        return ConcurrentStableList(log[start : start + max_messages])
+        bucket: PartitionKey = (topic_id, partition_no)
+        log = self._logs.get(bucket, [])
+        index = max(from_offset - self._starts.get(bucket, 0), 0)
+        return ConcurrentStableList(log[index : index + max_messages])
 
     async def leo(self, *, topic_id: int, partition_no: int) -> int:
-        """取分区日志末端位点。
+        """取分区日志末端位点（下一条将被分配的 offset；起点前移不影响它）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
 
         Returns:
-            int: LEO（空分区为 0）。
+            int: LEO（空分区为起点，缺省 0）。
         """
-        return len(self._logs.get((topic_id, partition_no), []))
+        bucket: PartitionKey = (topic_id, partition_no)
+        return self._starts.get(bucket, 0) + len(self._logs.get(bucket, []))
 
     async def start_offset(self, *, topic_id: int, partition_no: int) -> int:
-        """取分区日志起点（内存实现不清理，恒 0）。
+        """取分区日志起点（保留期清理后大于 0；未清理为 0）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
 
         Returns:
-            int: 起点位点（恒 0）。
+            int: 起点位点。
         """
-        del topic_id, partition_no
-        return 0
+        return self._starts.get((topic_id, partition_no), 0)
+
+    async def segments(self, *, topic_id: int, partition_no: int) -> ConcurrentStableList[SegmentMeta]:
+        """按定长条数切段并返回元数据（替身：与真实「整段删」语义同构）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            ConcurrentStableList[SegmentMeta]: 段元数据（`base_offset` 升序；空分区为空列表）。
+        """
+        bucket: PartitionKey = (topic_id, partition_no)
+        log = self._logs.get(bucket, [])
+        start = self._starts.get(bucket, 0)
+        metas: ConcurrentStableList[SegmentMeta] = ConcurrentStableList()
+        for index in range(0, len(log), self._segment_records):
+            chunk = log[index : index + self._segment_records]
+            metas.add(
+                SegmentMeta(
+                    base_offset=start + index,
+                    end_offset=start + index + len(chunk),
+                    max_published_at=max(message.published_at for message in chunk),
+                    size_bytes=sum(_record_bytes(message) for message in chunk),
+                )
+            )
+        return metas
+
+    async def truncate_before(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把可读区间起点前移到 `offset`（幂等；越界拒绝）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新的起点。
+
+        Returns:
+            int: 前移后的起点。
+
+        Raises:
+            ParamError: `offset > leo`（10001）。
+        """
+        bucket: PartitionKey = (topic_id, partition_no)
+        start = self._starts.get(bucket, 0)
+        log = self._logs.setdefault(bucket, [])
+        leo = start + len(log)
+        if offset > leo:
+            raise ParamError(f"清理起点越界：{offset} > LEO {leo}")
+        if offset <= start:
+            return start
+        del log[: offset - start]
+        self._starts[bucket] = offset
+        return offset
+
+
+def _record_bytes(message: StoredMessage) -> int:
+    """估算一条记录的字节占用（容量维度判据的**近似值**，不含 Python 对象开销）。
+
+    Args:
+        message: 存储中的消息。
+
+    Returns:
+        int: 载荷 + 键 + 头的字节数合计。
+    """
+    headers = sum(len(name) + len(value) for name, value in message.headers.items())
+    return len(message.payload) + len(message.key or "") + headers + len(message.trace_id or "")

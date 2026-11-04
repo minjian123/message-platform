@@ -49,6 +49,11 @@ class MsgTopic(BaseModel):
     name: Mapped[str] = mapped_column(String(200), comment="主题名（建议 {域}.{对象}.{动作}）")
     partition_count: Mapped[int] = mapped_column(Integer, comment="分区数（只增不减；1~1024）")
     retention_ms: Mapped[int] = mapped_column(BigInteger, comment="保留时长（毫秒）")
+    retention_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        comment="容量上限（字节；0 = 不限）。超限从最老段整段删，最多删到只剩最后一段（01-6）",
+    )
     cleanup_policy: Mapped[str] = mapped_column(
         String(16), default=DEFAULT_CLEANUP_POLICY, comment="清理策略（delete / compact；首期只支持 delete）"
     )
