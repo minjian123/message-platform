@@ -5,7 +5,10 @@
 
 用法::
 
-    # 服务已在 8000 起（msg 服务：python -m bms_msg）
+    # 推荐：最小装配 + 真 hypercorn 起端口再取数（可复现，见 run_bench.py）
+    uv run --project backend python scripts/bench/run_bench.py --total 1200 --concurrency 16 --warmup 200
+
+    # 或服务已在 8000 起（真栈：python -m bms_msg），直连取数
     python scripts/bench/http2_vs_http1.py --base-url http://127.0.0.1:8000 --ensure-topic
     python scripts/bench/http2_vs_http1.py --total 20000 --concurrency 64 --payload-bytes 512
     python scripts/bench/http2_vs_http1.py --json .cache/bench/http2.json
