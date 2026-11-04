@@ -177,9 +177,11 @@ async def consume(
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
 ) -> ApiResponse[ConsumeResult]:
-    """拉取一批消息（缺省至少一次：超时未 ack 会重投且 `delivery_count` 递增）。
+    """拉取一批消息（分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。
 
     需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。
+    返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；
+    死信消息不再投递，其后的消息可继续（顺序性唯一破例）。
     主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。
     """
     delivered = await _service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)

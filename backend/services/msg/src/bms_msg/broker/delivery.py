@@ -1,11 +1,17 @@
-"""投递语义（详细设计 §6）：至少一次、可见性超时重投、acks 两档、位点连续推进、毒消息死信。
+"""投递语义（01-2 详细设计 §6）与顺序性（01-3 详细设计 §4）：分区内停等、重投不越队头、死信例外。
 
-四条不可动摇的口径：
+五条不可动摇的口径：
 
 1. **先处理后提交**：consume 只投递、不改位点；位点只由 ack（或 `acks=0` 的批量前移）推进；
 2. **重投保留原记录**：`message_id` / `offset` / `payload` 不变，只有 `delivery_count` 递增；
 3. **提交失败不前移**：先 `OffsetStore.commit()` 成功、再改内存状态——最坏结果是重复 ack，而重复 ack 幂等；
-4. **毒消息不阻塞分区**：重投达上限即转死信并把位点前移（不删日志，重放与排障仍需原始记录）。
+4. **毒消息不阻塞分区**：重投达上限即转死信并把位点前移（不删日志，重放与排障仍需原始记录）；
+5. **分区内停等（顺序性）**：扫描遇未过期在途队头即停止本批，其后的 offset 一条不投；重投回原 offset，
+   队头 ack 后才继续；本批一旦含重投，新消息留到下一批（失败重试不与主链路同批）。死信是唯一破例——
+   消息已终结，其后 offset 可继续投，已死信 offset 后续跳过不重投。
+
+顺序单位是**分区**（同 key 同分区由 `core/routing` 保证，跨分区不承诺顺序）；`acks` 档位只决定投出后
+是否登记在途、何时推进位点，不影响停等判定本身。
 
 `DeliveryState` 是**进程级**状态（跨请求存续，装配时落 `app.state`）；`DeliveryService` 是**请求级**对象
 （绑定平台库主题仓储与请求租户），与 01-1 的 `TopicService` 同构。
@@ -287,7 +293,15 @@ class DeliveryService:
         partition_no: int,
         committed: int,
     ) -> ConcurrentStableList[Delivery]:
-        """从已提交位点起收集一批投递（跳过未过期在途、重投已过期、超限转死信）。
+        """从已提交位点起按 offset 升序收集一批投递（分区内停等）。
+
+        扫描规则（优先级从高到低；详细设计 §4.2）：
+
+        1. **已死信** → 跳过（顺序性唯一破例：消息已终结，不投、不阻塞）；
+        2. **未过期在途** → 停止本批（未确认队头不越过其后的任何 offset）；
+        3. **本批已含重投且当前是新消息** → 停止本批（新消息留到下一批，重试不与主链路同批）；
+        4. 在途已过期且 `attempts + 1 > 上限` → 转死信 → 继续看下一条；
+        5. 其余 → 投出（`acks=1` 登记在途；`acks=0` 不登记）。
 
         Args:
             request: 拉取请求。
@@ -297,7 +311,7 @@ class DeliveryService:
             committed: 已提交位点。
 
         Returns:
-            ConcurrentStableList[Delivery]: 本次投递（可能为空）。
+            ConcurrentStableList[Delivery]: 本次投递（可能为空；按 offset 升序）。
 
         Raises:
             MsgDeliveryExhaustedError: 无（死信在此路径静默跳过，仅 ack 路径报 350007）。
@@ -305,7 +319,7 @@ class DeliveryService:
         delivered: ConcurrentStableList[Delivery] = ConcurrentStableList()
         cursor = committed
         contiguous = committed
-        blocked = False
+        retried = False
         while len(delivered) < request.max_messages:
             batch = await self._store.fetch(
                 topic_id=topic_id,
@@ -315,38 +329,59 @@ class DeliveryService:
             )
             if not batch:
                 break
+            stopped = False
             for message in batch:
                 cursor = message.offset + 1
-                delivery = await self._deliver(key=key, message=message, acks=request.acks)
+                if await self._dead_letters.contains(
+                    topic_id=topic_id, partition_no=partition_no, offset=message.offset
+                ):
+                    # 已死信：消息已终结，跳过且不阻塞后续（顺序性唯一破例）。
+                    # 补记已确认暂存：死信那次位点提交若失败（或尚未推进），后续 ack 才能成段越过它。
+                    # 顺序扫描保证跳过时它必是当前连续前缀（前面的消息都已投出或同样已死信）。
+                    self._state.mark_acked(key, message.offset)
+                    contiguous = message.offset + 1
+                    continue
+                existing = self._state.lookup(key, message.offset)
+                if existing is not None and existing.deadline > self._now():
+                    # 停等：队头未确认，其后的 offset 一条都不投。
+                    stopped = True
+                    break
+                if retried and existing is None:
+                    # 本批已含重投：新消息留到下一批，失败重试不与主链路同批下发。
+                    stopped = True
+                    break
+                delivery = await self._deliver(key=key, message=message, acks=request.acks, existing=existing)
                 if delivery is None:
-                    # 未过期在途或刚转死信：位点不得越过这条消息（否则就是静默丢弃）。
-                    blocked = True
+                    # 本次刚转死信：与「已死信」同处置，继续看下一条。
                     continue
                 delivered.add(delivery)
-                if not blocked:
-                    contiguous = message.offset + 1
+                if existing is not None:
+                    retried = True
+                contiguous = message.offset + 1
                 if len(delivered) == request.max_messages:
                     break
+            if stopped:
+                break
         if request.acks == ACKS_FIRE_AND_FORGET and contiguous > committed:
             await self._offsets.commit(
                 group=request.group, topic_id=topic_id, partition_no=partition_no, offset=contiguous
             )
         return delivered
 
-    async def _deliver(self, *, key: PartitionKey, message: StoredMessage, acks: int) -> Delivery | None:
+    async def _deliver(
+        self, *, key: PartitionKey, message: StoredMessage, acks: int, existing: InflightDelivery | None
+    ) -> Delivery | None:
         """决定一条消息本次是否投出、投出时的投递次数。
 
         Args:
             key: 投递状态键。
             message: 存储中的消息。
             acks: 投递档位（1 = 至少一次；0 = 不等确认）。
+            existing: 该 offset 的在途记录（未投过或已确认即 `None`；未过期的在途已由调用方停等拦下）。
 
         Returns:
-            Delivery | None: 需投出时的投递；未到期在途或已转死信返回 None。
+            Delivery | None: 需投出时的投递；`None` 仅表示本次刚转死信（调用方应继续看下一条）。
         """
-        existing = self._state.lookup(key, message.offset)
-        if existing is not None and existing.deadline > self._now():
-            return None
         if acks == ACKS_FIRE_AND_FORGET:
             return Delivery(message=message, delivery_count=1)
         attempts = 1 if existing is None else existing.attempts + 1

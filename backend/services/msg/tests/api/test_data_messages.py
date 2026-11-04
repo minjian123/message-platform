@@ -358,6 +358,20 @@ async def test_consume_and_ack_round_trip(client: AsyncClient) -> None:
     assert _messages(await _consume(client)) == []
 
 
+@pytest.mark.kiwi_id(2415)
+async def test_consume_stops_at_unacked_head(client: AsyncClient) -> None:
+    """顺序性（01-3）：队头未 ack 时再次拉取为空，ack 后继续投下一条（HTTP 层停等）。"""
+    await _create_topic(client)
+    await _publish(client)
+    await _publish(client)
+    first = await _consume(client, max_messages=1)
+    assert [item["offset"] for item in _messages(first)] == [0]
+    assert _messages(await _consume(client, max_messages=1)) == []
+    assert _data(await _ack(client, 0))["committed_offset"] == 1
+    second = await _consume(client, max_messages=1)
+    assert [item["offset"] for item in _messages(second)] == [1]
+
+
 async def test_consume_acks_zero_commits_without_ack(client: AsyncClient) -> None:
     """`acks=0`：不调 ack 也不重投（位点已前移）；缺省档在同一场景会重投（服务层用例覆盖）。"""
     await _create_topic(client)

@@ -580,14 +580,18 @@ async def test_acks_zero_does_not_jump_unacked_gap(
     current_tenant: CurrentTenant,
     offset_store: InMemoryOffsetStore,
 ) -> None:
-    """`acks=1` 的在途消息挡住位点：`acks=0` 只投后面的消息、位点不越过缺口（不静默丢弃）。"""
+    """`acks=1` 的在途队头挡住扫描：`acks=0` 也不越过它、位点不前进（顺序性停等，不静默丢弃）。
+
+    01-3 起该用例的语义由「不越过缺口后继续投」升级为「不越过未确认队头」：停等是分区扫描规则，
+    与 `acks` 档位无关；`acks=0` 自己不登记在途（不阻塞后续），但仍受他人在途约束。
+    """
     topic_id = int(topic.id)
     await _publish_many(delivery_service, current_tenant, 2)
     await delivery_service.consume(tenant=current_tenant, request=_consume(max_messages=1))
     delivered = await delivery_service.consume(
         tenant=current_tenant, request=_consume(max_messages=2, acks=ACKS_FIRE_AND_FORGET)
     )
-    assert [(item.message.offset, item.delivery_count) for item in delivered] == [(1, 1)]
+    assert list(delivered) == []
     assert await offset_store.get(group=GROUP, topic_id=topic_id, partition_no=0) == 0
 
 

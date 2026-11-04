@@ -1312,7 +1312,7 @@
     },
     "/api/v1/msg/consume": {
       "post": {
-        "description": "拉取一批消息（缺省至少一次：超时未 ack 会重投且 `delivery_count` 递增）。\n\n需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。\n主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。",
+        "description": "拉取一批消息（分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。",
         "operationId": "consume_api_v1_msg_consume_post",
         "requestBody": {
           "content": {
