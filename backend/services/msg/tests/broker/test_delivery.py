@@ -56,6 +56,9 @@ TOPIC_NAME = "audit.delivery"
 GROUP = "audit"
 """用例消费组。"""
 
+CONSUMER = "c1"
+"""用例成员（01-4 起请求须携带成员标识；本层不校验成员，只满足契约）。"""
+
 PAST_TIMEOUT_MS = DEFAULT_VISIBILITY_TIMEOUT_MS + 1
 """刚过可见性超时的推进量。"""
 
@@ -117,6 +120,7 @@ def _consume(*, group: str = GROUP, partition: int = 0, max_messages: int = 10, 
     """
     return ConsumeRequest(
         group=group,
+        consumer_id=CONSUMER,
         namespace=NAMESPACE,
         topic=TOPIC_NAME,
         partition=partition,
@@ -136,7 +140,9 @@ def _ack(offset: int, *, group: str = GROUP, partition: int = 0) -> AckRequest:
     Returns:
         AckRequest: 确认请求。
     """
-    return AckRequest(group=group, namespace=NAMESPACE, topic=TOPIC_NAME, partition=partition, offset=offset)
+    return AckRequest(
+        group=group, consumer_id=CONSUMER, namespace=NAMESPACE, topic=TOPIC_NAME, partition=partition, offset=offset
+    )
 
 
 async def _publish_many(
@@ -645,3 +651,31 @@ async def test_delivery_count_isolated_per_group(
     await delivery_service.consume(tenant=current_tenant, request=_consume(group="audit"))
     other = await delivery_service.consume(tenant=current_tenant, request=_consume(group="notify"))
     assert [item.delivery_count for item in other] == [1]
+
+
+async def test_drop_partition_clears_inflight(
+    delivery_service: DeliveryService,
+    delivery_state: DeliveryState,
+    topic: MsgTopic,
+    current_tenant: CurrentTenant,
+    offset_store: InMemoryOffsetStore,
+) -> None:
+    """撤销清在途（01-4）：清掉后同分区立即可重投、计数从 1 重计；位点不动。
+
+    分区易主时若不清在途，新 owner 会被「他人未过期在途」挡住整批拉取（01-3 停等），
+    最长空转一个可见性超时。
+    """
+    topic_id = int(topic.id)
+    await _publish_many(delivery_service, current_tenant, 1)
+    first = await delivery_service.consume(tenant=current_tenant, request=_consume(max_messages=1))
+    assert [item.delivery_count for item in first] == [1]
+
+    key = (GROUP, topic_id, 0)
+    delivery_state.drop_partition(key)
+    again = await delivery_service.consume(tenant=current_tenant, request=_consume(max_messages=1))
+    assert [item.message.offset for item in again] == [0]
+    assert [item.delivery_count for item in again] == [1]
+    assert await offset_store.get(group=GROUP, topic_id=topic_id, partition_no=0) == 0
+
+    delivery_state.drop_partition(("audit", topic_id, 7))
+    assert await offset_store.get(group=GROUP, topic_id=topic_id, partition_no=0) == 0

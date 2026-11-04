@@ -24,10 +24,10 @@ from bms_msg.core.config import (
     ACKS_AT_LEAST_ONCE,
     ACKS_FIRE_AND_FORGET,
     DEFAULT_FETCH_MESSAGES,
-    GROUP_NAME_PATTERN,
     MAX_FETCH_MESSAGES,
     MESSAGE_KEY_MAX_LENGTH,
 )
+from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, PARTITION_FIELD, TOPIC_FIELD
 
 __all__ = [
     "AckRequest",
@@ -39,20 +39,19 @@ __all__ = [
     "PublishResult",
 ]
 
-_NAMESPACE_FIELD = Field(
-    min_length=1, max_length=64, description="命名空间（对齐 bms module_key；须为已登记且启用的模块）"
-)
+_NAMESPACE_FIELD = NAMESPACE_FIELD
 """命名空间字段（三个请求共用；形态校验的宽度留量由服务层给 `350010`）。"""
 
-_TOPIC_FIELD = Field(min_length=1, max_length=200, description="主题名（与创建主题时的 name 同值）")
+_TOPIC_FIELD = TOPIC_FIELD
 """主题名字段（三个请求共用）。"""
 
-_GROUP_FIELD = Field(
-    min_length=1, max_length=128, pattern=GROUP_NAME_PATTERN, description="消费组名（组元数据与再均衡归 01-4）"
-)
+_GROUP_FIELD = GROUP_FIELD
 """消费组字段（拉取 / 确认共用）。"""
 
-_PARTITION_FIELD = Field(ge=0, description="分区号（必带；组内分摊与再均衡归 01-4）")
+_CONSUMER_ID_FIELD = CONSUMER_ID_FIELD
+"""成员标识字段（拉取 / 确认共用；成员制强约束见 01-4 详细设计 §6.1）。"""
+
+_PARTITION_FIELD = PARTITION_FIELD
 """分区号字段（拉取 / 确认共用）。"""
 
 
@@ -79,9 +78,10 @@ class PublishResult(BaseSchema):
 
 
 class ConsumeRequest(BaseSchema):
-    """拉取请求（必带 `partition`：本任务单分区投递，组内分摊归 01-4）。"""
+    """拉取请求（成员制：须先 `join`，且 `partition` 必须在该成员的分配内）。"""
 
     group: str = _GROUP_FIELD
+    consumer_id: str = _CONSUMER_ID_FIELD
     namespace: str = _NAMESPACE_FIELD
     topic: str = _TOPIC_FIELD
     partition: int = _PARTITION_FIELD
@@ -122,9 +122,10 @@ class ConsumeResult(BaseSchema):
 
 
 class AckRequest(BaseSchema):
-    """确认请求（位点提交值 = `offset + 1`；确认粒度到单条）。"""
+    """确认请求（位点提交值 = `offset + 1`；成员制：分区须仍在该成员分配内）。"""
 
     group: str = _GROUP_FIELD
+    consumer_id: str = _CONSUMER_ID_FIELD
     namespace: str = _NAMESPACE_FIELD
     topic: str = _TOPIC_FIELD
     partition: int = _PARTITION_FIELD

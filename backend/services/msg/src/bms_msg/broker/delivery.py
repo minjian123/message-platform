@@ -155,6 +155,19 @@ class DeliveryState:
             if offset < committed:
                 acked.discard(offset)
 
+    def drop_partition(self, key: PartitionKey) -> None:
+        """清掉某分区全部在途登记（分区易主时用；位点与暂存确认**不动**）。
+
+        01-4 再均衡撤销易主分区时调用：不清则新 owner 会被「他人未过期在途」挡住整批拉取
+        （01-3 停等），最长空转一个可见性超时；清掉后新 owner 立即可从已提交位点重投，
+        代价是未 ack 消息多投一次（至少一次语义允许）。`acked` 集合保留——已确认但受缺口阻塞的
+        offset 仍应参与连续前缀推进，清掉只会多一次重复投递。
+
+        Args:
+            key: 投递状态键。
+        """
+        self._inflight.pop(key, None)
+
 
 class DeliveryService:
     """投递服务（请求级）：发布 / 拉取 / 确认，语义见模块文档与详细设计 §6。"""

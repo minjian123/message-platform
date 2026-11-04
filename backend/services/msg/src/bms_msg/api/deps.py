@@ -15,6 +15,7 @@ from fastapi import Depends, Request
 
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.tenant.context import CurrentTenant
@@ -25,12 +26,14 @@ __all__ = [
     "DataPlaneTenantDep",
     "DeadLetterQueueDep",
     "DeliveryStateDep",
+    "GroupStoreDep",
     "MessageStoreDep",
     "OffsetStoreDep",
     "get_current_tenant_context",
     "get_data_plane_tenant",
     "get_dead_letter_queue",
     "get_delivery_state",
+    "get_group_store",
     "get_message_store",
     "get_offset_store",
 ]
@@ -130,6 +133,18 @@ def get_delivery_state(request: Request) -> DeliveryState:
     return cast("DeliveryState", request.app.state.delivery_state)
 
 
+def get_group_store(request: Request) -> GroupStore:
+    """取组存储（进程级单例；组 / 成员 / 分配跨请求存续）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        GroupStore: 组存储实现。
+    """
+    return cast("GroupStore", request.app.state.group_store)
+
+
 MessageStoreDep = Annotated[MessageStore, Depends(get_message_store)]
 """路由参数写法：`store: MessageStoreDep`。"""
 
@@ -141,3 +156,6 @@ DeadLetterQueueDep = Annotated[DeadLetterQueue, Depends(get_dead_letter_queue)]
 
 DeliveryStateDep = Annotated[DeliveryState, Depends(get_delivery_state)]
 """路由参数写法：`state: DeliveryStateDep`。"""
+
+GroupStoreDep = Annotated[GroupStore, Depends(get_group_store)]
+"""路由参数写法：`groups: GroupStoreDep`。"""

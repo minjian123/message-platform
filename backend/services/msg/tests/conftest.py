@@ -27,14 +27,18 @@ from bms_core.models.base import Base
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delivery import DeliveryService, DeliveryState
+from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.inspector import GroupInspector
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.router import TopicRouter
 from bms_msg.core.config import DEFAULT_RETENTION_MS
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
+from bms_msg.schemas.group import MemberRequest
 from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.services.topic import TopicService
 from bms_msg.tenant.context import CurrentTenant
@@ -47,6 +51,9 @@ TENANT_CODE = "demo"
 
 NAMESPACE = "msg"
 """可用命名空间（服务目录中已登记且启用的 `module_key`）。"""
+
+GROUP = "audit"
+"""测试消费组名（01-4 起消费须先加入该组）。"""
 
 _TENANT_IDS: ConcurrentStableDict[str, int] = ConcurrentStableDict({"demo": TENANT_ID, "other": 8002})
 """租户编码 → 固定主键（`demo` 与夹具上下文同值；`other` 用于验证「以解析结果为准」）。"""
@@ -384,4 +391,106 @@ def delivery_service(
         router=TopicRouter(TopicRepository(session)),
         state=delivery_state,
         now=clock,
+    )
+
+
+MakeMember = Callable[..., MemberRequest]
+"""成员请求构造器类型（`make_member(consumer_id=..., topic=...)`）。"""
+
+
+@pytest.fixture
+def group_store() -> InMemoryGroupStore:
+    """内存组存储（每用例一份）。
+
+    Returns:
+        InMemoryGroupStore: 空组存储。
+    """
+    return InMemoryGroupStore()
+
+
+@pytest.fixture
+def make_member() -> MakeMember:
+    """成员请求构造器（缺省加入 `audit.operation` 组的 `c1`）。
+
+    Returns:
+        MakeMember: `make_member(**overrides)`。
+    """
+
+    def _make(**overrides: object) -> MemberRequest:
+        """构造成员请求。
+
+        Args:
+            **overrides: 覆盖字段。
+
+        Returns:
+            MemberRequest: 成员请求。
+        """
+        payload: ConcurrentStableDict[str, object] = ConcurrentStableDict(
+            {
+                "group": GROUP,
+                "namespace": NAMESPACE,
+                "topic": "audit.operation",
+                "consumer_id": "c1",
+            }
+        )
+        for key, value in overrides.items():
+            payload.set(key, value)
+        return MemberRequest.model_validate(dict(payload.items()))
+
+    return _make
+
+
+@pytest.fixture
+def coordinator(
+    db_session: AsyncSession,
+    group_store: InMemoryGroupStore,
+    delivery_state: DeliveryState,
+    clock: ManualClock,
+) -> GroupCoordinator:
+    """消费组协调器（请求级仓储 + 进程级组存储 / 投递状态 + 可推进时钟）。
+
+    Args:
+        db_session: 请求级会话。
+        group_store: 组存储。
+        delivery_state: 投递状态（撤销易主分区时清在途）。
+        clock: 可推进时钟。
+
+    Returns:
+        GroupCoordinator: 协调器。
+    """
+    session = cast("DbSession", db_session)
+    return GroupCoordinator(
+        groups=group_store,
+        router=TopicRouter(TopicRepository(session)),
+        delivery=delivery_state,
+        now=clock,
+    )
+
+
+@pytest.fixture
+def inspector(
+    db_session: AsyncSession,
+    group_store: InMemoryGroupStore,
+    message_store: InMemoryMessageStore,
+    offset_store: InMemoryOffsetStore,
+) -> GroupInspector:
+    """组只读投影（请求级主题仓储 + 进程级组 / 消息 / 位点存储）。
+
+    Args:
+        db_session: 请求级会话。
+        group_store: 组存储。
+        message_store: 消息存储（取 LEO）。
+        offset_store: 位点存储（取已提交位点）。
+
+    Returns:
+        GroupInspector: 组只读投影。
+    """
+    session = cast("DbSession", db_session)
+    topics = TopicRepository(session)
+    return GroupInspector(
+        groups=group_store,
+        topics=topics,
+        router=TopicRouter(topics),
+        messages=message_store,
+        offsets=offset_store,
     )

@@ -2,7 +2,9 @@
 
 - **权限码**：`msg:publish`（发布）、`msg:consume`（拉取与确认）——生产与消费分权（最小权限）。
 - **租户**：数据面唯一出口 `get_data_plane_tenant()`（内部 `frame_tenant()`）；请求体不接收 `tenant`。
-- **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信是进程级内存实现
+- **成员制**（01-4）：`consume` / `ack` 必带 `consumer_id`，且组须存在、成员须活跃、分区须在其分配内；
+  校验在入口（`_guard`）完成，`DeliveryService` 的投递语义与停等规则一行不改。
+- **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信 / 组是进程级内存实现
   （`app.state` 注入）。
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
 """
@@ -22,11 +24,14 @@ from bms_msg.api.deps import (
     DataPlaneTenantDep,
     DeadLetterQueueDep,
     DeliveryStateDep,
+    GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
 )
+from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delivery import DeliveryService, DeliveryState
+from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
@@ -41,6 +46,7 @@ from bms_msg.schemas.message import (
     PublishRequest,
     PublishResult,
 )
+from bms_msg.tenant.context import CurrentTenant
 
 __all__ = ["router"]
 
@@ -57,16 +63,20 @@ _PUBLISH_ERRORS = [
 
 _CONSUME_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.GROUP_NOT_FOUND),
+    int(MsgErrorCode.MEMBER_INVALID),
     int(MsgErrorCode.MESSAGE_NOT_FOUND),
     int(MsgErrorCode.PARTITION_COUNT_INVALID),
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
 ]
-"""拉取端点声明的错误码（`x-error-codes`）。"""
+"""拉取端点声明的错误码（`x-error-codes`；01-4 追加组 / 成员两项）。"""
 
 _ACK_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.GROUP_NOT_FOUND),
+    int(MsgErrorCode.MEMBER_INVALID),
     int(MsgErrorCode.OFFSET_INVALID),
     int(MsgErrorCode.MESSAGE_NOT_FOUND),
     int(MsgErrorCode.DELIVERY_EXHAUSTED),
@@ -75,7 +85,7 @@ _ACK_ERRORS = [
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
 ]
-"""确认端点声明的错误码（`x-error-codes`）。"""
+"""确认端点声明的错误码（`x-error-codes`；01-4 追加组 / 成员两项）。"""
 
 router = BaseRouter(
     key="msg_data_messages",
@@ -113,6 +123,44 @@ def _service(
         dead_letters=dead_letters,
         router=TopicRouter(TopicRepository(session)),
         state=state,
+    )
+
+
+async def _guard(
+    *,
+    tenant: CurrentTenant,
+    uow: UnitOfWork,
+    groups: GroupStore,
+    state: DeliveryState,
+    request: ConsumeRequest | AckRequest,
+) -> None:
+    """成员制校验：组存在、成员活跃、分区在该成员分配内（01-4 详细设计 §6.1）。
+
+    校验放在**数据面入口**而非 `DeliveryService`：01-2 / 01-3 的投递语义与停等规则保持不变，
+    8B_01 帧入口复用同一个 `GroupCoordinator.ensure_owner()`。
+
+    Args:
+        tenant: 当前租户。
+        uow: 平台库工作单元（取主题仓储会话）。
+        groups: 组存储。
+        state: 投递状态（协调器撤销易主分区时清在途）。
+        request: 拉取 / 确认请求（两者都带 `group` / `consumer_id` / `partition`）。
+
+    Raises:
+        MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
+        MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
+        MsgGroupNotFoundError: 消费组不存在（350013）。
+        MsgMemberInvalidError: 成员不在组内、已失效，或分区不在其分配内（350014）。
+    """
+    session = cast("DbSession", uow.session)
+    coordinator = GroupCoordinator(groups=groups, router=TopicRouter(TopicRepository(session)), delivery=state)
+    await coordinator.ensure_owner(
+        tenant=tenant,
+        namespace=request.namespace,
+        topic=request.topic,
+        group=request.group,
+        consumer_id=request.consumer_id,
+        partition=request.partition,
     )
 
 
@@ -176,14 +224,18 @@ async def consume(
     offsets: OffsetStoreDep,
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
+    groups: GroupStoreDep,
 ) -> ApiResponse[ConsumeResult]:
-    """拉取一批消息（分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。
+    """拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。
 
-    需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。
+    需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。
+    `acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。
     返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；
     死信消息不再投递，其后的消息可继续（顺序性唯一破例）。
-    主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。
+    主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，
+    分区号越界 350009，位点已被保留期清理 350003。
     """
+    await _guard(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
     delivered = await _service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)
     return ApiResponse.ok(
         ConsumeResult(
@@ -203,11 +255,13 @@ async def ack(
     offsets: OffsetStoreDep,
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
+    groups: GroupStoreDep,
 ) -> ApiResponse[AckResult]:
     """确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。
 
-    需要 msg:consume 权限；位点越界 350002，消息不在投递中 350003，
-    消息已因重投超限转入死信 350007。
+    需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。
+    位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
+    await _guard(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
     committed = await _service(uow, store, offsets, dead_letters, state).ack(tenant=tenant, request=req)
     return ApiResponse.ok(AckResult(committed_offset=committed))

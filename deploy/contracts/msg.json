@@ -3,8 +3,16 @@
     "schemas": {
       "AckRequest": {
         "additionalProperties": false,
-        "description": "确认请求（位点提交值 = `offset + 1`；确认粒度到单条）。",
+        "description": "确认请求（位点提交值 = `offset + 1`；成员制：分区须仍在该成员分配内）。",
         "properties": {
+          "consumer_id": {
+            "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._:-]{1,128}$",
+            "title": "Consumer Id",
+            "type": "string"
+          },
           "group": {
             "description": "消费组名（组元数据与再均衡归 01-4）",
             "maxLength": 128,
@@ -42,6 +50,7 @@
         },
         "required": [
           "group",
+          "consumer_id",
           "namespace",
           "topic",
           "partition",
@@ -145,6 +154,114 @@
           }
         },
         "title": "ApiResponse[ConsumeResult]",
+        "type": "object"
+      },
+      "ApiResponse_GroupDetail_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[GroupDetail]",
+        "type": "object"
+      },
+      "ApiResponse_GroupPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[GroupPage]",
+        "type": "object"
+      },
+      "ApiResponse_LeaveResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeaveResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[LeaveResult]",
+        "type": "object"
+      },
+      "ApiResponse_MemberAssignment_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemberAssignment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[MemberAssignment]",
         "type": "object"
       },
       "ApiResponse_PublishResult_": {
@@ -257,7 +374,7 @@
       },
       "ConsumeRequest": {
         "additionalProperties": false,
-        "description": "拉取请求（必带 `partition`：本任务单分区投递，组内分摊归 01-4）。",
+        "description": "拉取请求（成员制：须先 `join`，且 `partition` 必须在该成员的分配内）。",
         "properties": {
           "acks": {
             "default": 1,
@@ -266,6 +383,14 @@
             "minimum": 0.0,
             "title": "Acks",
             "type": "integer"
+          },
+          "consumer_id": {
+            "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._:-]{1,128}$",
+            "title": "Consumer Id",
+            "type": "string"
           },
           "group": {
             "description": "消费组名（组元数据与再均衡归 01-4）",
@@ -306,6 +431,7 @@
         },
         "required": [
           "group",
+          "consumer_id",
           "namespace",
           "topic",
           "partition"
@@ -329,6 +455,245 @@
         "title": "ConsumeResult",
         "type": "object"
       },
+      "GroupDetail": {
+        "additionalProperties": false,
+        "description": "组详情（状态 / 世代 / 成员 / 分配 / 各分区位点与积压）。",
+        "properties": {
+          "generation": {
+            "description": "世代号",
+            "title": "Generation",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          },
+          "members": {
+            "description": "成员列表（按 consumer_id 升序）",
+            "items": {
+              "$ref": "#/components/schemas/GroupMemberItem"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition_count": {
+            "description": "主题分区数",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "partitions": {
+            "description": "各分区位点与积压（按分区号升序）",
+            "items": {
+              "$ref": "#/components/schemas/GroupPartitionItem"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "state": {
+            "description": "组状态（empty / preparing_rebalance / stable / dead）",
+            "title": "State",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "state",
+          "generation",
+          "partition_count",
+          "members",
+          "partitions"
+        ],
+        "title": "GroupDetail",
+        "type": "object"
+      },
+      "GroupItem": {
+        "additionalProperties": false,
+        "description": "组列表行（管理面只读视图；积压只进详情）。",
+        "properties": {
+          "assigned_partitions": {
+            "description": "全组已分配的分区总数",
+            "title": "Assigned Partitions",
+            "type": "integer"
+          },
+          "generation": {
+            "description": "世代号",
+            "title": "Generation",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          },
+          "member_count": {
+            "description": "活跃成员数",
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "state": {
+            "description": "组状态（empty / preparing_rebalance / stable / dead）",
+            "title": "State",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "state",
+          "generation",
+          "member_count",
+          "assigned_partitions"
+        ],
+        "title": "GroupItem",
+        "type": "object"
+      },
+      "GroupMemberItem": {
+        "additionalProperties": false,
+        "description": "组成员明细。",
+        "properties": {
+          "consumer_id": {
+            "description": "成员标识",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "joined_at": {
+            "description": "加入时间（UTC；重连不刷新）",
+            "format": "date-time",
+            "title": "Joined At",
+            "type": "string"
+          },
+          "last_seen": {
+            "description": "最后心跳时间（UTC）",
+            "format": "date-time",
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "partitions": {
+            "description": "当前持有的分区号（升序）",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Partitions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "consumer_id",
+          "joined_at",
+          "last_seen",
+          "partitions"
+        ],
+        "title": "GroupMemberItem",
+        "type": "object"
+      },
+      "GroupPage": {
+        "additionalProperties": false,
+        "description": "组列表分页（`total` 为过滤后总数）。",
+        "properties": {
+          "items": {
+            "description": "当页组（组名升序）",
+            "items": {
+              "$ref": "#/components/schemas/GroupItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "过滤后总数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "GroupPage",
+        "type": "object"
+      },
+      "GroupPartitionItem": {
+        "additionalProperties": false,
+        "description": "组内分区位点与积压。",
+        "properties": {
+          "committed": {
+            "description": "已提交位点（下一条待消费的 offset）",
+            "title": "Committed",
+            "type": "integer"
+          },
+          "lag": {
+            "description": "积压（LEO - 已提交位点）",
+            "title": "Lag",
+            "type": "integer"
+          },
+          "leo": {
+            "description": "分区日志末端位点",
+            "title": "Leo",
+            "type": "integer"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "当前持有者（无成员或未分配为 null）",
+            "title": "Owner"
+          },
+          "partition": {
+            "description": "分区号",
+            "title": "Partition",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partition",
+          "owner",
+          "committed",
+          "leo",
+          "lag"
+        ],
+        "title": "GroupPartitionItem",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -340,6 +705,157 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LeaveResult": {
+        "additionalProperties": false,
+        "description": "离开结果（`leave` 幂等：未注册成员也返回成功）。",
+        "properties": {
+          "consumer_id": {
+            "description": "成员标识",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "generation": {
+            "description": "离开后的世代号",
+            "title": "Generation",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          },
+          "state": {
+            "description": "离开后的组状态（无成员即 empty）",
+            "title": "State",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "topic",
+          "consumer_id",
+          "generation",
+          "state"
+        ],
+        "title": "LeaveResult",
+        "type": "object"
+      },
+      "MemberAssignment": {
+        "additionalProperties": false,
+        "description": "成员分配（`join` / `heartbeat` 响应：客户端按 `partitions` 拉取，`generation` 变了即换分配）。",
+        "properties": {
+          "consumer_id": {
+            "description": "成员标识",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "generation": {
+            "description": "世代号（成员集合每变化一次 +1；重连不递增）",
+            "title": "Generation",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          },
+          "heartbeat_interval_ms": {
+            "description": "建议心跳间隔（毫秒；服务端声明，客户端据此保活）",
+            "title": "Heartbeat Interval Ms",
+            "type": "integer"
+          },
+          "member_count": {
+            "description": "组内当前活跃成员数",
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "partitions": {
+            "description": "本成员当前持有的分区号（升序；空闲成员为空数组）",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "session_timeout_ms": {
+            "description": "会话超时（毫秒；超时未心跳即判定成员失效）",
+            "title": "Session Timeout Ms",
+            "type": "integer"
+          },
+          "state": {
+            "description": "组状态（empty / preparing_rebalance / stable / dead）",
+            "title": "State",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "topic",
+          "consumer_id",
+          "generation",
+          "state",
+          "partitions",
+          "member_count",
+          "heartbeat_interval_ms",
+          "session_timeout_ms"
+        ],
+        "title": "MemberAssignment",
+        "type": "object"
+      },
+      "MemberRequest": {
+        "additionalProperties": false,
+        "description": "成员请求（`join` / `heartbeat` / `leave` 共用：组按主题维度建）。",
+        "properties": {
+          "consumer_id": {
+            "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._:-]{1,128}$",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "group": {
+            "description": "消费组名（组元数据与再均衡归 01-4）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+            "title": "Group",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "consumer_id"
+        ],
+        "title": "MemberRequest",
         "type": "object"
       },
       "MessageItem": {
@@ -857,7 +1373,7 @@
     },
     "/api/v1/msg/ack": {
       "post": {
-        "description": "确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。\n\n需要 msg:consume 权限；位点越界 350002，消息不在投递中 350003，\n消息已因重投超限转入死信 350007。",
+        "description": "确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。\n\n需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。\n位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。",
         "operationId": "ack_api_v1_msg_ack_post",
         "requestBody": {
           "content": {
@@ -947,10 +1463,298 @@
         ],
         "x-error-codes": [
           350001,
+          350013,
+          350014,
           350002,
           350003,
           350007,
           350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/groups": {
+      "get": {
+        "description": "消费组列表（组名升序；可按命名空间 / 主题过滤）。\n\n需要 msg:query 权限；按租户隔离；主题已删的孤儿组记录不展示。命名空间过滤值非法返回 350010。",
+        "operationId": "list_groups_api_v1_msg_admin_groups_get",
+        "parameters": [
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_GroupPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Groups",
+        "tags": [
+          "msg-admin-groups"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/groups/{namespace}/{topic}/{group}": {
+      "get": {
+        "description": "消费组详情（状态 / 世代 / 成员 / 分配 / 各分区位点与积压）。\n\n需要 msg:query 权限；主题不存在 350001，组不存在 350013。",
+        "operationId": "get_group_api_v1_msg_admin_groups__namespace___topic___group__get",
+        "parameters": [
+          {
+            "description": "命名空间",
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "description": "命名空间",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "description": "主题名",
+            "in": "path",
+            "name": "topic",
+            "required": true,
+            "schema": {
+              "description": "主题名",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          {
+            "description": "消费组名",
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "description": "消费组名",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Group",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_GroupDetail_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Group",
+        "tags": [
+          "msg-admin-groups"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
           350010,
           350011,
           350012
@@ -1312,7 +2116,7 @@
     },
     "/api/v1/msg/consume": {
       "post": {
-        "description": "拉取一批消息（分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。",
+        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。",
         "operationId": "consume_api_v1_msg_consume_post",
         "requestBody": {
           "content": {
@@ -1402,8 +2206,307 @@
         ],
         "x-error-codes": [
           350001,
+          350013,
+          350014,
           350003,
           350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/heartbeat": {
+      "post": {
+        "description": "成员心跳（独立于业务处理：处理慢不会因心跳断而被误判死亡）。\n\n需要 msg:consume 权限；顺带清理同组超时成员，必要时重算分配并返回新 `generation`。\n组不存在 350013，成员不在组内或已超时失效 350014。",
+        "operationId": "heartbeat_api_v1_msg_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MemberAssignment_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Heartbeat",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/join": {
+      "post": {
+        "description": "加入消费组（服务端主导分配）。\n\n需要 msg:consume 权限；组按 `(namespace, topic)` 维度建，同 `consumer_id` 再次加入视为重连\n（刷新存活、不递增世代、分配不变）。返回 `generation` 与 `partitions`，客户端按分配拉取。\n主题不存在 350001，命名空间非已启用 module_key 返回 350010。",
+        "operationId": "join_api_v1_msg_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MemberAssignment_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Join",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/leave": {
+      "post": {
+        "description": "主动离开消费组（幂等：未注册成员也返回成功）。\n\n需要 msg:consume 权限；离开后若组内仍有他人则立即重算分配，最后一名成员离开则组转 `empty`\n（组记录与位点保留）。组不存在 350013。",
+        "operationId": "leave_api_v1_msg_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_LeaveResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Leave",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
           350010,
           350011,
           350012

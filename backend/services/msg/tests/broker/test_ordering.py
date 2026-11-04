@@ -52,6 +52,9 @@ PARTITIONED_TOPIC_NAME = "audit.ordering.parts"
 GROUP = "ordering"
 """用例消费组。"""
 
+CONSUMER = "c1"
+"""用例成员（01-4 起请求须携带成员标识；本层不校验成员，只满足契约）。"""
+
 PAST_TIMEOUT_MS = DEFAULT_VISIBILITY_TIMEOUT_MS + 1
 """刚过可见性超时的推进量。"""
 
@@ -137,6 +140,7 @@ def _consume(
     """
     return ConsumeRequest(
         group=group,
+        consumer_id=CONSUMER,
         namespace=NAMESPACE,
         topic=topic,
         partition=partition,
@@ -157,7 +161,9 @@ def _ack(offset: int, *, group: str = GROUP, partition: int = 0, topic: str = TO
     Returns:
         AckRequest: 确认请求。
     """
-    return AckRequest(group=group, namespace=NAMESPACE, topic=topic, partition=partition, offset=offset)
+    return AckRequest(
+        group=group, consumer_id=CONSUMER, namespace=NAMESPACE, topic=topic, partition=partition, offset=offset
+    )
 
 
 async def _publish_many(

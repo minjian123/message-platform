@@ -3,15 +3,16 @@
 - **码值口径**：产品码 6 位（2 位段 + 4 位序号），段位 `35`——
   主题不存在 `350001`、位点非法 `350002`、消息不存在 `350003`、重投超限 `350007`、
   主题已存在 `350008`、分区数 / 分区号非法 `350009`、命名空间非法 `350010`、
-  租户已停用 `350011`、租户不存在 `350012`（设计原文 5 位 `35010` / `35011` / `35012` 已在
-  01-1 详细设计「对齐记录」回写；`350004` / `350005` / `350006` 由架构 05 §5 预留为超时 / 背压 /
-  消息过大，本任务不得占用）。
+  租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`
+  （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
+  `350004` / `350005` / `350006` 由架构 05 §5 预留为超时 / 背压 / 消息过大，本任务不得占用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
   故由 `MsgErrorMapper` 经基座 `[error_mapper].provider = "msg"` 在**统一错误响应单点**
   （`build_error_response`）把这两码改写为 msg 码，管理面与数据面口径一致（详细设计 §3.2、§3.4）。
-- **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）。
+- **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）
+  → 组（`350013`）→ 分区号（`350009`）→ 成员与分区归属（`350014`）→ 位点 / 消息（`350002` / `350003` / `350007`）。
 """
 
 from enum import IntEnum
@@ -28,6 +29,8 @@ __all__ = [
     "MsgError",
     "MsgErrorCode",
     "MsgErrorMapper",
+    "MsgGroupNotFoundError",
+    "MsgMemberInvalidError",
     "MsgMessageNotFoundError",
     "MsgNamespaceInvalidError",
     "MsgOffsetInvalidError",
@@ -74,6 +77,12 @@ class MsgErrorCode(IntEnum):
 
     TENANT_NOT_FOUND = 350012
     """租户不存在（不泄露租户是否存在，与基座口径一致）。"""
+
+    GROUP_NOT_FOUND = 350013
+    """消费组不存在（未 `join` 过，或已被回收 / 删除）；位点与投递语义不因此改变。"""
+
+    MEMBER_INVALID = 350014
+    """成员非法（心跳 / 确认的成员不在组内、已超时清理、已离开，或所请求分区不在其分配内）。"""
 
 
 class MsgError(BizError):
@@ -156,6 +165,20 @@ class MsgTenantNotFoundError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.TENANT_NOT_FOUND
     http_status_: ClassVar[int] = 404
+
+
+class MsgGroupNotFoundError(MsgError):
+    """消费组不存在（350013 / 404）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.GROUP_NOT_FOUND
+    http_status_: ClassVar[int] = 404
+
+
+class MsgMemberInvalidError(MsgError):
+    """成员非法或分区不在其分配内（350014 / 409）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.MEMBER_INVALID
+    http_status_: ClassVar[int] = 409
 
 
 class MsgErrorMapper(BaseErrorMapper):

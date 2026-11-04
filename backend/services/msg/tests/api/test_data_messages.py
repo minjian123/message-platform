@@ -31,9 +31,11 @@ from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.api.admin import topics
+from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
@@ -51,6 +53,9 @@ TOPIC_NAME = "audit.operation"
 
 GROUP = "audit"
 """用例消费组。"""
+
+CONSUMER = "c1"
+"""用例成员（01-4 起 `consume` / `ack` 须先加入并携带成员标识）。"""
 
 BASE_URL = "http://test"
 """测试基址。"""
@@ -132,9 +137,12 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     app.state.offset_store = InMemoryOffsetStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
+    app.state.group_store = InMemoryGroupStore()
     app.add_middleware(TenantMiddleware)
     register_exception_handlers(app)
-    app.include_router(mount_service_routers(ConcurrentStableList([topics.router, messages.router])))
+    app.include_router(
+        mount_service_routers(ConcurrentStableList([topics.router, messages.router, data_groups.router]))
+    )
     session = cast("DbSession", db_session)
 
     async def _platform_uow() -> DbUnitOfWork:
@@ -235,8 +243,32 @@ async def _publish(
     return await client.post("/api/v1/msg/publish", json=dict(body.items()), headers={"X-Tenant-ID": tenant})
 
 
+async def _join(client: AsyncClient, *, consumer_id: str = CONSUMER, topic: str = TOPIC_NAME) -> Response:
+    """加入消费组（01-4 起 `consume` / `ack` 的前置：成员制强约束）。
+
+    Args:
+        client: 客户端。
+        consumer_id: 成员标识。
+        topic: 主题名。
+
+    Returns:
+        Response: 响应。
+    """
+    return await client.post(
+        "/api/v1/msg/join",
+        json={"group": GROUP, "namespace": NAMESPACE, "topic": topic, "consumer_id": consumer_id},
+        headers=DEMO_HEADERS,
+    )
+
+
 async def _consume(
-    client: AsyncClient, *, max_messages: int = 10, acks: int = 1, partition: int = 0, tenant: str = "demo"
+    client: AsyncClient,
+    *,
+    max_messages: int = 10,
+    acks: int = 1,
+    partition: int = 0,
+    tenant: str = "demo",
+    consumer_id: str = CONSUMER,
 ) -> Response:
     """发一次拉取请求。
 
@@ -246,6 +278,7 @@ async def _consume(
         acks: 投递档位。
         partition: 分区号。
         tenant: 租户编码。
+        consumer_id: 成员标识（须已加入该组）。
 
     Returns:
         Response: 响应。
@@ -254,6 +287,7 @@ async def _consume(
         "/api/v1/msg/consume",
         json={
             "group": GROUP,
+            "consumer_id": consumer_id,
             "namespace": NAMESPACE,
             "topic": TOPIC_NAME,
             "partition": partition,
@@ -264,13 +298,14 @@ async def _consume(
     )
 
 
-async def _ack(client: AsyncClient, offset: int, *, partition: int = 0) -> Response:
+async def _ack(client: AsyncClient, offset: int, *, partition: int = 0, consumer_id: str = CONSUMER) -> Response:
     """发一次确认请求。
 
     Args:
         client: 客户端。
         offset: 待确认 offset。
         partition: 分区号。
+        consumer_id: 成员标识（须是该分区的当前持有者）。
 
     Returns:
         Response: 响应。
@@ -279,6 +314,7 @@ async def _ack(client: AsyncClient, offset: int, *, partition: int = 0) -> Respo
         "/api/v1/msg/ack",
         json={
             "group": GROUP,
+            "consumer_id": consumer_id,
             "namespace": NAMESPACE,
             "topic": TOPIC_NAME,
             "partition": partition,
@@ -346,6 +382,7 @@ async def test_publish_missing_topic_returns_350001(client: AsyncClient) -> None
 async def test_consume_and_ack_round_trip(client: AsyncClient) -> None:
     """拉取 → 确认：载荷 base64 往返、`delivery_count=1`、位点提交值 = offset + 1、确认后不再投。"""
     await _create_topic(client)
+    await _join(client)
     created = _data(await _publish(client))
     consumed = await _consume(client)
     items = _messages(consumed)
@@ -362,6 +399,7 @@ async def test_consume_and_ack_round_trip(client: AsyncClient) -> None:
 async def test_consume_stops_at_unacked_head(client: AsyncClient) -> None:
     """顺序性（01-3）：队头未 ack 时再次拉取为空，ack 后继续投下一条（HTTP 层停等）。"""
     await _create_topic(client)
+    await _join(client)
     await _publish(client)
     await _publish(client)
     first = await _consume(client, max_messages=1)
@@ -375,6 +413,7 @@ async def test_consume_stops_at_unacked_head(client: AsyncClient) -> None:
 async def test_consume_acks_zero_commits_without_ack(client: AsyncClient) -> None:
     """`acks=0`：不调 ack 也不重投（位点已前移）；缺省档在同一场景会重投（服务层用例覆盖）。"""
     await _create_topic(client)
+    await _join(client)
     await _publish(client)
     delivered = await _consume(client, acks=0)
     assert [item["delivery_count"] for item in _messages(delivered)] == [1]
@@ -382,8 +421,9 @@ async def test_consume_acks_zero_commits_without_ack(client: AsyncClient) -> Non
 
 
 async def test_consume_partition_out_of_range_returns_350009(client: AsyncClient) -> None:
-    """分区号越界：400 + `350009`。"""
+    """分区号越界：400 + `350009`（判定顺序：组 → 分区号 → 成员归属）。"""
     await _create_topic(client)
+    await _join(client)
     response = await _consume(client, partition=9)
     assert (response.status_code, _body(response)["code"]) == (400, int(MsgErrorCode.PARTITION_COUNT_INVALID))
 
@@ -391,6 +431,7 @@ async def test_consume_partition_out_of_range_returns_350009(client: AsyncClient
 async def test_ack_offset_beyond_leo_returns_350002(client: AsyncClient) -> None:
     """位点越界：400 + `350002`。"""
     await _create_topic(client)
+    await _join(client)
     await _publish(client)
     response = await _ack(client, 9)
     assert (response.status_code, _body(response)["code"]) == (400, int(MsgErrorCode.OFFSET_INVALID))
@@ -399,6 +440,7 @@ async def test_ack_offset_beyond_leo_returns_350002(client: AsyncClient) -> None
 async def test_ack_undelivered_offset_returns_350003(client: AsyncClient) -> None:
     """未投递过的 offset：404 + `350003`。"""
     await _create_topic(client)
+    await _join(client)
     await _publish(client)
     await _publish(client)
     await _consume(client, max_messages=1)
