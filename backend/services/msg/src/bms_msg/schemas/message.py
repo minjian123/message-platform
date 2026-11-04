@@ -1,0 +1,137 @@
+"""消息投递契约（详细设计 §7）：发布 / 拉取 / 确认的请求与响应主体。
+
+集合字段一律插入序集合类 + 契约元数据内联标注（`Annotated[ConcurrentStable*, CONTRACT_COLLECTION]`），
+禁命名泛型别名（防契约 `$defs` 漂移）。
+
+**校验分工**：形态（长度 / 正则 / 数值上下界 / 必填）在契约层（`10001`）；业务口径（命名空间是否已启用、
+主题是否存在、分区号是否在范围内、位点是否越界）在服务层（`3500xx`）。
+载荷以 **base64 字符串**传输（二进制安全），解码在服务层（非法 base64 → `10001`）。
+"""
+
+from datetime import datetime
+from typing import Annotated
+
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.schemas.base import (
+    CONTRACT_COLLECTION,
+    CONTRACT_STABLE_DICT,
+    CONTRACT_STABLE_LIST,
+    BaseSchema,
+)
+from pydantic import Field
+
+from bms_msg.core.config import (
+    ACKS_AT_LEAST_ONCE,
+    ACKS_FIRE_AND_FORGET,
+    DEFAULT_FETCH_MESSAGES,
+    GROUP_NAME_PATTERN,
+    MAX_FETCH_MESSAGES,
+    MESSAGE_KEY_MAX_LENGTH,
+)
+
+__all__ = [
+    "AckRequest",
+    "AckResult",
+    "ConsumeRequest",
+    "ConsumeResult",
+    "MessageItem",
+    "PublishRequest",
+    "PublishResult",
+]
+
+_NAMESPACE_FIELD = Field(
+    min_length=1, max_length=64, description="命名空间（对齐 bms module_key；须为已登记且启用的模块）"
+)
+"""命名空间字段（三个请求共用；形态校验的宽度留量由服务层给 `350010`）。"""
+
+_TOPIC_FIELD = Field(min_length=1, max_length=200, description="主题名（与创建主题时的 name 同值）")
+"""主题名字段（三个请求共用）。"""
+
+_GROUP_FIELD = Field(
+    min_length=1, max_length=128, pattern=GROUP_NAME_PATTERN, description="消费组名（组元数据与再均衡归 01-4）"
+)
+"""消费组字段（拉取 / 确认共用）。"""
+
+_PARTITION_FIELD = Field(ge=0, description="分区号（必带；组内分摊与再均衡归 01-4）")
+"""分区号字段（拉取 / 确认共用）。"""
+
+
+class PublishRequest(BaseSchema):
+    """发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。"""
+
+    namespace: str = _NAMESPACE_FIELD
+    topic: str = _TOPIC_FIELD
+    key: str | None = Field(default=None, max_length=MESSAGE_KEY_MAX_LENGTH, description="分区键（同 key 恒同分区）")
+    payload: str = Field(default="", description="消息体（base64 编码；空串表示空消息体）")
+    headers: Annotated[ConcurrentStableDict[str, str], CONTRACT_COLLECTION] = Field(
+        default_factory=CONTRACT_STABLE_DICT, description="结构化头（trace / 业务标记）"
+    )
+    trace_id: str | None = Field(default=None, max_length=128, description="链路标识")
+
+
+class PublishResult(BaseSchema):
+    """发布结果（`message_id` 与 `offset` 解耦：前者全局唯一，后者分区内序号）。"""
+
+    message_id: str = Field(description="消息 ID（雪花，JSON 输出为字符串；重投 / 重放不变）")
+    topic: str = Field(description="主题名")
+    partition: int = Field(description="落到的分区号")
+    offset: int = Field(description="分区内序号")
+
+
+class ConsumeRequest(BaseSchema):
+    """拉取请求（必带 `partition`：本任务单分区投递，组内分摊归 01-4）。"""
+
+    group: str = _GROUP_FIELD
+    namespace: str = _NAMESPACE_FIELD
+    topic: str = _TOPIC_FIELD
+    partition: int = _PARTITION_FIELD
+    max_messages: int = Field(
+        default=DEFAULT_FETCH_MESSAGES, ge=1, le=MAX_FETCH_MESSAGES, description="本次最多拉取条数（1~100）"
+    )
+    acks: int = Field(
+        default=ACKS_AT_LEAST_ONCE,
+        ge=ACKS_FIRE_AND_FORGET,
+        le=ACKS_AT_LEAST_ONCE,
+        description="投递档位：1 = 确认后才算成功（至少一次，缺省）；0 = 不等确认（可能丢）",
+    )
+
+
+class MessageItem(BaseSchema):
+    """一条投递的消息（`delivery_count` 供消费端识别重复；幂等键由业务自选）。"""
+
+    message_id: str = Field(description="消息 ID（重投保持不变）")
+    topic: str = Field(description="主题名")
+    partition: int = Field(description="分区号")
+    offset: int = Field(description="分区内序号")
+    key: str | None = Field(description="分区键")
+    payload: str = Field(description="消息体（base64 编码）")
+    headers: Annotated[ConcurrentStableDict[str, str], CONTRACT_COLLECTION] = Field(
+        default_factory=CONTRACT_STABLE_DICT, description="结构化头"
+    )
+    trace_id: str | None = Field(description="链路标识")
+    delivery_count: int = Field(description="投递次数（首次 1，重投递增）")
+    published_at: datetime = Field(description="发布时间（UTC）")
+
+
+class ConsumeResult(BaseSchema):
+    """拉取结果（可能为空：位点已到 LEO，或剩余消息均在可见性窗口内）。"""
+
+    messages: Annotated[ConcurrentStableList[MessageItem], CONTRACT_COLLECTION] = Field(
+        default_factory=CONTRACT_STABLE_LIST, description="本次投递的消息（按 offset 升序）"
+    )
+
+
+class AckRequest(BaseSchema):
+    """确认请求（位点提交值 = `offset + 1`；确认粒度到单条）。"""
+
+    group: str = _GROUP_FIELD
+    namespace: str = _NAMESPACE_FIELD
+    topic: str = _TOPIC_FIELD
+    partition: int = _PARTITION_FIELD
+    offset: int = Field(ge=0, description="待确认消息的分区内序号")
+
+
+class AckResult(BaseSchema):
+    """确认结果（`committed_offset` 为下一条待消费的 offset）。"""
+
+    committed_offset: int = Field(description="已提交位点（已处理完的最后一条 + 1）")

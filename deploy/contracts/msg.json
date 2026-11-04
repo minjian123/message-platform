@@ -1,6 +1,71 @@
 {
   "components": {
     "schemas": {
+      "AckRequest": {
+        "additionalProperties": false,
+        "description": "确认请求（位点提交值 = `offset + 1`；确认粒度到单条）。",
+        "properties": {
+          "group": {
+            "description": "消费组名（组元数据与再均衡归 01-4）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+            "title": "Group",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset": {
+            "description": "待确认消息的分区内序号",
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "分区号（必带；组内分摊与再均衡归 01-4）",
+            "minimum": 0.0,
+            "title": "Partition",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "partition",
+          "offset"
+        ],
+        "title": "AckRequest",
+        "type": "object"
+      },
+      "AckResult": {
+        "additionalProperties": false,
+        "description": "确认结果（`committed_offset` 为下一条待消费的 offset）。",
+        "properties": {
+          "committed_offset": {
+            "description": "已提交位点（已处理完的最后一条 + 1）",
+            "title": "Committed Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "committed_offset"
+        ],
+        "title": "AckResult",
+        "type": "object"
+      },
       "ApiResponse": {
         "additionalProperties": false,
         "description": "统一响应体：`code=0` 成功，非 0 业务错误码。\n\n- `data` 为业务数据（泛型）；失败时为 `null`；分页载荷复用分页契约基类。\n- 雪花 ID 在 JSON 中以字符串输出（`BaseSchema` 统一序列化口径）。",
@@ -26,6 +91,87 @@
           }
         },
         "title": "ApiResponse",
+        "type": "object"
+      },
+      "ApiResponse_AckResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AckResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[AckResult]",
+        "type": "object"
+      },
+      "ApiResponse_ConsumeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsumeResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[ConsumeResult]",
+        "type": "object"
+      },
+      "ApiResponse_PublishResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[PublishResult]",
         "type": "object"
       },
       "ApiResponse_TopicDetail_": {
@@ -109,6 +255,80 @@
         "title": "ApiResponse[TopicPage]",
         "type": "object"
       },
+      "ConsumeRequest": {
+        "additionalProperties": false,
+        "description": "拉取请求（必带 `partition`：本任务单分区投递，组内分摊归 01-4）。",
+        "properties": {
+          "acks": {
+            "default": 1,
+            "description": "投递档位：1 = 确认后才算成功（至少一次，缺省）；0 = 不等确认（可能丢）",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Acks",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名（组元数据与再均衡归 01-4）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+            "title": "Group",
+            "type": "string"
+          },
+          "max_messages": {
+            "default": 20,
+            "description": "本次最多拉取条数（1~100）",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Messages",
+            "type": "integer"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition": {
+            "description": "分区号（必带；组内分摊与再均衡归 01-4）",
+            "minimum": 0.0,
+            "title": "Partition",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "partition"
+        ],
+        "title": "ConsumeRequest",
+        "type": "object"
+      },
+      "ConsumeResult": {
+        "additionalProperties": false,
+        "description": "拉取结果（可能为空：位点已到 LEO，或剩余消息均在可见性窗口内）。",
+        "properties": {
+          "messages": {
+            "description": "本次投递的消息（按 offset 升序）",
+            "items": {
+              "$ref": "#/components/schemas/MessageItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "title": "ConsumeResult",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -120,6 +340,93 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MessageItem": {
+        "additionalProperties": false,
+        "description": "一条投递的消息（`delivery_count` 供消费端识别重复；幂等键由业务自选）。",
+        "properties": {
+          "delivery_count": {
+            "description": "投递次数（首次 1，重投递增）",
+            "title": "Delivery Count",
+            "type": "integer"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结构化头",
+            "title": "Headers",
+            "type": "object"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区键",
+            "title": "Key"
+          },
+          "message_id": {
+            "description": "消息 ID（重投保持不变）",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "offset": {
+            "description": "分区内序号",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "分区号",
+            "title": "Partition",
+            "type": "integer"
+          },
+          "payload": {
+            "description": "消息体（base64 编码）",
+            "title": "Payload",
+            "type": "string"
+          },
+          "published_at": {
+            "description": "发布时间（UTC）",
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识",
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "message_id",
+          "topic",
+          "partition",
+          "offset",
+          "key",
+          "payload",
+          "trace_id",
+          "delivery_count",
+          "published_at"
+        ],
+        "title": "MessageItem",
         "type": "object"
       },
       "PartitionItem": {
@@ -160,6 +467,106 @@
           "epoch"
         ],
         "title": "PartitionItem",
+        "type": "object"
+      },
+      "PublishRequest": {
+        "additionalProperties": false,
+        "description": "发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。",
+        "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结构化头（trace / 业务标记）",
+            "title": "Headers",
+            "type": "object"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区键（同 key 恒同分区）",
+            "title": "Key"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "payload": {
+            "default": "",
+            "description": "消息体（base64 编码；空串表示空消息体）",
+            "title": "Payload",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识",
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic"
+        ],
+        "title": "PublishRequest",
+        "type": "object"
+      },
+      "PublishResult": {
+        "additionalProperties": false,
+        "description": "发布结果（`message_id` 与 `offset` 解耦：前者全局唯一，后者分区内序号）。",
+        "properties": {
+          "message_id": {
+            "description": "消息 ID（雪花，JSON 输出为字符串；重投 / 重放不变）",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "offset": {
+            "description": "分区内序号",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "落到的分区号",
+            "title": "Partition",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "topic",
+          "partition",
+          "offset"
+        ],
+        "title": "PublishResult",
         "type": "object"
       },
       "TopicCreateRequest": {
@@ -446,6 +853,108 @@
           }
         },
         "summary": "Root"
+      }
+    },
+    "/api/v1/msg/ack": {
+      "post": {
+        "description": "确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。\n\n需要 msg:consume 权限；位点越界 350002，消息不在投递中 350003，\n消息已因重投超限转入死信 350007。",
+        "operationId": "ack_api_v1_msg_ack_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_AckResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Ack",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350002,
+          350003,
+          350007,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
       }
     },
     "/api/v1/msg/admin/topics": {
@@ -792,6 +1301,204 @@
         "summary": "Get Topic",
         "tags": [
           "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/consume": {
+      "post": {
+        "description": "拉取一批消息（缺省至少一次：超时未 ack 会重投且 `delivery_count` 递增）。\n\n需要 msg:consume 权限；`acks=0` 表示不等确认（返回前位点直接前移，可能丢）。\n主题不存在 350001，分区号越界 350009，位点已被保留期清理 350003。",
+        "operationId": "consume_api_v1_msg_consume_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ConsumeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Consume",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/publish": {
+      "post": {
+        "description": "发布一条消息（按分区键选分区，返回 `message_id` / 分区 / offset）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。",
+        "operationId": "publish_api_v1_msg_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PublishResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Publish",
+        "tags": [
+          "msg-data"
         ],
         "x-error-codes": [
           350001,

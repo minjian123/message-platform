@@ -87,7 +87,7 @@ domain = "msg"
 http_status = 404
 message_key = "msg.error.topic_not_found"
 severity = "warning"
-description = "主题不存在（或不属于当前租户）"
+description = "主题不存在（不属于当前租户，或未处于 active）"
 
 [[errcodes]]
 code = 350008
@@ -103,7 +103,33 @@ domain = "msg"
 http_status = 400
 message_key = "msg.error.partition_count_invalid"
 severity = "warning"
-description = "分区数非法（≤0、超上限，或尝试减少）；保留期越界同码"
+description = "分区数 / 分区号非法（≤0、超上限、尝试减少，或分区号越界）；保留期越界同码"
+
+# ---- 投递语义（任务 01-2；判定顺序：租户 → 命名空间 → 主题 → 分区号 → 位点 / 消息）----
+# 350004 / 350005 / 350006 由架构 05 §5 预留（超时 / 背压 / 消息过大），本任务不占用。
+[[errcodes]]
+code = 350002
+domain = "msg"
+http_status = 400
+message_key = "msg.error.offset_invalid"
+severity = "warning"
+description = "位点非法（提交值 ≥ LEO 或越过分区范围）"
+
+[[errcodes]]
+code = 350003
+domain = "msg"
+http_status = 404
+message_key = "msg.error.message_not_found"
+severity = "warning"
+description = "消息不存在（未投递过，或位点已被保留期清理）"
+
+[[errcodes]]
+code = 350007
+domain = "msg"
+http_status = 409
+message_key = "msg.error.delivery_exhausted"
+severity = "warning"
+description = "消息重投超限、已转入死信（不可再确认）"
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
@@ -120,6 +146,7 @@ paths = [
   "backend/services/msg/src/bms_msg/repositories/**/*.py",
   "backend/services/msg/src/bms_msg/schemas/**/*.py",
   "backend/services/msg/src/bms_msg/services/**/*.py",
+  "backend/services/msg/src/bms_msg/broker/**/*.py",
   "backend/services/msg/src/bms_msg/api/**/*.py",
   "backend/services/msg/src/bms_msg/core/**/*.py",
   "backend/services/msg/src/bms_msg/tenant/**/*.py",

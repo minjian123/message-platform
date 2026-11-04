@@ -14,6 +14,7 @@
 
 import importlib
 from collections.abc import AsyncIterator, Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
@@ -26,7 +27,13 @@ from bms_core.models.base import Base
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delivery import DeliveryService, DeliveryState
+from bms_msg.broker.log import InMemoryMessageStore
+from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.router import TopicRouter
 from bms_msg.core.config import DEFAULT_RETENTION_MS
+from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.services.topic import TopicService
@@ -241,3 +248,140 @@ def make_request() -> MakeRequest:
         return TopicCreateRequest.model_validate(dict(payload.items()))
 
     return _make
+
+
+class ManualClock:
+    """可手动推进的时钟（模拟可见性超时，用例不 sleep）。"""
+
+    def __init__(self) -> None:
+        """初始化（固定起点 2026-01-01T00:00:00Z）。"""
+        self._now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        """当前时间。
+
+        Returns:
+            datetime: 当前（可推进的）UTC 时间。
+        """
+        return self._now
+
+    def advance(self, milliseconds: int) -> None:
+        """推进时钟。
+
+        Args:
+            milliseconds: 推进的毫秒数。
+        """
+        self._now += timedelta(milliseconds=milliseconds)
+
+
+@pytest.fixture
+def clock() -> ManualClock:
+    """可推进时钟夹具。
+
+    Returns:
+        ManualClock: 固定起点时钟。
+    """
+    return ManualClock()
+
+
+@pytest.fixture
+def advance(clock: ManualClock) -> Callable[[int], None]:
+    """时钟推进器（用例里模拟可见性超时，不 sleep）。
+
+    Args:
+        clock: 可推进时钟。
+
+    Returns:
+        Callable[[int], None]: `advance(毫秒)`。
+    """
+    return clock.advance
+
+
+@pytest.fixture
+async def topic(service: TopicService, current_tenant: CurrentTenant, make_request: MakeRequest) -> MsgTopic:
+    """建好一个两分区主题（数据面用例的前置元数据）。
+
+    Args:
+        service: 主题服务（同会话仓储）。
+        current_tenant: 当前租户。
+        make_request: 创建请求构造器。
+
+    Returns:
+        MsgTopic: 新建主题（`namespace=msg`、两分区）。
+    """
+    return await service.create_topic(
+        tenant=current_tenant, request=make_request(name="audit.operation", partition_count=2)
+    )
+
+
+@pytest.fixture
+def message_store() -> InMemoryMessageStore:
+    """内存消息存储（每用例一份）。
+
+    Returns:
+        InMemoryMessageStore: 空存储。
+    """
+    return InMemoryMessageStore()
+
+
+@pytest.fixture
+def offset_store() -> InMemoryOffsetStore:
+    """内存位点存储（每用例一份）。
+
+    Returns:
+        InMemoryOffsetStore: 空位点。
+    """
+    return InMemoryOffsetStore()
+
+
+@pytest.fixture
+def dead_letters() -> InMemoryDeadLetterQueue:
+    """内存死信队列（每用例一份）。
+
+    Returns:
+        InMemoryDeadLetterQueue: 空队列。
+    """
+    return InMemoryDeadLetterQueue()
+
+
+@pytest.fixture
+def delivery_state() -> DeliveryState:
+    """投递状态（每用例一份）。
+
+    Returns:
+        DeliveryState: 空状态。
+    """
+    return DeliveryState()
+
+
+@pytest.fixture
+def delivery_service(
+    db_session: AsyncSession,
+    message_store: InMemoryMessageStore,
+    offset_store: InMemoryOffsetStore,
+    dead_letters: InMemoryDeadLetterQueue,
+    delivery_state: DeliveryState,
+    clock: ManualClock,
+) -> DeliveryService:
+    """投递服务（请求级仓储 + 进程级状态 + 可推进时钟）。
+
+    Args:
+        db_session: 请求级会话。
+        message_store: 消息存储。
+        offset_store: 位点存储。
+        dead_letters: 死信队列。
+        delivery_state: 投递状态。
+        clock: 可推进时钟。
+
+    Returns:
+        DeliveryService: 投递服务。
+    """
+    session = cast("DbSession", db_session)
+    return DeliveryService(
+        store=message_store,
+        offsets=offset_store,
+        dead_letters=dead_letters,
+        router=TopicRouter(TopicRepository(session)),
+        state=delivery_state,
+        now=clock,
+    )

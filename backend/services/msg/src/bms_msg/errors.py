@@ -1,9 +1,11 @@
 """msg 错误码与产品码覆盖（段位 `35`：6 位码 = 2 位段 + 4 位序号）。
 
 - **码值口径**：产品码 6 位（2 位段 + 4 位序号），段位 `35`——
-  主题不存在 `350001`、主题已存在 `350008`、分区数非法 `350009`、
-  命名空间非法 `350010`、租户已停用 `350011`、租户不存在 `350012`（设计原文 5 位 `35010` / `35011` /
-  `35012` 已在详细设计「对齐记录」回写）。
+  主题不存在 `350001`、位点非法 `350002`、消息不存在 `350003`、重投超限 `350007`、
+  主题已存在 `350008`、分区数 / 分区号非法 `350009`、命名空间非法 `350010`、
+  租户已停用 `350011`、租户不存在 `350012`（设计原文 5 位 `35010` / `35011` / `35012` 已在
+  01-1 详细设计「对齐记录」回写；`350004` / `350005` / `350006` 由架构 05 §5 预留为超时 / 背压 /
+  消息过大，本任务不得占用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
@@ -22,10 +24,13 @@ from bms_core.error_mapper.base import BaseErrorMapper
 
 __all__ = [
     "MSG_ERROR_MAPPER",
+    "MsgDeliveryExhaustedError",
     "MsgError",
     "MsgErrorCode",
     "MsgErrorMapper",
+    "MsgMessageNotFoundError",
     "MsgNamespaceInvalidError",
+    "MsgOffsetInvalidError",
     "MsgPartitionCountInvalidError",
     "MsgTenantNotFoundError",
     "MsgTenantSuspendedError",
@@ -44,13 +49,22 @@ class MsgErrorCode(IntEnum):
     """msg 错误码（段位 `35`；与 `deploy/registry/msg.toml` 的 `[[errcodes]]` 逐条对齐）。"""
 
     TOPIC_NOT_FOUND = 350001
-    """主题不存在。"""
+    """主题不存在（不属于当前租户，或未处于 `active`）。"""
+
+    OFFSET_INVALID = 350002
+    """位点非法（提交值 `< 0`、`>= LEO`，或越过分区范围）。"""
+
+    MESSAGE_NOT_FOUND = 350003
+    """消息不存在（未投递过，或位点已被保留期清理）。"""
+
+    DELIVERY_EXHAUSTED = 350007
+    """消息重投超限、已转入死信（不可再确认）。"""
 
     TOPIC_EXISTS = 350008
     """主题已存在（同租户 / 命名空间 / 名称）。"""
 
     PARTITION_COUNT_INVALID = 350009
-    """分区数非法（≤0、超上限，或尝试减少）；保留期越界同码。"""
+    """分区数 / 分区号非法（≤0、超上限、尝试减少，或分区号越界）；保留期越界同码。"""
 
     NAMESPACE_INVALID = 350010
     """命名空间非法（格式不符，或不是服务目录中已登记且启用的 `module_key`）。"""
@@ -103,10 +117,31 @@ class MsgTopicExistsError(MsgError):
 
 
 class MsgPartitionCountInvalidError(MsgError):
-    """分区数非法 / 保留期越界（350009 / 400）。"""
+    """分区数 / 分区号非法、保留期越界（350009 / 400）。"""
 
     code_: ClassVar[int] = MsgErrorCode.PARTITION_COUNT_INVALID
     http_status_: ClassVar[int] = 400
+
+
+class MsgOffsetInvalidError(MsgError):
+    """位点非法（350002 / 400）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.OFFSET_INVALID
+    http_status_: ClassVar[int] = 400
+
+
+class MsgMessageNotFoundError(MsgError):
+    """消息不存在（350003 / 404）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.MESSAGE_NOT_FOUND
+    http_status_: ClassVar[int] = 404
+
+
+class MsgDeliveryExhaustedError(MsgError):
+    """重投超限、已转入死信（350007 / 409）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.DELIVERY_EXHAUSTED
+    http_status_: ClassVar[int] = 409
 
 
 class MsgTenantSuspendedError(MsgError):

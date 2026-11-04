@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 from bms_core.core.paths import resolve_backend_root
+from bms_core.core.plugin import default_plugin_registry
 
+from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.log import InMemoryMessageStore
+from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.main import ApplicationFactory
 from services.table_registry import register as register_product_tables
 from services.table_registry import table_names
@@ -75,3 +80,25 @@ def test_table_registry_register_is_idempotent() -> None:
     register_product_tables()
     register_product_tables()
     assert table_names() == ("msg_topic", "msg_partition")
+
+
+@pytest.mark.kiwi_id(2414)
+def test_application_assembles_data_plane_state() -> None:
+    """装配冒烟（01-2）：契约含三个数据面端点，进程级投递状态四件齐备。
+
+    改能力域 / 装配代码后必须能起得来——`create()` 走完中间件、路由与 `configure_service()`，
+    任何一处漏登记都会在这里暴露（而不是等推送预检或运行时才现）。
+    """
+    registry = default_plugin_registry()
+    registry.reset()  # 先解冻：前置用例可能已构建过注册表（运行期只读，无法再登记）
+    try:
+        app = ApplicationFactory().create(None)
+        paths = set(app.openapi()["paths"])
+        assert {"/api/v1/msg/publish", "/api/v1/msg/consume", "/api/v1/msg/ack"} <= paths
+        assert isinstance(app.state.message_store, InMemoryMessageStore)
+        assert isinstance(app.state.offset_store, InMemoryOffsetStore)
+        assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
+        assert isinstance(app.state.delivery_state, DeliveryState)
+    finally:
+        # 解除构建冻结，避免后续用例因「注册表已构建」无法登记
+        registry.reset()
