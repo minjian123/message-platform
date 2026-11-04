@@ -26,6 +26,10 @@ name_prefix = "msg"
 [tenant]
 resolve_cache_ttl = 60
 
+[tenant_guard]
+# 租户可用性守卫（bms 任务 04_02）：msg 继承默认实现补命名空间校验，经 configure_plugins 登记为 msg
+provider = "msg"
+
 [cache]
 provider = "memory"
 options = {}

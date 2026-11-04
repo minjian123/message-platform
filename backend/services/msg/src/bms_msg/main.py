@@ -6,11 +6,13 @@
 
 from bms_core.application import BaseServiceApplicationFactory
 from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.config import Settings
 from bms_core.services.module_registry import ModuleRecord
 from bms_core.services.table_registry import TableRecord
-from fastapi import APIRouter
+from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
+from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
 
@@ -36,3 +38,13 @@ class ApplicationFactory(BaseServiceApplicationFactory):
     def service_routers(self) -> ConcurrentStableList[APIRouter]:
         """业务路由（8B_01 起接入；当前无业务端点）。"""
         return ConcurrentStableList()
+
+    def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
+        """服务侧插件登记：把 msg 守卫登记为 `tenant_guard:msg`（须在建注册表之前）。
+
+        Args:
+            app: 应用实例（守卫工厂惰性读取 `app.state.tenant_source`）。
+            settings: 应用配置（`[tenant_guard].provider = "msg"` 时生效）。
+        """
+        del settings
+        register_msg_tenant_guard(app)
