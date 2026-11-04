@@ -3,6 +3,9 @@
 - **端口** `MessageStore`：`append` / `fetch` / `leo` / `start_offset` 四个方法即数据面对存储的全部要求；
   8B_02 以文件段 + 稀疏索引 + CRC 恢复替换 `InMemoryMessageStore`，**端口签名不变**（只换实现）。
 - **offset 唯一分配方**：`append` 返回记录时已带上分区内序号；其他模块不得自行编号（概要设计 §5 约束）。
+- **两类 ID 分工**（架构 04 §2.2）：`message_id` 是**消息身份**（重投 / 重放 / 转投都不变），
+  `log_id` 是**记录身份**（发布时分配、延迟转投沿用、重放新分配）——重放会合法地产生同一
+  `message_id` 的多条记录，故记录级去重（延迟恢复期）只能按 `log_id` 判。
 - **不解析 payload**：store 只搬运字节，可解析的头信息由消息记录原样携带（零拷贝前提）。
 - **进程内实现**：数据按「主题 + 分区」分桶，`list` 的追加与切片在单事件循环内原子（无 `await` 切换点）。
 """
@@ -31,6 +34,9 @@ class StoredMessage(BaseValueObject):
 
     message_id: str
     """全局唯一标识（基座雪花字符串；重投 / 重放不变）。"""
+
+    log_id: str
+    """记录标识（发布时分配、延迟转投沿用、重放新分配；记录级去重按它判）。"""
 
     topic_id: int
     """主题主键（雪花）。"""
@@ -67,6 +73,7 @@ class MessageStore(ABC):
         topic_id: int,
         partition_no: int,
         message_id: str,
+        log_id: str,
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
@@ -78,7 +85,8 @@ class MessageStore(ABC):
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
-            message_id: 全局唯一标识（调用方生成）。
+            message_id: 全局唯一标识（调用方生成；重投 / 重放 / 转投不变）。
+            log_id: 记录标识（普通发布新生成、延迟转投沿用、重放新分配）。
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
@@ -147,6 +155,7 @@ class InMemoryMessageStore(MessageStore):
         topic_id: int,
         partition_no: int,
         message_id: str,
+        log_id: str,
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
@@ -159,6 +168,7 @@ class InMemoryMessageStore(MessageStore):
             topic_id: 主题主键。
             partition_no: 分区号。
             message_id: 全局唯一标识。
+            log_id: 记录标识。
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
@@ -171,6 +181,7 @@ class InMemoryMessageStore(MessageStore):
         log = self._logs.setdefault((topic_id, partition_no), [])
         message = StoredMessage(
             message_id=message_id,
+            log_id=log_id,
             topic_id=topic_id,
             partition_no=partition_no,
             offset=len(log),

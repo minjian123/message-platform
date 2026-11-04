@@ -13,6 +13,9 @@
 顺序单位是**分区**（同 key 同分区由 `core/routing` 保证，跨分区不承诺顺序）；`acks` 档位只决定投出后
 是否登记在途、何时推进位点，不影响停等判定本身。
 
+**两类 ID**：`publish` 同时生成 `message_id`（消息身份）与 `log_id`（记录身份，01-5 起随记录下发）；
+延迟转投沿用发布时分配的 `log_id`，重放新分配（01-6）——本模块只负责普通发布这一处。
+
 `DeliveryState` 是**进程级**状态（跨请求存续，装配时落 `app.state`）；`DeliveryService` 是**请求级**对象
 （绑定平台库主题仓储与请求租户），与 01-1 的 `TopicService` 同构。
 """
@@ -37,7 +40,7 @@ from bms_msg.errors import MsgDeliveryExhaustedError, MsgMessageNotFoundError, M
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 
-__all__ = ["Delivery", "DeliveryService", "DeliveryState", "InflightDelivery", "PartitionKey"]
+__all__ = ["Delivery", "DeliveryService", "DeliveryState", "InflightDelivery", "PartitionKey", "decode_payload"]
 
 PartitionKey = tuple[str, int, int]
 """投递状态键：`(group, topic_id, partition_no)`。"""
@@ -200,14 +203,14 @@ class DeliveryService:
         self._now = now
 
     async def publish(self, *, tenant: CurrentTenant, request: PublishRequest) -> StoredMessage:
-        """发布一条消息（按分区键选分区、分配 offset、生成 message_id）。
+        """发布一条消息（按分区键选分区、分配 offset、生成 `message_id` 与 `log_id`）。
 
         Args:
             tenant: 当前租户（数据面经 `frame_tenant()` 解析）。
-            request: 发布请求（`tenant` 不在请求体）。
+            request: 发布请求（`tenant` 不在请求体；`delay_level` 为空才走本路径）。
 
         Returns:
-            StoredMessage: 含 `message_id` / `partition_no` / `offset` 的记录。
+            StoredMessage: 含 `message_id` / `log_id` / `partition_no` / `offset` 的记录。
 
         Raises:
             MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
@@ -222,8 +225,9 @@ class DeliveryService:
             topic_id=int(topic.id),
             partition_no=partition_no,
             message_id=new_message_id(),
+            log_id=new_message_id(),
             key=request.key,
-            payload=_decode_payload(request.payload),
+            payload=decode_payload(request.payload),
             headers=ConcurrentStableDict(request.headers.items()),
             trace_id=request.trace_id,
             published_at=self._now(),
@@ -477,7 +481,7 @@ class DeliveryService:
         return candidate
 
 
-def _decode_payload(payload: str) -> bytes:
+def decode_payload(payload: str) -> bytes:
     """把 base64 载荷解码为业务字节（形态属请求契约，非法即 `10001`）。
 
     Args:

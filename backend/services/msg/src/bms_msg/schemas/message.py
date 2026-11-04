@@ -6,9 +6,13 @@
 **校验分工**：形态（长度 / 正则 / 数值上下界 / 必填）在契约层（`10001`）；业务口径（命名空间是否已启用、
 主题是否存在、分区号是否在范围内、位点是否越界）在服务层（`3500xx`）。
 载荷以 **base64 字符串**传输（二进制安全），解码在服务层（非法 base64 → `10001`）。
+
+**延迟是发布的一个维度**（01-5）：`delay_level` 给值即延迟发布，不另开端点；延迟发布此刻还没有
+offset（消息尚未进入 offset 空间），故 `offset` 放宽为可空、另给 `deliver_at`。
 """
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
@@ -34,6 +38,7 @@ __all__ = [
     "AckResult",
     "ConsumeRequest",
     "ConsumeResult",
+    "DelayLevel",
     "MessageItem",
     "PublishRequest",
     "PublishResult",
@@ -55,6 +60,40 @@ _PARTITION_FIELD = PARTITION_FIELD
 """分区号字段（拉取 / 确认共用）。"""
 
 
+class DelayLevel(StrEnum):
+    """延迟档位（固定 9 档；与 `core/config.DELAY_LEVEL_MS` 一一对应，非法值由契约层拒绝）。
+
+    不做任意精度：档位是容量与可测性的边界（任意毫秒会让时间轮与用例同时失控）。
+    """
+
+    SECOND_1 = "1s"
+    """1 秒（退避重试的最短档）。"""
+
+    SECOND_5 = "5s"
+    """5 秒。"""
+
+    SECOND_10 = "10s"
+    """10 秒。"""
+
+    SECOND_30 = "30s"
+    """30 秒。"""
+
+    MINUTE_1 = "1m"
+    """1 分钟。"""
+
+    MINUTE_5 = "5m"
+    """5 分钟。"""
+
+    MINUTE_10 = "10m"
+    """10 分钟。"""
+
+    MINUTE_30 = "30m"
+    """30 分钟。"""
+
+    MINUTE_60 = "60m"
+    """60 分钟（首期最长档位；更长的等待应由业务用状态机表达）。"""
+
+
 class PublishRequest(BaseSchema):
     """发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。"""
 
@@ -66,15 +105,20 @@ class PublishRequest(BaseSchema):
         default_factory=CONTRACT_STABLE_DICT, description="结构化头（trace / 业务标记）"
     )
     trace_id: str | None = Field(default=None, max_length=128, description="链路标识")
+    delay_level: DelayLevel | None = Field(
+        default=None, description="延迟档位（缺省 null = 普通发布；给值即延迟发布，到期才进入 offset 空间）"
+    )
 
 
 class PublishResult(BaseSchema):
     """发布结果（`message_id` 与 `offset` 解耦：前者全局唯一，后者分区内序号）。"""
 
     message_id: str = Field(description="消息 ID（雪花，JSON 输出为字符串；重投 / 重放不变）")
+    log_id: str = Field(description="记录 ID（发布即分配；延迟发布到期转投沿用，审计可凭它定位记录）")
     topic: str = Field(description="主题名")
     partition: int = Field(description="落到的分区号")
-    offset: int = Field(description="分区内序号")
+    offset: int | None = Field(description="分区内序号（延迟发布尚未进入 offset 空间，为 null）")
+    deliver_at: datetime | None = Field(description="到期时刻（UTC；普通发布为 null）")
 
 
 class ConsumeRequest(BaseSchema):

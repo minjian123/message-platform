@@ -14,10 +14,12 @@ from bms_core.core.config import get_settings
 from fastapi import Depends, Request
 
 from bms_msg.broker.deadletter import DeadLetterQueue
+from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
@@ -25,6 +27,8 @@ __all__ = [
     "CurrentTenantDep",
     "DataPlaneTenantDep",
     "DeadLetterQueueDep",
+    "DelaySchedulerDep",
+    "DelayStoreDep",
     "DeliveryStateDep",
     "GroupStoreDep",
     "MessageStoreDep",
@@ -32,6 +36,8 @@ __all__ = [
     "get_current_tenant_context",
     "get_data_plane_tenant",
     "get_dead_letter_queue",
+    "get_delay_scheduler",
+    "get_delay_store",
     "get_delivery_state",
     "get_group_store",
     "get_message_store",
@@ -145,6 +151,30 @@ def get_group_store(request: Request) -> GroupStore:
     return cast("GroupStore", request.app.state.group_store)
 
 
+def get_delay_store(request: Request) -> DelayStore:
+    """取延迟区存储（进程级单例；延迟记录跨请求存续）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        DelayStore: 延迟区存储实现。
+    """
+    return cast("DelayStore", request.app.state.delay_store)
+
+
+def get_delay_scheduler(request: Request) -> DelayScheduler:
+    """取到期推进器（进程级单例；发布侧装填与后台转投共用同一时间轮）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        DelayScheduler: 推进器。
+    """
+    return cast("DelayScheduler", request.app.state.delay_scheduler)
+
+
 MessageStoreDep = Annotated[MessageStore, Depends(get_message_store)]
 """路由参数写法：`store: MessageStoreDep`。"""
 
@@ -159,3 +189,9 @@ DeliveryStateDep = Annotated[DeliveryState, Depends(get_delivery_state)]
 
 GroupStoreDep = Annotated[GroupStore, Depends(get_group_store)]
 """路由参数写法：`groups: GroupStoreDep`。"""
+
+DelayStoreDep = Annotated[DelayStore, Depends(get_delay_store)]
+"""路由参数写法：`store: DelayStoreDep`（延迟区）。"""
+
+DelaySchedulerDep = Annotated[DelayScheduler, Depends(get_delay_scheduler)]
+"""路由参数写法：`scheduler: DelaySchedulerDep`（到期推进器）。"""

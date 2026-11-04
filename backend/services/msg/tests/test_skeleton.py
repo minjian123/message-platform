@@ -12,10 +12,12 @@ from bms_core.core.paths import resolve_backend_root
 from bms_core.core.plugin import default_plugin_registry
 
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.main import ApplicationFactory
 from services.table_registry import register as register_product_tables
 from services.table_registry import table_names
@@ -85,8 +87,9 @@ def test_table_registry_register_is_idempotent() -> None:
 
 @pytest.mark.kiwi_id(2414)
 @pytest.mark.kiwi_id(2416)
+@pytest.mark.kiwi_id(2417)
 def test_application_assembles_data_plane_state() -> None:
-    """装配冒烟（01-2 / 01-4）：契约含数据面与组端点，进程级状态五件齐备。
+    """装配冒烟（01-2 / 01-4 / 01-5）：契约含数据面、组与延迟端点，进程级状态齐备。
 
     改能力域 / 装配代码后必须能起得来——`create()` 走完中间件、路由与 `configure_service()`，
     任何一处漏登记都会在这里暴露（而不是等推送预检或运行时才现）。
@@ -105,12 +108,17 @@ def test_application_assembles_data_plane_state() -> None:
             "/api/v1/msg/leave",
             "/api/v1/msg/admin/groups",
             "/api/v1/msg/admin/groups/{namespace}/{topic}/{group}",
+            "/api/v1/msg/admin/delayed",
         } <= paths
         assert isinstance(app.state.message_store, InMemoryMessageStore)
         assert isinstance(app.state.offset_store, InMemoryOffsetStore)
         assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)
         assert isinstance(app.state.group_store, InMemoryGroupStore)
+        assert isinstance(app.state.delay_store, InMemoryDelayStore)
+        assert isinstance(app.state.delay_scheduler, DelayScheduler)
+        assert app.state.delay_scheduler.wheel is not None
+        assert app.state.delay_scheduler.running is False, "推进器不得在装配期启动（惰性启动）"
     finally:
         # 解除构建冻结，避免后续用例因「注册表已构建」无法登记
         registry.reset()

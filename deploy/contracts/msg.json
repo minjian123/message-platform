@@ -156,6 +156,33 @@
         "title": "ApiResponse[ConsumeResult]",
         "type": "object"
       },
+      "ApiResponse_DelayedPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelayedPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DelayedPage]",
+        "type": "object"
+      },
       "ApiResponse_GroupDetail_": {
         "additionalProperties": false,
         "properties": {
@@ -453,6 +480,118 @@
           }
         },
         "title": "ConsumeResult",
+        "type": "object"
+      },
+      "DelayLevel": {
+        "description": "延迟档位（固定 9 档；与 `core/config.DELAY_LEVEL_MS` 一一对应，非法值由契约层拒绝）。\n\n不做任意精度：档位是容量与可测性的边界（任意毫秒会让时间轮与用例同时失控）。",
+        "enum": [
+          "1s",
+          "5s",
+          "10s",
+          "30s",
+          "1m",
+          "5m",
+          "10m",
+          "30m",
+          "60m"
+        ],
+        "title": "DelayLevel",
+        "type": "string"
+      },
+      "DelayedItem": {
+        "additionalProperties": false,
+        "description": "一条延迟中消息（尚未进入日志：没有 offset，只有到期时刻）。",
+        "properties": {
+          "deliver_at": {
+            "description": "到期时刻（UTC）",
+            "format": "date-time",
+            "title": "Deliver At",
+            "type": "string"
+          },
+          "level": {
+            "description": "延迟档位（1s / 5s / 10s / 30s / 1m / 5m / 10m / 30m / 60m）",
+            "title": "Level",
+            "type": "string"
+          },
+          "log_id": {
+            "description": "记录 ID（发布时分配；转投沿用，审计条目可凭它定位）",
+            "title": "Log Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "消息 ID（重投 / 转投 / 重放不变）",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition": {
+            "description": "发布时锁定的分区号（扩分区后不漂移）",
+            "title": "Partition",
+            "type": "integer"
+          },
+          "remaining_ms": {
+            "description": "剩余时间（毫秒；已到期未转投为 0）",
+            "title": "Remaining Ms",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名（主题删除后仍可展示，便于排障）",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_id",
+          "message_id",
+          "namespace",
+          "topic",
+          "partition",
+          "level",
+          "deliver_at",
+          "remaining_ms"
+        ],
+        "title": "DelayedItem",
+        "type": "object"
+      },
+      "DelayedPage": {
+        "additionalProperties": false,
+        "description": "待投列表分页（`total` 为过滤后总数）。",
+        "properties": {
+          "items": {
+            "description": "当页延迟消息（到期时刻升序，最急的在前）",
+            "items": {
+              "$ref": "#/components/schemas/DelayedItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "过滤后总数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "DelayedPage",
         "type": "object"
       },
       "GroupDetail": {
@@ -989,6 +1128,17 @@
         "additionalProperties": false,
         "description": "发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。",
         "properties": {
+          "delay_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelayLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "延迟档位（缺省 null = 普通发布；给值即延迟发布，到期才进入 offset 空间）"
+          },
           "headers": {
             "additionalProperties": {
               "type": "string"
@@ -1055,15 +1205,40 @@
         "additionalProperties": false,
         "description": "发布结果（`message_id` 与 `offset` 解耦：前者全局唯一，后者分区内序号）。",
         "properties": {
+          "deliver_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "到期时刻（UTC；普通发布为 null）",
+            "title": "Deliver At"
+          },
+          "log_id": {
+            "description": "记录 ID（发布即分配；延迟发布到期转投沿用，审计可凭它定位记录）",
+            "title": "Log Id",
+            "type": "string"
+          },
           "message_id": {
             "description": "消息 ID（雪花，JSON 输出为字符串；重投 / 重放不变）",
             "title": "Message Id",
             "type": "string"
           },
           "offset": {
-            "description": "分区内序号",
-            "title": "Offset",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区内序号（延迟发布尚未进入 offset 空间，为 null）",
+            "title": "Offset"
           },
           "partition": {
             "description": "落到的分区号",
@@ -1078,9 +1253,11 @@
         },
         "required": [
           "message_id",
+          "log_id",
           "topic",
           "partition",
-          "offset"
+          "offset",
+          "deliver_at"
         ],
         "title": "PublishResult",
         "type": "object"
@@ -1468,6 +1645,200 @@
           350002,
           350003,
           350007,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/delayed": {
+      "get": {
+        "description": "延迟中消息列表（到期时刻升序，最急的在前；只读，不触发转投）。\n\n需要 msg:query 权限；按租户隔离。命名空间非法 350010，主题不存在或未启用 350001，\n分区号越界 350009，档位非法 10001；`size` 上界 100（越界 10001）。",
+        "operationId": "list_delayed_api_v1_msg_admin_delayed_get",
+        "parameters": [
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "分区号过滤",
+            "in": "query",
+            "name": "partition",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区号过滤",
+              "title": "Partition"
+            }
+          },
+          {
+            "description": "延迟档位过滤（1s / 5s / … / 60m）",
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "延迟档位过滤（1s / 5s / … / 60m）",
+              "title": "Level"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DelayedPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Delayed",
+        "tags": [
+          "msg-admin-delayed"
+        ],
+        "x-error-codes": [
+          350001,
           350009,
           350010,
           350011,
@@ -2515,7 +2886,7 @@
     },
     "/api/v1/msg/publish": {
       "post": {
-        "description": "发布一条消息（按分区键选分区，返回 `message_id` / 分区 / offset）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。",
+        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。",
         "operationId": "publish_api_v1_msg_publish_post",
         "requestBody": {
           "content": {
@@ -2607,7 +2978,8 @@
           350001,
           350010,
           350011,
-          350012
+          350012,
+          350015
         ]
       }
     },

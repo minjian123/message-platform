@@ -4,8 +4,10 @@
 - **租户**：数据面唯一出口 `get_data_plane_tenant()`（内部 `frame_tenant()`）；请求体不接收 `tenant`。
 - **成员制**（01-4）：`consume` / `ack` 必带 `consumer_id`，且组须存在、成员须活跃、分区须在其分配内；
   校验在入口（`_guard`）完成，`DeliveryService` 的投递语义与停等规则一行不改。
-- **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信 / 组是进程级内存实现
-  （`app.state` 注入）。
+- **延迟是发布的一个维度**（01-5）：`publish` 按 `delay_level` 分派——给值走 `DelayService`（入延迟区、
+  无 offset、惰性启动推进器），缺省走原投递链路；两条分支共用同一份租户与主题校验口径。
+- **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信 / 组 / 延迟区是进程级内存
+  实现（`app.state` 注入）。
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
 """
 
@@ -23,6 +25,8 @@ from fastapi import Depends
 from bms_msg.api.deps import (
     DataPlaneTenantDep,
     DeadLetterQueueDep,
+    DelaySchedulerDep,
+    DelayStoreDep,
     DeliveryStateDep,
     GroupStoreDep,
     MessageStoreDep,
@@ -30,11 +34,13 @@ from bms_msg.api.deps import (
 )
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
+from bms_msg.broker.delay import DelayService, DelayStore
 from bms_msg.broker.delivery import DeliveryService, DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
@@ -58,8 +64,9 @@ _PUBLISH_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
 ]
-"""发布端点声明的错误码（`x-error-codes`）。"""
+"""发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`）。"""
 
 _CONSUME_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
@@ -124,6 +131,21 @@ def _service(
         router=TopicRouter(TopicRepository(session)),
         state=state,
     )
+
+
+def _delay_service(uow: UnitOfWork, store: DelayStore, scheduler: DelayScheduler) -> DelayService:
+    """组装延迟发布服务（请求级主题仓储 + 进程级延迟区 / 时间轮）。
+
+    Args:
+        uow: 平台库工作单元（取主题仓储会话）。
+        store: 延迟区存储。
+        scheduler: 推进器（时间轮与其共用同一实例，发布侧装填后才能被推进）。
+
+    Returns:
+        DelayService: 延迟发布服务。
+    """
+    session = cast("DbSession", uow.session)
+    return DelayService(store=store, router=TopicRouter(TopicRepository(session)), wheel=scheduler.wheel)
 
 
 async def _guard(
@@ -198,19 +220,38 @@ async def publish(
     offsets: OffsetStoreDep,
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
+    delay_store: DelayStoreDep,
+    delay_scheduler: DelaySchedulerDep,
 ) -> ApiResponse[PublishResult]:
-    """发布一条消息（按分区键选分区，返回 `message_id` / 分区 / offset）。
+    """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
     需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，
     命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。
+    延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。
+    首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。
     """
+    if req.delay_level is not None:
+        order = await _delay_service(uow, delay_store, delay_scheduler).publish(tenant=tenant, request=req)
+        delay_scheduler.ensure_started()
+        return ApiResponse.ok(
+            PublishResult(
+                message_id=order.message_id,
+                log_id=order.log_id,
+                topic=req.topic,
+                partition=order.partition_no,
+                offset=None,
+                deliver_at=order.deliver_at,
+            )
+        )
     message = await _service(uow, store, offsets, dead_letters, state).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
             message_id=message.message_id,
+            log_id=message.log_id,
             topic=req.topic,
             partition=message.partition_no,
             offset=message.offset,
+            deliver_at=None,
         )
     )
 

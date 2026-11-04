@@ -149,6 +149,17 @@ message_key = "msg.error.member_invalid"
 severity = "warning"
 description = "成员非法（不在组内、已超时失效或已离开），或所请求分区不在其分配内"
 
+# ---- 延迟消息（任务 01-5；判定顺序：命名空间 → 主题 → 分区 → 档位 → 延迟区容量）----
+# 350004 / 350005 / 350006 仍为架构 05 §5 预留（超时 / 背压 / 消息过大），本任务不占用。
+# 350015 与 350005 分工：前者「延迟区堆住了」，后者「整体过载」——排障时一眼分清。
+[[errcodes]]
+code = 350015
+domain = "msg"
+http_status = 429
+message_key = "msg.error.delay_quota_exceeded"
+severity = "warning"
+description = "延迟区已满（每租户软上限到顶）；只拒绝进、不静默清，超限记录仍可查"
+
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
 # `deploy/boundaries/domain_layout.json` 是**生成物**（由清单渲染），本仓 ops 渲染命令归 8B_01，

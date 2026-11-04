@@ -225,6 +225,7 @@ class _RetainedStore(MessageStore):
         topic_id: int,
         partition_no: int,
         message_id: str,
+        log_id: str,
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
@@ -237,6 +238,7 @@ class _RetainedStore(MessageStore):
             topic_id: 主题主键。
             partition_no: 分区号。
             message_id: 消息 ID。
+            log_id: 记录 ID。
             key: 分区键。
             payload: 载荷。
             headers: 结构化头。
@@ -250,6 +252,7 @@ class _RetainedStore(MessageStore):
             topic_id=topic_id,
             partition_no=partition_no,
             message_id=message_id,
+            log_id=log_id,
             key=key,
             payload=payload,
             headers=headers,

@@ -34,10 +34,12 @@ from bms_msg.api.admin import topics
 from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
 
 pytestmark = pytest.mark.kiwi_id(2414)
@@ -138,6 +140,12 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
     app.state.group_store = InMemoryGroupStore()
+    app.state.delay_store = InMemoryDelayStore()
+    app.state.delay_scheduler = DelayScheduler(
+        store=app.state.delay_store,
+        messages=app.state.message_store,
+        wheel=DelayWheel(),
+    )
     app.add_middleware(TenantMiddleware)
     register_exception_handlers(app)
     app.include_router(

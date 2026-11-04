@@ -35,6 +35,7 @@ async def _append(
         topic_id=topic_id,
         partition_no=partition_no,
         message_id=offset_hint,
+        log_id=f"log-{offset_hint}",
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
@@ -48,7 +49,13 @@ async def test_append_assigns_contiguous_offsets(message_store: InMemoryMessageS
     first = await _append(message_store, offset_hint="m1")
     second = await _append(message_store, offset_hint="m2")
     assert (first.offset, second.offset) == (0, 1)
-    assert (first.message_id, first.key, first.payload, first.trace_id) == ("m1", "order-1", b"payload", "trace-1")
+    assert (first.message_id, first.log_id, first.key, first.payload, first.trace_id) == (
+        "m1",
+        "log-m1",
+        "order-1",
+        b"payload",
+        "trace-1",
+    )
     assert dict(first.headers.items()) == {"source": "test"}
     assert first.published_at == _PUBLISHED_AT
 

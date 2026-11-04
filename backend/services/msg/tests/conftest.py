@@ -29,12 +29,14 @@ from sqlalchemy.pool import StaticPool
 
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delay import DelayInspector, DelayService, InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryService, DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.inspector import GroupInspector
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.core.config import DEFAULT_RETENTION_MS
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
@@ -493,4 +495,89 @@ def inspector(
         router=TopicRouter(topics),
         messages=message_store,
         offsets=offset_store,
+    )
+
+
+@pytest.fixture
+def delay_store() -> InMemoryDelayStore:
+    """内存延迟区（每用例一份；缺省软上限 10 万条）。
+
+    Returns:
+        InMemoryDelayStore: 空延迟区。
+    """
+    return InMemoryDelayStore()
+
+
+@pytest.fixture
+def delay_wheel(clock: ManualClock) -> DelayWheel:
+    """时间轮（与夹具时钟同源：装填按剩余时间选层）。
+
+    Args:
+        clock: 可推进时钟。
+
+    Returns:
+        DelayWheel: 空时间轮。
+    """
+    return DelayWheel(now=clock)
+
+
+@pytest.fixture
+def delay_service(
+    db_session: AsyncSession, delay_store: InMemoryDelayStore, delay_wheel: DelayWheel, clock: ManualClock
+) -> DelayService:
+    """延迟发布服务（请求级主题仓储 + 进程级延迟区 / 时间轮 + 可推进时钟）。
+
+    Args:
+        db_session: 请求级会话。
+        delay_store: 延迟区。
+        delay_wheel: 时间轮。
+        clock: 可推进时钟。
+
+    Returns:
+        DelayService: 延迟发布服务。
+    """
+    session = cast("DbSession", db_session)
+    return DelayService(store=delay_store, router=TopicRouter(TopicRepository(session)), wheel=delay_wheel, now=clock)
+
+
+@pytest.fixture
+def delay_inspector(db_session: AsyncSession, delay_store: InMemoryDelayStore, clock: ManualClock) -> DelayInspector:
+    """延迟区只读投影（请求级主题仓储 + 进程级延迟区 + 可推进时钟）。
+
+    Args:
+        db_session: 请求级会话。
+        delay_store: 延迟区。
+        clock: 可推进时钟。
+
+    Returns:
+        DelayInspector: 只读投影。
+    """
+    session = cast("DbSession", db_session)
+    return DelayInspector(store=delay_store, router=TopicRouter(TopicRepository(session)), now=clock)
+
+
+@pytest.fixture
+def delay_scheduler(
+    delay_store: InMemoryDelayStore,
+    message_store: InMemoryMessageStore,
+    delay_wheel: DelayWheel,
+    clock: ManualClock,
+) -> DelayScheduler:
+    """到期推进器（10ms 周期：生命周期用例不必等 1s；`run_once` 不受周期影响）。
+
+    Args:
+        delay_store: 延迟区。
+        message_store: 消息存储。
+        delay_wheel: 时间轮。
+        clock: 可推进时钟。
+
+    Returns:
+        DelayScheduler: 未启动的推进器。
+    """
+    return DelayScheduler(
+        store=delay_store,
+        messages=message_store,
+        wheel=delay_wheel,
+        now=clock,
+        interval_ms=10,
     )
