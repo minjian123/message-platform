@@ -12,7 +12,7 @@
 
 import importlib
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bms_msg.api.deps import get_stream_tuning
 from bms_msg.api.frame.routes import stream_events
 from bms_msg.broker.transport import StreamTuning
 from bms_msg.errors import register_msg_error_mapper
@@ -127,7 +128,7 @@ def _query(**overrides: object) -> SubscribeQuery:
     return SubscribeQuery.model_validate(payload)
 
 
-def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: StreamTuning) -> AsyncIterator[bytes]:
+def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: StreamTuning) -> AsyncGenerator[bytes]:
     """构造生成器（复用应用状态里的存储与登记表）。
 
     Args:
@@ -137,7 +138,7 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
         tuning: 流参数（毫秒级）。
 
     Returns:
-        AsyncIterator[bytes]: 事件字节流。
+        AsyncGenerator[bytes, None]: 事件字节流（需要 `aclose()`，故不用更宽的 `AsyncIterator`）。
     """
     return stream_events(
         uow_factory=app.state.uow_factory,
@@ -340,8 +341,7 @@ async def test_subscribe_rejects_before_streaming(client: AsyncClient) -> None:
 async def test_subscribe_over_http_is_event_stream(client: AsyncClient, api_app: FastAPI) -> None:
     """HTTP 表面：200 + `text/event-stream`，内容以 `event: open` 起、`close(deadline)` 收尾。"""
     await _prepare(client)
-    app = cast("FastAPI", api_app)
-    app.dependency_overrides[_tuning_key()] = lambda: FAST
+    api_app.dependency_overrides[get_stream_tuning] = lambda: FAST
 
     response: Response = await client.get(
         "/msg/subscribe",
@@ -362,17 +362,6 @@ async def test_subscribe_over_http_is_event_stream(client: AsyncClient, api_app:
     assert text.startswith("event: open")
     assert text.rstrip().endswith('data: {"reason":"deadline"}')
     assert api_app.state.stream_registry.active() == 0
-
-
-def _tuning_key() -> object:
-    """取 `get_stream_tuning` 依赖（用于覆盖流参数）。
-
-    Returns:
-        object: 依赖函数对象。
-    """
-    from bms_msg.api.deps import get_stream_tuning
-
-    return get_stream_tuning
 
 
 def test_build_frame_app_mounts_frame_router(api_app: FastAPI) -> None:

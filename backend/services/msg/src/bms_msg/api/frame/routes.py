@@ -24,7 +24,7 @@
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from bms_core.api.base import BaseRouter
@@ -170,7 +170,7 @@ async def stream_events(
     tenant: CurrentTenant,
     query: SubscribeQuery,
     tuning: StreamTuning,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes]:
     """长驻流事件生成器（SSE 字节流；登记 / 注销在此收口）。
 
     生命周期见模块文档：`open` → 逐批 `message`（无消息发注释行保活）→ `close`；

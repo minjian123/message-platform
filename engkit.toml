@@ -54,7 +54,8 @@ doc_globs = ["*.md", "*.txt", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.w
 # ---- 预检步骤（声明序即执行序；`--fast` 只跑 always，`--full` 追加 full + scoped）----
 [[preflight.steps]]
 label = "行尾：工作树 CRLF 检查（应为 LF 的文件不得残留 CRLF）"
-cmd = ["uv", "run", "engkit", "eol", "--quiet"]
+# 用 `{python} -m engkit`：本仓无 `uv.lock`，`uv run engkit` 在新解析出的 venv 里没有该 console script
+cmd = ["{python}", "-m", "engkit", "eol", "--quiet"]
 
 [[preflight.steps]]
 label = "门禁冒烟：Python 版本"

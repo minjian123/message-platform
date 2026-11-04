@@ -169,7 +169,7 @@ async def _create_topic_and_join(client: AsyncClient) -> None:
     assert joined.status_code == 200
 
 
-def _subscribe_params() -> dict[str, object]:
+def _subscribe_params() -> dict[str, str | int]:
     """长驻流查询参数（单分区、成员 c1）。"""
     return {"namespace": NAMESPACE, "topic": TOPIC_NAME, "group": GROUP, "consumer_id": CONSUMER, "partition": 0}
 
