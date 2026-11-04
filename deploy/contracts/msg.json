@@ -1,0 +1,97 @@
+{
+  "components": {
+    "schemas": {
+      "ApiResponse": {
+        "additionalProperties": false,
+        "description": "统一响应体：`code=0` 成功，非 0 业务错误码。\n\n- `data` 为业务数据（泛型）；失败时为 `null`；分页载荷复用分页契约基类。\n- 雪花 ID 在 JSON 中以字符串输出（`BaseSchema` 统一序列化口径）。",
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "msg 消息平台服务",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/": {
+      "get": {
+        "description": "应用信息。\n\nReturns:\n    ApiResponse: {code, message, data:{name, version}}。",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Root"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "存活检查端点。\n\nArgs:\n    request: 当前请求（取服务身份）。\n\nReturns:\n    dict: 服务状态与身份，固定返回 {\"status\": \"ok\", \"service\": 名, \"version\": 版}。",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "就绪检查端点（启动完成态 + 停机摘流 + 注册表聚合）。\n\nArgs:\n    request: 当前请求（取应用启动完成态 / 停机摘流标记 / 服务身份）。\n    registry: 健康检查项注册表（依赖注入）。\n\nReturns:\n    JSONResponse: 全部就绪 200；未就绪、启动未完成或停机中 503。",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    }
+  }
+}

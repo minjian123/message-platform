@@ -34,7 +34,7 @@ MSG_SERVICE_RECORDS: tuple[ModuleRecord, ...] = (
         errcode_segment="35",
         event_domain="msg",
         service_group=ServiceGroup.PRODUCT,
-        build_batch=4,
+        build_batch=3,
         product_key=PRODUCT_KEY,
         status=ModuleStatus.ENABLED,
         tenant_base=True,
@@ -46,9 +46,14 @@ MSG_PRODUCT_RECORDS: tuple[ProductRecord, ...] = (
     ProductRecord(
         product_key=PRODUCT_KEY,
         name="消息平台",
+        frontend_package_source="msg#frontend",
     ),
 )
-"""msg 产品档案（与 `deploy/registry/msg.toml` 的 `products` 段同值）。"""
+"""msg 产品档案（与 `deploy/registry/msg.toml` 的 `products` 段同值）。
+
+`frontend_package_source` 必须与声明同值：应用装配期「代码清单 + 产品声明」按同键同值去重、
+**异值即拒**（`register_product_records`），缺该项会以 `None` 与声明冲突而拒启。
+"""
 
 MSG_PRODUCT_ROUTES: tuple[ProductRouteRecord, ...] = (
     ProductRouteRecord(
