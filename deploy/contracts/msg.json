@@ -129,6 +129,33 @@
         "title": "ApiResponse[AckResult]",
         "type": "object"
       },
+      "ApiResponse_ConnectionInfo_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[ConnectionInfo]",
+        "type": "object"
+      },
       "ApiResponse_ConsumeResult_": {
         "additionalProperties": false,
         "properties": {
@@ -424,6 +451,46 @@
           }
         },
         "title": "ApiResponse[TopicPage]",
+        "type": "object"
+      },
+      "ConnectionInfo": {
+        "additionalProperties": false,
+        "description": "连接元数据（`GET /msg/connection`；排障第一问的机器可读出口）。",
+        "properties": {
+          "client_host": {
+            "description": "客户端地址（无地址场景为空串）",
+            "title": "Client Host",
+            "type": "string"
+          },
+          "client_port": {
+            "description": "客户端端口（无地址场景为 0）",
+            "title": "Client Port",
+            "type": "integer"
+          },
+          "http_version": {
+            "description": "协商到的 HTTP 版本（HTTP/2 / HTTP/1.1）",
+            "title": "Http Version",
+            "type": "string"
+          },
+          "is_tls": {
+            "description": "是否 TLS 承载（TLS 下由 ALPN 协商 h2）",
+            "title": "Is Tls",
+            "type": "boolean"
+          },
+          "scheme": {
+            "description": "承载协议（http / https）",
+            "title": "Scheme",
+            "type": "string"
+          }
+        },
+        "required": [
+          "http_version",
+          "scheme",
+          "is_tls",
+          "client_host",
+          "client_port"
+        ],
+        "title": "ConnectionInfo",
         "type": "object"
       },
       "ConsumeRequest": {
@@ -3864,6 +3931,567 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/msg/ack": {
+      "post": {
+        "description": "确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。\n\n需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。\n位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。",
+        "operationId": "ack_msg_ack_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_AckResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Ack",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350002,
+          350003,
+          350007,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/msg/connection": {
+      "get": {
+        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址）。\n\n只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。\n**不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，\n装载校验只对它给软提示，不影响通过）。",
+        "operationId": "connection_msg_connection_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ConnectionInfo_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Connection",
+        "tags": [
+          "msg-frame"
+        ]
+      }
+    },
+    "/msg/consume": {
+      "post": {
+        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。",
+        "operationId": "consume_msg_consume_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ConsumeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Consume",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/msg/publish": {
+      "post": {
+        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
+        "operationId": "publish_msg_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PublishResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Publish",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350011,
+          350012,
+          350015
+        ]
+      }
+    },
+    "/msg/subscribe": {
+      "get": {
+        "description": "订阅一条分区（SSE 长驻流，server streaming）。\n\n需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。\n预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；\n`max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。\n进流之后：拉到消息逐条 `message`；无消息按轮询间隔重试（带注释行保活）；\n到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。\n客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。",
+        "operationId": "subscribe_msg_subscribe_get",
+        "parameters": [
+          {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "in": "query",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "in": "query",
+            "name": "topic",
+            "required": true,
+            "schema": {
+              "description": "主题名（与创建主题时的 name 同值）",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          {
+            "description": "消费组名（组元数据与再均衡归 01-4）",
+            "in": "query",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "description": "消费组名（组元数据与再均衡归 01-4）",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+              "title": "Group",
+              "type": "string"
+            }
+          },
+          {
+            "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+            "in": "query",
+            "name": "consumer_id",
+            "required": true,
+            "schema": {
+              "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9._:-]{1,128}$",
+              "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "分区号（必带；组内分摊与再均衡归 01-4）",
+            "in": "query",
+            "name": "partition",
+            "required": true,
+            "schema": {
+              "description": "分区号（必带；组内分摊与再均衡归 01-4）",
+              "minimum": 0,
+              "title": "Partition",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "单批拉取条数（与 consume 同口径）",
+            "in": "query",
+            "name": "max_messages",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "单批拉取条数（与 consume 同口径）",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Max Messages",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "单条流时长上限（秒）；到期以 close(deadline) 正常结束，由客户端重连",
+            "in": "query",
+            "name": "max_seconds",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "description": "单条流时长上限（秒）；到期以 close(deadline) 正常结束，由客户端重连",
+              "maximum": 600,
+              "minimum": 1,
+              "title": "Max Seconds",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "SSE 长驻流（event: open / message / error / close）"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Subscribe",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
       }
     },
     "/readyz": {

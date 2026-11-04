@@ -75,15 +75,17 @@ label = "后端静态：pyright"
 cmd = ["uv", "run", "pyright"]
 cwd = "backend"
 
+# ---- 契约：公开契约零漂移（03-1 起；改动端点后必须 `python -m ops.contract_snapshot export`）----
+# 用 `{python}` 而非 `uv run`：本仓无 `uv.lock` 与仓内 `.venv`，`uv run` 会在预检里临时解析依赖。
+[[preflight.steps]]
+label = "契约：contract_snapshot check（公开契约零漂移）"
+cmd = ["{python}", "-m", "ops.contract_snapshot", "check"]
+cwd = "backend"
+
 # ---- 实现阶段启用（8B_01 起）----
 # [[preflight.steps]]
 # label = "门禁：check_modules（模块清单零漂移）"
 # cmd = ["uv", "run", "python", "-m", "ops.check_modules"]
-# cwd = "backend"
-#
-# [[preflight.steps]]
-# label = "契约：contract_snapshot check（公开契约零漂移）"
-# cmd = ["uv", "run", "python", "-m", "ops.contract_snapshot", "check"]
 # cwd = "backend"
 #
 # [[preflight.steps]]

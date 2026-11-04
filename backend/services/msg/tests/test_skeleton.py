@@ -18,6 +18,7 @@ from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.broker.transport import StreamRegistry
 from bms_msg.main import ApplicationFactory
 from services.table_registry import register as register_product_tables
 from services.table_registry import table_names
@@ -68,7 +69,7 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 @pytest.mark.kiwi_id(2410)
 @pytest.mark.kiwi_id(2412)
 def test_factory_surface_lists_are_declared() -> None:
-    """工厂三张清单可用：服务行一条、表归属三表（01-1 / 01-6）、业务路由一条（主题管理）。"""
+    """工厂三张清单可用：服务行一条、表归属三表（01-1 / 01-6）、业务路由两条聚合（03-1）。"""
     factory = ApplicationFactory()
 
     assert [record.module_key for record in factory.service_records()] == ["msg"]
@@ -77,7 +78,7 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_partition",
         "msg_replay_task",
     ]
-    assert len(factory.service_routers()) == 1
+    assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
 
 @pytest.mark.kiwi_id(2410)
@@ -113,6 +114,11 @@ def test_application_assembles_data_plane_state() -> None:
             "/api/v1/msg/admin/groups",
             "/api/v1/msg/admin/groups/{namespace}/{topic}/{group}",
             "/api/v1/msg/admin/delayed",
+            "/msg/publish",
+            "/msg/consume",
+            "/msg/ack",
+            "/msg/subscribe",
+            "/msg/connection",
         } <= paths
         assert isinstance(app.state.message_store, InMemoryMessageStore)
         assert isinstance(app.state.offset_store, InMemoryOffsetStore)
@@ -122,7 +128,10 @@ def test_application_assembles_data_plane_state() -> None:
         assert isinstance(app.state.delay_store, InMemoryDelayStore)
         assert isinstance(app.state.delay_scheduler, DelayScheduler)
         assert app.state.delay_scheduler.wheel is not None
-        assert app.state.delay_scheduler.running is False, "推进器不得在装配期启动（惰性启动）"
+        assert app.state.delay_scheduler.running is False, "推进器不得在装配期启动（由 startup_hooks 启动）"
+        assert isinstance(app.state.stream_registry, StreamRegistry)
+        assert app.state.stream_registry.active() == 0
+        assert callable(app.state.uow_factory), "长驻流每轮拉取用的工作单元工厂须在装配期注入"
     finally:
         # 解除构建冻结，避免后续用例因「注册表已构建」无法登记
         registry.reset()

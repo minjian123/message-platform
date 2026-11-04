@@ -3,19 +3,25 @@
 - **权限码**：`msg:publish`（发布）、`msg:consume`（拉取与确认）——生产与消费分权（最小权限）。
 - **租户**：数据面唯一出口 `get_data_plane_tenant()`（内部 `frame_tenant()`）；请求体不接收 `tenant`。
 - **成员制**（01-4）：`consume` / `ack` 必带 `consumer_id`，且组须存在、成员须活跃、分区须在其分配内；
-  校验在入口（`_guard`）完成，`DeliveryService` 的投递语义与停等规则一行不改。
+  校验在入口（`ensure_member`）完成，`DeliveryService` 的投递语义与停等规则一行不改。
 - **延迟是发布的一个维度**（01-5）：`publish` 按 `delay_level` 分派——给值走 `DelayService`（入延迟区、
   无 offset、惰性启动推进器），缺省走原投递链路；两条分支共用同一份租户与主题校验口径。
 - **保留清理是请求驱动**（01-6）：`publish` 与 `consume` 入口各按主题 `retention_ms` / `retention_bytes`
   幂等判定一次并前移可读区间起点。**放在 API 层而非 `DeliveryService` 内部**：01-2 / 01-3 的投递与停等
   语义（尤其中 `_collect`）一行不改；代价是请求内主题解析多一次（与 01-4 同类遗留，8B_01 帧入口统一收敛）。
+- **两处挂载、一份规格**（03-1）：端点实现只定义一次，由 `DATA_PLANE_ROUTES` + `mount_data_plane()` 挂到
+  两条聚合路由——`/api/v1/msg/*`（既有 HTTP/1.1 数据面，保留作基准对照与回退）与根路径 `/msg/*`
+  （HTTP/2 帧入口，03-2 只换 body 编解码）。路径 / 方法 / 权限依赖 / `x-error-codes` **各只写一处**，
+  避免两套路径的语义与错误码漂移。
 - **数据源**：主题元数据在平台库，会话取 `get_platform_uow`；消息 / 位点 / 死信 / 组 / 延迟区是进程级内存
   实现（`app.state` 注入）。
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
 """
 
 import base64
-from typing import Annotated, cast
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Annotated, Any, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
@@ -23,7 +29,7 @@ from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
-from fastapi import Depends
+from fastapi import Depends, params
 
 from bms_msg.api.deps import (
     DataPlaneTenantDep,
@@ -58,44 +64,72 @@ from bms_msg.schemas.message import (
 )
 from bms_msg.tenant.context import CurrentTenant
 
-__all__ = ["router"]
-
-_PUBLISH = Depends(require_permission("msg:publish"))
-_CONSUME = Depends(require_permission("msg:consume"))
-
-_PUBLISH_ERRORS = [
-    int(MsgErrorCode.TOPIC_NOT_FOUND),
-    int(MsgErrorCode.NAMESPACE_INVALID),
-    int(MsgErrorCode.TENANT_SUSPENDED),
-    int(MsgErrorCode.TENANT_NOT_FOUND),
-    int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
+__all__ = [
+    "ACK_ERROR_CODES",
+    "CONSUME_ERROR_CODES",
+    "CONSUME_PERMISSION",
+    "DATA_PLANE_ROUTES",
+    "PUBLISH_ERROR_CODES",
+    "PUBLISH_PERMISSION",
+    "DataPlaneRoute",
+    "apply_retention",
+    "ensure_member",
+    "message_item",
+    "mount_data_plane",
+    "router",
 ]
+
+PUBLISH_PERMISSION = "msg:publish"
+"""发布权限码（根路径 `/msg/*` 与 `/api/v1/msg/*` 共用一处声明）。"""
+
+CONSUME_PERMISSION = "msg:consume"
+"""拉取 / 确认 / 长驻流权限码（同一处声明，两处挂载共用）。"""
+
+_PUBLISH = Depends(require_permission(PUBLISH_PERMISSION))
+"""发布端点权限依赖（两条聚合路由共用同一实例）。"""
+
+_CONSUME = Depends(require_permission(CONSUME_PERMISSION))
+"""拉取 / 确认端点权限依赖（两条聚合路由共用同一实例）。"""
+
+PUBLISH_ERROR_CODES = ConcurrentStableList(
+    [
+        int(MsgErrorCode.TOPIC_NOT_FOUND),
+        int(MsgErrorCode.NAMESPACE_INVALID),
+        int(MsgErrorCode.TENANT_SUSPENDED),
+        int(MsgErrorCode.TENANT_NOT_FOUND),
+        int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
+    ]
+)
 """发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`）。"""
 
-_CONSUME_ERRORS = [
-    int(MsgErrorCode.TOPIC_NOT_FOUND),
-    int(MsgErrorCode.GROUP_NOT_FOUND),
-    int(MsgErrorCode.MEMBER_INVALID),
-    int(MsgErrorCode.MESSAGE_NOT_FOUND),
-    int(MsgErrorCode.PARTITION_COUNT_INVALID),
-    int(MsgErrorCode.NAMESPACE_INVALID),
-    int(MsgErrorCode.TENANT_SUSPENDED),
-    int(MsgErrorCode.TENANT_NOT_FOUND),
-]
+CONSUME_ERROR_CODES = ConcurrentStableList(
+    [
+        int(MsgErrorCode.TOPIC_NOT_FOUND),
+        int(MsgErrorCode.GROUP_NOT_FOUND),
+        int(MsgErrorCode.MEMBER_INVALID),
+        int(MsgErrorCode.MESSAGE_NOT_FOUND),
+        int(MsgErrorCode.PARTITION_COUNT_INVALID),
+        int(MsgErrorCode.NAMESPACE_INVALID),
+        int(MsgErrorCode.TENANT_SUSPENDED),
+        int(MsgErrorCode.TENANT_NOT_FOUND),
+    ]
+)
 """拉取端点声明的错误码（`x-error-codes`；01-4 追加组 / 成员两项）。"""
 
-_ACK_ERRORS = [
-    int(MsgErrorCode.TOPIC_NOT_FOUND),
-    int(MsgErrorCode.GROUP_NOT_FOUND),
-    int(MsgErrorCode.MEMBER_INVALID),
-    int(MsgErrorCode.OFFSET_INVALID),
-    int(MsgErrorCode.MESSAGE_NOT_FOUND),
-    int(MsgErrorCode.DELIVERY_EXHAUSTED),
-    int(MsgErrorCode.PARTITION_COUNT_INVALID),
-    int(MsgErrorCode.NAMESPACE_INVALID),
-    int(MsgErrorCode.TENANT_SUSPENDED),
-    int(MsgErrorCode.TENANT_NOT_FOUND),
-]
+ACK_ERROR_CODES = ConcurrentStableList(
+    [
+        int(MsgErrorCode.TOPIC_NOT_FOUND),
+        int(MsgErrorCode.GROUP_NOT_FOUND),
+        int(MsgErrorCode.MEMBER_INVALID),
+        int(MsgErrorCode.OFFSET_INVALID),
+        int(MsgErrorCode.MESSAGE_NOT_FOUND),
+        int(MsgErrorCode.DELIVERY_EXHAUSTED),
+        int(MsgErrorCode.PARTITION_COUNT_INVALID),
+        int(MsgErrorCode.NAMESPACE_INVALID),
+        int(MsgErrorCode.TENANT_SUSPENDED),
+        int(MsgErrorCode.TENANT_NOT_FOUND),
+    ]
+)
 """确认端点声明的错误码（`x-error-codes`；01-4 追加组 / 成员两项）。"""
 
 router = BaseRouter(
@@ -108,7 +142,7 @@ PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 """平台库工作单元依赖（主题元数据归平台库）。"""
 
 
-def _service(
+def delivery_service(
     uow: UnitOfWork,
     store: MessageStore,
     offsets: OffsetStore,
@@ -116,6 +150,8 @@ def _service(
     state: DeliveryState,
 ) -> DeliveryService:
     """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态）。
+
+    跨模块出口：帧入口与长驻流复用同一装配口径（不各自 new 一遍，避免语义分叉）。
 
     Args:
         uow: 平台库工作单元（取主题仓储会话）。
@@ -152,7 +188,7 @@ def _delay_service(uow: UnitOfWork, store: DelayStore, scheduler: DelayScheduler
     return DelayService(store=store, router=TopicRouter(TopicRepository(session)), wheel=scheduler.wheel)
 
 
-async def _apply_retention(
+async def apply_retention(
     *,
     tenant: CurrentTenant,
     uow: UnitOfWork,
@@ -197,7 +233,7 @@ async def _apply_retention(
     )
 
 
-async def _guard(
+async def ensure_member(
     *,
     tenant: CurrentTenant,
     uow: UnitOfWork,
@@ -235,8 +271,8 @@ async def _guard(
     )
 
 
-def _item(message: StoredMessage, topic: str, delivery_count: int) -> MessageItem:
-    """存储记录 + 投递次数 → 响应明细。
+def message_item(message: StoredMessage, topic: str, delivery_count: int) -> MessageItem:
+    """存储记录 + 投递次数 → 响应明细（跨模块出口：长驻流的 `message` 事件复用同一结构）。
 
     Args:
         message: 存储记录。
@@ -260,7 +296,6 @@ def _item(message: StoredMessage, topic: str, delivery_count: int) -> MessageIte
     )
 
 
-@router.post("/publish", dependencies=[_PUBLISH], openapi_extra={"x-error-codes": _PUBLISH_ERRORS})
 async def publish(
     req: PublishRequest,
     tenant: DataPlaneTenantDep,
@@ -293,7 +328,7 @@ async def publish(
                 deliver_at=order.deliver_at,
             )
         )
-    await _apply_retention(
+    await apply_retention(
         tenant=tenant,
         uow=uow,
         store=store,
@@ -301,7 +336,7 @@ async def publish(
         topic=req.topic,
         key=req.key,
     )
-    message = await _service(uow, store, offsets, dead_letters, state).publish(tenant=tenant, request=req)
+    message = await delivery_service(uow, store, offsets, dead_letters, state).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
             message_id=message.message_id,
@@ -314,7 +349,6 @@ async def publish(
     )
 
 
-@router.post("/consume", dependencies=[_CONSUME], openapi_extra={"x-error-codes": _CONSUME_ERRORS})
 async def consume(
     req: ConsumeRequest,
     tenant: DataPlaneTenantDep,
@@ -335,7 +369,7 @@ async def consume(
     分区号越界 350009，位点已被保留期清理 350003。
     入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。
     """
-    await _apply_retention(
+    await apply_retention(
         tenant=tenant,
         uow=uow,
         store=store,
@@ -343,18 +377,17 @@ async def consume(
         topic=req.topic,
         partition_no=req.partition,
     )
-    await _guard(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    delivered = await _service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)
+    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
+    delivered = await delivery_service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)
     return ApiResponse.ok(
         ConsumeResult(
             messages=ConcurrentStableList(
-                _item(delivery.message, req.topic, delivery.delivery_count) for delivery in delivered
+                message_item(delivery.message, req.topic, delivery.delivery_count) for delivery in delivered
             )
         )
     )
 
 
-@router.post("/ack", dependencies=[_CONSUME], openapi_extra={"x-error-codes": _ACK_ERRORS})
 async def ack(
     req: AckRequest,
     tenant: DataPlaneTenantDep,
@@ -370,6 +403,56 @@ async def ack(
     需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。
     位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
-    await _guard(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    committed = await _service(uow, store, offsets, dead_letters, state).ack(tenant=tenant, request=req)
+    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
+    committed = await delivery_service(uow, store, offsets, dead_letters, state).ack(tenant=tenant, request=req)
     return ApiResponse.ok(AckResult(committed_offset=committed))
+
+
+@dataclass(frozen=True)
+class DataPlaneRoute:
+    """一个数据面端点的挂载规格（两条聚合路由共用，防语义与错误码漂移）。"""
+
+    path: str
+    """端点相对路径（含前导 `/`，相对聚合路由前缀）。"""
+
+    endpoint: Callable[..., Any]
+    """端点实现（同一函数对象挂两处，OpenAPI 生成两份但行为唯一）。"""
+
+    dependencies: Sequence[params.Depends]
+    """权限依赖（发布 / 拉取确认分权）。"""
+
+    error_codes: ConcurrentStableList[int]
+    """`x-error-codes` 声明（跨仓错误码反向对账）。"""
+
+
+DATA_PLANE_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
+    [
+        DataPlaneRoute(path="/publish", endpoint=publish, dependencies=[_PUBLISH], error_codes=PUBLISH_ERROR_CODES),
+        DataPlaneRoute(path="/consume", endpoint=consume, dependencies=[_CONSUME], error_codes=CONSUME_ERROR_CODES),
+        DataPlaneRoute(path="/ack", endpoint=ack, dependencies=[_CONSUME], error_codes=ACK_ERROR_CODES),
+    ]
+)
+"""数据面端点规格（**唯一出处**：路径 / 方法 / 权限 / 错误码只在这里写一次）。
+
+`/api/v1/msg/*` 与根路径 `/msg/*` 两处挂载都读它；新增数据面端点或调整错误码时只改这里。
+"""
+
+
+def mount_data_plane(target: BaseRouter) -> None:
+    """把数据面三端点挂到给定聚合路由（`/api/v1/msg/*` 与根路径 `/msg/*` 共用）。
+
+    Args:
+        target: 目标聚合路由（其 `prefix` 决定最终路径）。
+    """
+    for spec in DATA_PLANE_ROUTES:
+        target.add_api_route(
+            spec.path,
+            spec.endpoint,
+            methods=["POST"],
+            dependencies=list(spec.dependencies),
+            openapi_extra={"x-error-codes": list(spec.error_codes)},
+        )
+
+
+mount_data_plane(router)
+"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{publish,consume,ack}`）。"""

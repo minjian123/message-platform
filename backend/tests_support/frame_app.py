@@ -1,0 +1,146 @@
+"""测试辅助：构造「最小可运行应用」——真实模块路由 + 租户中间件 + 统一错误渲染 + 内存库会话替身。
+
+为什么放在 `backend/tests_support/`：03-1 的三个用例文件（根路径入口 / 长驻流 / 真 h2c）都要同一份装配，
+而 `services/msg/tests` 不是包（跨文件 import 不可靠，见 `tests/conftest.py` 开头）。`backend/tests_support`
+在 `pythonpath` 的 `.` 下可导入，且不属覆盖率统计包（`coverage_packages = ["bms_msg", "services", "ops"]`）。
+
+装配口径与 `tests/api/test_data_messages.py` 的 `api_app` 一致，差别只在：
+- 额外挂根路径聚合（`api/frame/routes.py`，`/msg/*`）；
+- 额外注入 `stream_registry` / `uow_factory`（长驻流所需）与 `stream_tuning` 覆盖点。
+
+**不启 lifespan、不连真库**：本辅助只构造应用对象，供 `ASGITransport` 或真实 hypercorn 驱动。
+"""
+
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import cast
+
+from bms_core.api.base import mount_service_routers
+from bms_core.api.errors import register_exception_handlers
+from bms_core.api.middleware import TenantMiddleware
+from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.db.session import DbSession, get_platform_uow
+from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from bms_msg.api.admin import topics
+from bms_msg.api.data import groups as data_groups
+from bms_msg.api.data import messages
+from bms_msg.api.frame import routes as frame_routes
+from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.delay import InMemoryDelayStore
+from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.log import InMemoryMessageStore
+from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.replay import UowFactory
+from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.broker.transport import StreamRegistry
+from bms_msg.errors import MSG_ERROR_MAPPER
+
+__all__ = ["build_frame_app"]
+
+
+def build_frame_app(
+    *,
+    session: AsyncSession | None = None,
+    engine: AsyncEngine | None = None,
+    tenant_source: object,
+    mount_frame: bool = True,
+    segment_records: int = 1_000,
+) -> FastAPI:
+    """构造最小应用（`/api/v1` 全量业务路由 + 可选根路径 `/msg/*` 聚合）。
+
+    两种会话形态（二选一）：
+
+    - `session`：所有请求 / 每轮拉取**共用**一个内存会话——绝大多数用例够用，也最快；
+    - `engine`：每次请求 / 每轮拉取**现开现关**一个新会话——并发用例（真 h2c 下的流 + 三端点并发）
+      必须用这一种：共用 `AsyncSession` 不支持并发操作（同一会话并发会抛
+      「concurrent operations are not permitted」），而那条断言正是本任务的验收点。
+
+    Args:
+        session: 内存库会话（与 `engine` 二选一）。
+        engine: 异步引擎（并发用例用；每个工作单元开独立会话）。
+        tenant_source: 租户源替身（`by_code` / `by_id` / `single_active`）。
+        mount_frame: 是否挂根路径聚合（`False` 时只有 `/api/v1`，用于对照既有端点）。
+        segment_records: 内存消息存储的段替身条数（保留期用例注入小值）。
+
+    Returns:
+        FastAPI: 应用实例（`app.state` 已注入全部数据面进程级状态）。
+
+    Raises:
+        ValueError: `session` 与 `engine` 同时为空或同时给定。
+    """
+    if (session is None) == (engine is None):
+        raise ValueError("build_frame_app 需要且只需要 session / engine 之一")
+
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(
+        permission=SimpleNamespace(provider=""),
+        tenant_module=SimpleNamespace(provider=""),
+        error_mapper=SimpleNamespace(provider=MSG_ERROR_MAPPER),
+        tenant=SimpleNamespace(
+            exempt_paths=ConcurrentStableList(),
+            deferred_paths=ConcurrentStableList(),
+            allow_demo_fallback=False,
+        ),
+    )
+    app.state.tenant_source = tenant_source
+    app.state.message_store = InMemoryMessageStore(segment_records=segment_records)
+    app.state.offset_store = InMemoryOffsetStore()
+    app.state.dead_letter_queue = InMemoryDeadLetterQueue()
+    app.state.delivery_state = DeliveryState()
+    app.state.group_store = InMemoryGroupStore()
+    app.state.stream_registry = StreamRegistry()
+    app.state.delay_store = InMemoryDelayStore()
+    app.state.delay_scheduler = DelayScheduler(
+        store=app.state.delay_store,
+        messages=app.state.message_store,
+        wheel=DelayWheel(),
+    )
+
+    @asynccontextmanager
+    async def _uow() -> AsyncGenerator[UnitOfWork]:
+        """开一个工作单元（长驻流每轮拉取 / 预检用）。
+
+        共用会话模式直接复用调用方会话；引擎模式每轮新开一个会话并关闭（并发用例必需）。
+
+        Yields:
+            UnitOfWork: 工作单元。
+        """
+        if session is not None:
+            yield DbUnitOfWork(cast("DbSession", session))
+            return
+        maker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+            cast("AsyncEngine", engine), expire_on_commit=False
+        )
+        async with maker() as fresh:
+            yield DbUnitOfWork(cast("DbSession", fresh))
+
+    app.state.uow_factory = cast("UowFactory", _uow)
+    app.add_middleware(TenantMiddleware)
+    register_exception_handlers(app)
+    routers = [topics.router, messages.router, data_groups.router]
+    app.include_router(mount_service_routers(ConcurrentStableList(routers)))
+    if mount_frame:
+        app.include_router(mount_service_routers(ConcurrentStableList([frame_routes.router]), prefix=""))
+
+    async def _platform_uow() -> AsyncGenerator[DbUnitOfWork]:
+        """平台库工作单元替身（共用会话模式复用；引擎模式每次请求新开）。
+
+        Yields:
+            DbUnitOfWork: 工作单元。
+        """
+        if session is not None:
+            yield DbUnitOfWork(cast("DbSession", session))
+            return
+        maker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+            cast("AsyncEngine", engine), expire_on_commit=False
+        )
+        async with maker() as fresh:
+            yield DbUnitOfWork(cast("DbSession", fresh))
+
+    app.dependency_overrides[get_platform_uow] = _platform_uow
+    return app

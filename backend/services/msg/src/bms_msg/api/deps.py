@@ -19,8 +19,9 @@ from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
-from bms_msg.broker.replay import AuditSink, ReplayRunner
+from bms_msg.broker.replay import AuditSink, ReplayRunner, UowFactory
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
@@ -36,6 +37,9 @@ __all__ = [
     "MessageStoreDep",
     "OffsetStoreDep",
     "ReplayRunnerDep",
+    "StreamRegistryDep",
+    "StreamTuningDep",
+    "UowFactoryDep",
     "get_audit_sink",
     "get_current_tenant_context",
     "get_data_plane_tenant",
@@ -47,6 +51,9 @@ __all__ = [
     "get_message_store",
     "get_offset_store",
     "get_replay_runner",
+    "get_stream_registry",
+    "get_stream_tuning",
+    "get_uow_factory",
 ]
 
 
@@ -230,3 +237,49 @@ ReplayRunnerDep = Annotated[ReplayRunner, Depends(get_replay_runner)]
 
 AuditSinkDep = Annotated[AuditSink, Depends(get_audit_sink)]
 """路由参数写法：`sink: AuditSinkDep`（审计出口）。"""
+
+
+def get_stream_registry(request: Request) -> StreamRegistry:
+    """取长驻流登记表（进程级单例；长驻流的建立 / 注销与活跃数）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        StreamRegistry: 流登记表。
+    """
+    return cast("StreamRegistry", request.app.state.stream_registry)
+
+
+def get_uow_factory(request: Request) -> UowFactory:
+    """取「无请求上下文也能开平台库工作单元」的工厂（长驻流每轮拉取开短会话用）。
+
+    长驻流可能活 60s：整条流复用一个请求会话会把连接池拖死，故每轮现开现关
+    （与 01-6 重放执行器同一口径，装配期由 `configure_service()` 注入）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        UowFactory: 工作单元工厂。
+    """
+    return cast("UowFactory", request.app.state.uow_factory)
+
+
+def get_stream_tuning() -> StreamTuning:
+    """取长驻流参数（缺省取模块常量；用例经依赖覆盖注入毫秒级参数）。
+
+    Returns:
+        StreamTuning: 流参数（轮询间隔 / 时长上限 / 节点心跳间隔）。
+    """
+    return default_stream_tuning()
+
+
+StreamRegistryDep = Annotated[StreamRegistry, Depends(get_stream_registry)]
+"""路由参数写法：`registry: StreamRegistryDep`。"""
+
+UowFactoryDep = Annotated[UowFactory, Depends(get_uow_factory)]
+"""路由参数写法：`uow_factory: UowFactoryDep`。"""
+
+StreamTuningDep = Annotated[StreamTuning, Depends(get_stream_tuning)]
+"""路由参数写法：`tuning: StreamTuningDep`。"""

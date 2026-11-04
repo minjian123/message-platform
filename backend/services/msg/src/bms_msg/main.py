@@ -3,8 +3,10 @@
 > 8B_00 设计阶段声明服务身份、产品服务清单与表归属清单；01-1 接入主题与分区的元数据与管理面路由；
 > 01-2 接入数据面投递（消息存储 / 位点 / 死信端口 + 内存实现，进程级单例落 `app.state`）；
 > 01-4 接入消费组（组存储 + 协议编排 + 组只读视图）；
-> 01-5 接入延迟区（延迟存储 + 时间轮推进器 + 只读待投视图，推进任务惰性启动）；
-> 01-6 接入保留期清理（端口 + 内存实现，请求驱动）与重放任务（任务表 + 执行器 + 审计出口）。
+> 01-5 接入延迟区（延迟存储 + 时间轮推进器 + 只读待投视图）；
+> 01-6 接入保留期清理（端口 + 内存实现，请求驱动）与重放任务（任务表 + 执行器 + 审计出口）；
+> 03-1 接入 HTTP/2 帧入口（根路径 `/msg/*` 复用数据面 + SSE 长驻流 + 连接元数据），并把
+> 延迟推进器与重放执行器挂到基座 `startup_hooks()`（装配后启动、停机随资源管理器回收）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -12,7 +14,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import cast
 
-from bms_core.application import BaseServiceApplicationFactory
+from bms_core.application import BaseServiceApplicationFactory, StartupHook
 from bms_core.audit.emit import AuditEventEmitter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.config import Settings
@@ -25,15 +27,17 @@ from bms_core.services.table_registry import TableRecord
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
-from bms_msg.api.router import api_router
+from bms_msg.api.router import api_router, frame_router
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.lifecycle import start_background_tasks
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.broker.transport import StreamRegistry
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
@@ -59,18 +63,33 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         return ConcurrentStableList(MSG_TABLE_RECORDS)
 
     def service_routers(self) -> ConcurrentStableList[APIRouter]:
-        """业务路由（管理面主题 / 组 / 延迟 / 重放路由 + 数据面消息路由，均挂 `/api/v1`）。"""
-        return ConcurrentStableList([api_router])
+        """业务路由：`/api/v1` 聚合（管理面 + 既有数据面）与根路径聚合（`/msg/*` 帧入口）。
+
+        Returns:
+            ConcurrentStableList[APIRouter]: 两条聚合路由（`/api/v1` 与空前缀）。
+        """
+        return ConcurrentStableList([api_router, frame_router])
+
+    def startup_hooks(self) -> ConcurrentStableList[StartupHook]:
+        """启动钩子：装配完成后启动延迟推进器与重放执行器（停机随资源管理器回收）。
+
+        登记在 `startup_hooks()`（而非 `configure_service()`）的原因：推进器需要事件循环与已装配的
+        数据库引擎，`create()` 阶段两者都还没就绪；基座保证钩子在装配完成后、就绪标记前执行。
+
+        Returns:
+            ConcurrentStableList[StartupHook]: 启动钩子（执行序）。
+        """
+        return ConcurrentStableList([start_background_tasks])
 
     def configure_service(self, app: FastAPI, settings: Settings) -> None:
         """数据面进程级状态注入：消息存储 / 位点 / 死信 / 投递状态 / 组存储 / 延迟区与推进器 /
-        审计出口 / 重放执行器各一份。
+        审计出口 / 重放执行器 / 流登记表 / 工作单元工厂各一份。
 
         替换实现只改这里（8B_02 换文件段与 `.delay` 段、位点文件与 `msg_group` 两表，端口与端点不变）；
         首期内存态随进程重启清空，已登记为遗留（详细设计 §12 风险 1）。
 
-        **两个后台任务都不在此启动**：延迟推进器由首个延迟发布触发、重放执行器由首个建任务触发
-        （基座 `service_lifespan` 无产品启动钩子，显式注册归 8B_01）——没有对应消息 / 任务就不起后台任务。
+        **两个后台任务不在此启动**：`configure_service()` 早于事件循环装配完成，推进器 / 执行器由
+        `startup_hooks()` 里的 `start_background_tasks` 启动（任务 03-1，替代原「首个请求惰性启动」）。
 
         Args:
             app: 应用实例（供 `api/deps.py` 读取）。
@@ -81,6 +100,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.dead_letter_queue = InMemoryDeadLetterQueue()
         app.state.delivery_state = DeliveryState()
         app.state.group_store = InMemoryGroupStore()
+        app.state.stream_registry = StreamRegistry()
         delay_store = InMemoryDelayStore()
         app.state.delay_store = delay_store
         app.state.delay_scheduler = DelayScheduler(
@@ -94,9 +114,10 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             settings=settings,
         )
         app.state.audit_sink = sink
+        app.state.uow_factory = platform_uow_factory(app)
         app.state.replay_runner = ReplayRunner(
             messages=app.state.message_store,
-            uow_factory=platform_uow_factory(app),
+            uow_factory=app.state.uow_factory,
             auditor=ReplayAuditor(sink=sink),
         )
 
