@@ -7,12 +7,13 @@
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableList
-from bms_core.core.exceptions import ParamError, TenantSuspendedError
+from bms_core.core.exceptions import TenantSuspendedError
 from bms_core.core.plugin import default_plugin_registry, resolve_plugin
 from bms_core.db.tenant import TenantContext
 from bms_core.tenant.guard import BaseTenantGuard, TenantTarget
 from fastapi import FastAPI
 
+from bms_msg.errors import MsgErrorCode, MsgNamespaceInvalidError
 from bms_msg.tenant_guard import MSG_TENANT_GUARD, MsgTenantGuard, MsgTenantGuardFactory, register_msg_tenant_guard
 
 pytestmark = pytest.mark.kiwi_id(2408)
@@ -105,10 +106,11 @@ async def test_namespace_of_registered_module_accepted() -> None:
 
 
 async def test_unknown_namespace_rejected() -> None:
-    """命名空间未登记：产品拒绝（10001；msg 35010 随 8B_01_01 错误码模块替换）。"""
+    """命名空间未登记：产品拒绝（msg 段位码 350010，与统一依赖共用同一判定）。"""
     guard = _guard(_StubSource())
-    with pytest.raises(ParamError):
+    with pytest.raises(MsgNamespaceInvalidError) as excinfo:
         await guard.per_round(_target(), scope="not-a-module")
+    assert excinfo.value.code == MsgErrorCode.NAMESPACE_INVALID
 
 
 async def test_missing_scope_skips_namespace_check() -> None:

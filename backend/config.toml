@@ -30,6 +30,11 @@ resolve_cache_ttl = 60
 # 租户可用性守卫（bms 任务 04_02）：msg 继承默认实现补命名空间校验，经 configure_plugins 登记为 msg
 provider = "msg"
 
+[error_mapper]
+# 产品码覆盖（bms 能力域 error_mapper）：统一错误响应单点把基座租户判定码改写成 msg 段位码
+# 80002（停用）→ 350011、80001（不存在）→ 350012；空串表示不覆盖（出基座码）
+provider = "msg"
+
 [cache]
 provider = "memory"
 options = {}

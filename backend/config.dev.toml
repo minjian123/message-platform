@@ -28,3 +28,6 @@ url = "sqlite+aiosqlite:///./msg_archive.db"
 
 [tenant]
 dev_tenants = ["demo"]
+# 开发态显式租户（租户编码）：无令牌入口（数据面直连 / h2 调试）本地使用；生产配置**不得出现**
+# （基座启动校验非空即拒启）。留空 = 不启用，数据面仍只认令牌租户位。
+dev_override_tenant = ""

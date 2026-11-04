@@ -3,19 +3,19 @@
 - **继承不改基座**：`MsgTenantGuard` 只覆写扩展钩子 `verify(context, scope)`，租户解析、状态判定、
   错误码（80001 / 80002 / 10007）全部沿用基座；停用即时生效靠基座租户源的全局版本戳。
 - **命名空间校验**：`scope` 由消费入口传消息的 `namespace`，须属服务目录**已登记且启用**的
-  `module_key`（`service_catalog_view()` + `ModuleStatus.ENABLED`），否则拒绝——msg 不自造模块
-  （《架构设计 · 多租户与安全》§2.2）。
+  `module_key`（与统一依赖共用 `tenant/context.py::ensure_namespace`），否则按 `350010` 拒绝——
+  msg 不自造模块（《架构设计 · 多租户与安全》§2.2）。
 - **登记**：`configure_plugins()` 内 `register_plugin("tenant_guard", "msg", …)`，配置
   `[tenant_guard].provider = "msg"` 生效（注册表冻结前登记、运行期只读）。
 """
 
-from bms_core.core.exceptions import ParamError
 from bms_core.core.factory import BasePluginFactory
 from bms_core.core.plugin import DEFAULT_CONTRACT_VERSION, register_plugin
 from bms_core.db.tenant import TenantContext
-from bms_core.services.module_registry import ModuleStatus, service_catalog_view
 from bms_core.tenant.guard import SourceTenantGuard, tenant_source_reader
 from fastapi import FastAPI
+
+from bms_msg.tenant.context import enabled_namespaces, ensure_namespace
 
 __all__ = ["MSG_TENANT_GUARD", "MsgTenantGuard", "MsgTenantGuardFactory"]
 
@@ -37,16 +37,10 @@ class MsgTenantGuard(SourceTenantGuard):
             scope: 消息命名空间；`None` 表示调用方未指定范围，跳过命名空间校验（仅做租户校验）。
 
         Raises:
-            ParamError: 命名空间未在服务目录登记或未启用（10001；msg 自有错误码段 35010 随
-                8B_01_01 错误码模块建立后替换）。
+            MsgNamespaceInvalidError: 命名空间未在服务目录登记或未启用（`350010`）。
         """
         del context
-        if scope is None:
-            return
-        for record in service_catalog_view():
-            if record.module_key == scope and record.status == ModuleStatus.ENABLED:
-                return
-        raise ParamError(f"命名空间未登记或未启用（module_key 口径）：{scope}")
+        ensure_namespace(scope, enabled_namespaces())
 
 
 class MsgTenantGuardFactory(BasePluginFactory[MsgTenantGuard]):

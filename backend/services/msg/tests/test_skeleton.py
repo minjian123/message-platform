@@ -57,6 +57,16 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 
 
 @pytest.mark.kiwi_id(2410)
+def test_factory_surface_lists_are_declared() -> None:
+    """工厂三张清单可用：服务行一条、表归属为空（8B_00）、业务路由为空（8B_01 起接入）。"""
+    factory = ApplicationFactory()
+
+    assert [record.module_key for record in factory.service_records()] == ["msg"]
+    assert list(factory.table_records()) == []
+    assert list(factory.service_routers()) == []
+
+
+@pytest.mark.kiwi_id(2410)
 def test_table_registry_register_is_idempotent() -> None:
     """表归属装载入口可调用且幂等（8B_00 为空清单，首批表登记后自动生效）。"""
     register_product_tables()

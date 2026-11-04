@@ -4,8 +4,9 @@
 # 口径：基座 `bms_core.registry.products`（同源、同装载入口、同视图族、同唯一性纪律）。
 # 校验：`ops.check_modules` 与平台装配期复用同一实现；任一不满足即拒启。
 #
-# 8B_00 阶段：只登记产品档案、服务行与产品路由；数据源 / 能力 / 种子 / 错误码随实现补。
-# `errcode_segment = "35"` 为暂定值，最终以 07C 标识符登记为准。
+# 8B_00 阶段：登记产品档案、服务行与产品路由；数据源 / 能力 / 种子随实现补。
+# 8B_01_1 起登记错误码（段位取自本文件服务行 `errcode_segment = "35"`，6 位码 = 2 位段 + 4 位序号）。
+# `errcode_segment = "35"` 为暂定值，最终以 07C 标识符登记为准（登记后仅段位调整，码位不变）。
 
 product_key = "msg"
 
@@ -50,3 +51,31 @@ origin = "product"
 product_key = "msg"
 path = "/tenant-usage"
 status = "enabled"
+
+# ---- 错误码（第七类记录；段位取自本文件服务行 errcode_segment = "35"）----
+# 6 位码 = 2 位段 + 4 位序号；与 `backend/services/msg/src/bms_msg/errors.py` 的 `MsgErrorCode`
+# 及异常类 `http_status_` 逐条对齐（对账断言见 `backend/services/msg/tests/test_error_codes.py`）。
+# 文案键格式 `<product>.error.<snake>`；判定顺序：租户（350012 / 350011）→ 命名空间（350010）→ 主题。
+[[errcodes]]
+code = 350010
+domain = "tenant"
+http_status = 400
+message_key = "msg.error.namespace_invalid"
+severity = "warning"
+description = "命名空间未登记或未启用（须为服务目录中已启用的 module_key）"
+
+[[errcodes]]
+code = 350011
+domain = "tenant"
+http_status = 403
+message_key = "msg.error.tenant_suspended"
+severity = "warning"
+description = "租户已停用（拒绝生产与消费，数据保留）"
+
+[[errcodes]]
+code = 350012
+domain = "tenant"
+http_status = 404
+message_key = "msg.error.tenant_not_found"
+severity = "warning"
+description = "租户不存在（不泄露租户是否存在）"
