@@ -30,7 +30,12 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList,
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
 
-from bms_msg.broker.deadletter import DEAD_LETTER_EXHAUSTED, DeadLetter, DeadLetterQueue
+from bms_msg.broker.deadletter import (
+    DEAD_LETTER_EXHAUSTED,
+    DeadLetter,
+    DeadLetterQueue,
+    DeadLetterReason,
+)
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
@@ -43,10 +48,20 @@ from bms_msg.errors import (
     MsgPayloadTooLargeError,
 )
 from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
-from bms_msg.schemas.message import AckRequest, ConsumeRequest, PublishRequest
+from bms_msg.protocol.payload import normalize_compression, normalize_content_type
+from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 
-__all__ = ["Delivery", "DeliveryService", "DeliveryState", "InflightDelivery", "PartitionKey", "decode_payload"]
+__all__ = [
+    "Delivery",
+    "DeliveryService",
+    "DeliveryState",
+    "InflightDelivery",
+    "PartitionKey",
+    "decode_payload",
+    "ensure_payload_size",
+    "resolve_payload",
+]
 
 PartitionKey = tuple[str, int, int]
 """投递状态键：`(group, topic_id, partition_no)`。"""
@@ -233,10 +248,13 @@ class DeliveryService:
             message_id=new_message_id(),
             log_id=new_message_id(),
             key=request.key,
-            payload=decode_payload(request.payload),
+            payload=resolve_payload(request),
             headers=ConcurrentStableDict(request.headers.items()),
             trace_id=request.trace_id,
             published_at=self._now(),
+            content_type=normalize_content_type(request.content_type),
+            compression=normalize_compression(request.compression),
+            uncompressed_len=request.uncompressed_len,
         )
 
     async def consume(self, *, tenant: CurrentTenant, request: ConsumeRequest) -> ConcurrentStableList[Delivery]:
@@ -306,6 +324,55 @@ class DeliveryService:
             advanced = await self._commit(key=key, offset=request.offset)
             self._state.forget(key, request.offset)
             return advanced
+
+    async def nack(self, *, tenant: CurrentTenant, request: NackRequest) -> int:
+        """拒绝一条消息（转死信 + 位点前移；幂等）。
+
+        与 `ack` 的区别只在「消息是终结还是成功」：两者都推进位点，`nack` 额外把消息转入死信并记原因。
+        顺序性因此与「重投超限转死信」完全一致——死信是唯一能越过队头的破例（01-3 §4）。
+
+        Args:
+            tenant: 当前租户。
+            request: 拒绝请求（必带 `partition` / `offset` / `reason`）。
+
+        Returns:
+            int: 已提交位点（下一条待消费的 offset）。
+
+        Raises:
+            MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
+            MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
+            MsgPartitionCountInvalidError: 分区号越界（350009）。
+            MsgOffsetInvalidError: 位点越界（`>= LEO`；350002）。
+            MsgMessageNotFoundError: 该 offset 不在投递中（350003）。
+        """
+        tenant.ensure_namespace(request.namespace)
+        topic = await self._router.resolve(namespace=request.namespace, name=request.topic)
+        partition_no = self._router.partition(topic, request.partition)
+        topic_id = int(topic.id)
+        key: PartitionKey = (request.group, topic_id, partition_no)
+        async with self._state.lock:
+            leo = await self._store.leo(topic_id=topic_id, partition_no=partition_no)
+            if request.offset >= leo:
+                raise MsgOffsetInvalidError(f"位点越界：{request.offset} >= LEO {leo}")
+            committed = await self._offsets.get(group=request.group, topic_id=topic_id, partition_no=partition_no)
+            if await self._dead_letters.contains(topic_id=topic_id, partition_no=partition_no, offset=request.offset):
+                # 幂等：重复上报（重试 / 超时重发）不重复入队，也不改变位点。
+                return committed
+            existing = self._state.lookup(key, request.offset)
+            if existing is None:
+                raise MsgMessageNotFoundError(f"消息不在投递中，无法拒绝：offset={request.offset}")
+            batch = await self._store.fetch(
+                topic_id=topic_id, partition_no=partition_no, from_offset=request.offset, max_messages=1
+            )
+            if not batch or batch[0].offset != request.offset:
+                raise MsgMessageNotFoundError(f"消息不存在：offset={request.offset}")
+            return await self._dead_letter(
+                key=key,
+                message=batch[0],
+                attempts=existing.attempts,
+                reason=DeadLetterReason(request.reason),
+                detail=ConcurrentStableDict(request.detail.items()),
+            )
 
     async def _collect(
         self,
@@ -421,12 +488,26 @@ class DeliveryService:
         )
         return Delivery(message=message, delivery_count=attempts)
 
-    async def _dead_letter(self, *, key: PartitionKey, message: StoredMessage) -> None:
-        """把毒消息转入死信并前移位点（不删日志）。
+    async def _dead_letter(
+        self,
+        *,
+        key: PartitionKey,
+        message: StoredMessage,
+        attempts: int | None = None,
+        reason: DeadLetterReason = DEAD_LETTER_EXHAUSTED,
+        detail: ConcurrentStableDict[str, str] | None = None,
+    ) -> int:
+        """把消息转入死信并前移位点（不删日志）。
 
         Args:
             key: 投递状态键。
             message: 被放弃的消息。
+            attempts: 累计投递次数（缺省按重投上限填；消费端上报时给实际次数）。
+            reason: 转入原因（broker 判定为重投超限，消费端上报见 `DeadLetterReason`）。
+            detail: 失败详情（消费端上报时原样保存）。
+
+        Returns:
+            int: 推进后的位点。
         """
         _group, topic_id, partition_no = key
         await self._dead_letters.add(
@@ -435,13 +516,14 @@ class DeliveryService:
                 topic_id=topic_id,
                 partition_no=partition_no,
                 offset=message.offset,
-                attempts=MAX_DELIVERY_ATTEMPTS,
+                attempts=attempts if attempts is not None else MAX_DELIVERY_ATTEMPTS,
                 failed_at=self._now(),
-                reason=DEAD_LETTER_EXHAUSTED,
+                reason=reason,
+                detail=detail if detail is not None else ConcurrentStableDict(),
             )
         )
         self._state.forget(key, message.offset)
-        await self._commit(key=key, offset=message.offset)
+        return await self._commit(key=key, offset=message.offset)
 
     async def _commit(self, *, key: PartitionKey, offset: int) -> int:
         """按「连续已确认前缀」推进位点（先落存储、成功后才改内存状态）。
@@ -487,11 +569,31 @@ class DeliveryService:
         return candidate
 
 
+def ensure_payload_size(data: bytes) -> bytes:
+    """判单条消息上限（`350006` / 413）。
+
+    **唯一判据**：帧路径（原始字节）与 JSON 路径（base64 解码后）都走这里——两条路径一个上限，
+    改阈值只改 `MAX_FRAME_PAYLOAD_BYTES` 一处。
+
+    Args:
+        data: 消息体字节（压缩后的线上字节）。
+
+    Returns:
+        bytes: 原样返回（便于链式调用）。
+
+    Raises:
+        MsgPayloadTooLargeError: 超过 1 MiB 上限（350006 / 413）。
+    """
+    if len(data) > MAX_FRAME_PAYLOAD_BYTES:
+        raise MsgPayloadTooLargeError(f"消息体超过上限 {MAX_FRAME_PAYLOAD_BYTES} 字节（实际 {len(data)} 字节）")
+    return data
+
+
 def decode_payload(payload: str) -> bytes:
     """把 base64 载荷解码为业务字节（形态属请求契约，非法即 `10001`）。
 
-    解码后判 1 MiB 上限（`350006`）：普通发布与延迟发布共用本函数，因此**两条分支同一判据**；
-    帧路径的消息体也经此进入（先 base64 再由本函数还原），上限只在这一点判。
+    解码后交给 ``ensure_payload_size`` 判上限：普通发布与延迟发布共用本函数，因此**两条分支同一判据**；
+    帧路径不经本函数（它的原始字节直接走 ``ensure_payload_size``）。
 
     Args:
         payload: base64 字符串（空串表示空消息体）。
@@ -507,6 +609,23 @@ def decode_payload(payload: str) -> bytes:
         decoded = base64.b64decode(payload, validate=True)
     except ValueError as exc:
         raise ParamError(f"消息体须为合法的 base64 编码：{exc}") from exc
-    if len(decoded) > MAX_FRAME_PAYLOAD_BYTES:
-        raise MsgPayloadTooLargeError(f"消息体超过上限 {MAX_FRAME_PAYLOAD_BYTES} 字节（实际 {len(decoded)} 字节）")
-    return decoded
+    return ensure_payload_size(decoded)
+
+
+def resolve_payload(request: PublishRequest) -> bytes:
+    """取发布请求的消息体字节（帧路径直通、JSON 路径 base64 解码，上限同一处判）。
+
+    Args:
+        request: 发布请求。
+
+    Returns:
+        bytes: 业务字节。
+
+    Raises:
+        ParamError: 非法 base64（10001）。
+        MsgPayloadTooLargeError: 超过 1 MiB 上限（350006 / 413）。
+    """
+    raw = request.raw_payload
+    if raw is not None:
+        return ensure_payload_size(raw)
+    return decode_payload(request.payload)

@@ -16,10 +16,10 @@ FastAPI 的依赖先于请求体校验执行，因此「在依赖里判定帧形
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
+from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.schemas.common import ApiResponse
@@ -30,6 +30,7 @@ from bms_msg.api.data.messages import (
     PlatformUowDep,
     ack,
     consume,
+    nack,
     publish,
 )
 from bms_msg.api.deps import (
@@ -65,7 +66,13 @@ from bms_msg.protocol.frame import (
     FrameType,
     decode_frame,
 )
-from bms_msg.schemas.message import AckRequest, ConsumeRequest, PublishRequest
+from bms_msg.protocol.payload import (
+    KNOWN_CONTENT_TYPES,
+    ensure_compression_flag,
+    normalize_compression,
+    normalize_content_type,
+)
+from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 
 __all__ = ["FrameHandled", "build_frame_gate", "is_frame_request", "register_frame_handlers"]
@@ -211,6 +218,8 @@ def _ensure_frame_type(frame: Frame, expected: int) -> None:
         raise MsgFrameInvalidError(
             f"帧类型 {frame.frame_type} 暂未开放（帧式订阅归 03-5、心跳端点归 03-4）；{_FRAME_MISMATCH_HINT}"
         )
+    if frame.frame_type == int(FrameType.NACK):
+        raise MsgFrameInvalidError(f"nack 帧请发到 /msg/nack；{_FRAME_MISMATCH_HINT}")
     raise MsgFrameInvalidError(f"{_FRAME_MISMATCH_HINT}（收到 {frame.frame_type}，期望 {expected}）")
 
 
@@ -266,10 +275,13 @@ def _payload_of(frame: Frame) -> bytes:
 def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: bytes) -> dict[str, Any]:
     """按「已知键白名单」把帧头转成模型入参（未知键忽略 = 铁律 2）。
 
+    **payload 段不进模型**：原始字节走模型的私有通道（`set_raw_payload`），`payload` 字段保持空串，
+    避免帧路径多一次 base64 编码（03-3 详细设计 §4.7）。
+
     Args:
         header: 帧头。
         allowed: 请求模型声明的字段名。
-        payload: 帧 payload（publish 的消息体）。
+        payload: 帧 payload（publish 的消息体；本函数不使用，由调用方走私有通道）。
 
     Returns:
         dict[str, Any]: 模型入参。
@@ -277,12 +289,38 @@ def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: by
     Raises:
         MsgFrameInvalidError: 头里出现 `payload` 键（消息体必须走 body，`350018`）。
     """
+    del payload
     if "payload" in header:
         raise MsgFrameInvalidError("消息体必须放在 payload 段，不得写进 header")
     values = {key: header[key] for key in header if key in allowed and key != "payload"}
     if "payload" in allowed:
-        values["payload"] = base64.b64encode(payload).decode("ascii")
+        values["payload"] = ""
     return values
+
+
+def _normalize_payload_marks(frame: Frame, model: BaseModel) -> None:
+    """规范化内容类型与压缩标记，并校验「是否压缩」与「用什么算法」自洽。
+
+    只对发布请求生效（其余端点没有消息体）。未登记的内容类型**透传但打点**：broker 不解 payload，
+    无从判断格式支不支持，拒收会把「新增格式」变成「先改 broker 再上线」（详细设计 §4.1）。
+
+    Args:
+        frame: 解码结果（提供 `flags.compressed`）。
+        model: 已校验的请求模型。
+
+    Raises:
+        MsgFrameInvalidError: 压缩标记矛盾（`350018`）。
+        ParamError: 内容类型 / 算法名形态非法（`10001`）。
+    """
+    if not isinstance(model, PublishRequest):
+        return
+    content_type = normalize_content_type(model.content_type)
+    compression = normalize_compression(model.compression)
+    ensure_compression_flag(compressed=bool(frame.flags & FrameFlags.COMPRESSED), compression=compression)
+    model.content_type = content_type
+    model.compression = compression
+    if content_type not in KNOWN_CONTENT_TYPES:
+        _LOGGER.info("msg_payload", content_type=content_type, outcome="unknown_content_type")
 
 
 async def _invoke(
@@ -354,6 +392,17 @@ async def _invoke(
             state=state,
             groups=groups,
         )
+    elif frame_type == int(FrameType.NACK):
+        response = await nack(
+            req=cast("NackRequest", model),
+            tenant=tenant,
+            uow=uow,
+            store=store,
+            offsets=offsets,
+            dead_letters=dead_letters,
+            state=state,
+            groups=groups,
+        )
     else:  # pragma: no cover - 类型在挂载期已固定为三种之一
         raise TypeError(f"未支持的帧类型：{frame_type}")
     return cast("ApiResponse[Any]", response).data
@@ -417,6 +466,18 @@ async def _handle_frame(
         _ensure_tenant(frame.header, tenant)
         payload = _payload_of(frame)
         model = request_model.model_validate(_model_input(frame.header, allowed, payload))
+        if isinstance(model, PublishRequest):
+            model.set_raw_payload(payload)
+        _normalize_payload_marks(frame, model)
+    except ParamError as exc:
+        # 内容类型 / 算法名形态非法：契约层（键在、值形态错），与 JSON 路径同码。
+        raise _framed(
+            code=10001,
+            message=str(exc),
+            request_id=request_id,
+            frame_type=frame_type,
+            request=request,
+        ) from exc
     except ValidationError as exc:
         raise _framed(
             code=10001,  # 契约层：键在但值形态非法

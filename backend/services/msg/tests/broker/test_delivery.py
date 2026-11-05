@@ -24,7 +24,7 @@ from bms_core.db.session import DbSession
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.deadletter import DeadLetter, DeadLetterQueue, InMemoryDeadLetterQueue
-from bms_msg.broker.delivery import DeliveryService, DeliveryState
+from bms_msg.broker.delivery import DeliveryService, DeliveryState, decode_payload, ensure_payload_size
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore, OffsetStore
 from bms_msg.broker.router import TopicRouter
@@ -36,11 +36,13 @@ from bms_msg.errors import (
     MsgNamespaceInvalidError,
     MsgOffsetInvalidError,
     MsgPartitionCountInvalidError,
+    MsgPayloadTooLargeError,
     MsgTopicNotFoundError,
 )
 from bms_msg.models.topic import MsgTopic
+from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.repositories.topic import TopicRepository
-from bms_msg.schemas.message import AckRequest, ConsumeRequest, PublishRequest
+from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackReason, NackRequest, PublishRequest
 from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.services.topic import TopicService
 from bms_msg.tenant.context import CurrentTenant
@@ -578,3 +580,100 @@ async def test_drop_partition_clears_inflight(
 
     delivery_state.drop_partition(("audit", topic_id, 7))
     assert await offset_store.get(group=GROUP, topic_id=topic_id, partition_no=0) == 0
+
+
+async def test_publish_records_payload_marks(
+    delivery_service: DeliveryService, current_tenant: CurrentTenant, topic: MsgTopic
+) -> None:
+    """发布把内容类型 / 压缩标记 / 解压长度写进记录（消费端据此选解法器）。
+
+    Args:
+        delivery_service: 投递服务。
+        current_tenant: 当前租户。
+        topic: 单分区主题。
+    """
+    del topic
+    request = PublishRequest(
+        namespace=NAMESPACE,
+        topic=TOPIC_NAME,
+        key="k",
+        payload=base64.b64encode(b"packed").decode("ascii"),
+        content_type="Application/JSON; charset=utf-8",
+        compression="GZIP",
+        uncompressed_len=120,
+    )
+
+    record = await delivery_service.publish(tenant=current_tenant, request=request)
+
+    assert record.content_type == "application/json"
+    assert record.compression == "gzip"
+    assert record.uncompressed_len == 120
+
+
+async def test_publish_prefers_raw_payload_channel(
+    delivery_service: DeliveryService, current_tenant: CurrentTenant, topic: MsgTopic
+) -> None:
+    """帧路径直通：给了原始字节就不再 base64 解码（`payload` 字段留空）。
+
+    Args:
+        delivery_service: 投递服务。
+        current_tenant: 当前租户。
+        topic: 单分区主题。
+    """
+    del topic
+    request = PublishRequest(namespace=NAMESPACE, topic=TOPIC_NAME, key="k", payload="")
+    request.set_raw_payload(b"\x00\xffraw")
+
+    record = await delivery_service.publish(tenant=current_tenant, request=request)
+
+    assert record.payload == b"\x00\xffraw"
+    assert record.content_type == "application/msgpack"
+    assert record.compression == "none"
+
+
+def test_payload_limit_is_single_judgement() -> None:
+    """上限只有一处判据：原始字节（帧路径）与 base64（JSON 路径）都按 1 MiB 判、都抛 `350006`。"""
+    exact = b"x" * MAX_FRAME_PAYLOAD_BYTES
+
+    assert ensure_payload_size(exact) == exact
+    with pytest.raises(MsgPayloadTooLargeError):
+        ensure_payload_size(exact + b"x")
+    with pytest.raises(MsgPayloadTooLargeError):
+        decode_payload(base64.b64encode(exact + b"x").decode("ascii"))
+
+
+async def test_nack_reports_missing_record(
+    delivery_service: DeliveryService,
+    current_tenant: CurrentTenant,
+    message_store: InMemoryMessageStore,
+    topic: MsgTopic,
+) -> None:
+    """投递后在途但有记录已不可读（保留清理前移了起点）：仍按 `350003` 拒绝，不静默成功。
+
+    这一支是「in-flight 登记存在、存储里却取不到该 offset」——`nack` 必须报错而不是写一条没有
+    `message_id` 的死信。
+
+    Args:
+        delivery_service: 投递服务。
+        current_tenant: 当前租户。
+        message_store: 消息存储。
+        topic: 单分区主题。
+    """
+    topic_id = int(topic.id)
+    await _publish_many(delivery_service, current_tenant, 2)
+    first = await delivery_service.consume(tenant=current_tenant, request=_consume(max_messages=1))
+    assert [item.message.offset for item in first] == [0]
+
+    await message_store.truncate_before(topic_id=topic_id, partition_no=0, offset=1)
+
+    request = NackRequest(
+        namespace=NAMESPACE,
+        topic=TOPIC_NAME,
+        group=GROUP,
+        consumer_id=CONSUMER,
+        partition=0,
+        offset=0,
+        reason=NackReason.SCHEMA_INVALID,
+    )
+    with pytest.raises(MsgMessageNotFoundError):
+        await delivery_service.nack(tenant=current_tenant, request=request)

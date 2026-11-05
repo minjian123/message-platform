@@ -296,6 +296,9 @@ class DelayScheduler:
                 headers=record.headers,
                 trace_id=record.trace_id,
                 published_at=record.deliver_at,
+                content_type=record.content_type,
+                compression=record.compression,
+                uncompressed_len=record.uncompressed_len,
             )
             await self._store.remove(log_id=record.log_id)
         except Exception:  # 主题停用 / 租户停用 / 存储故障：保留记录，下一轮重试

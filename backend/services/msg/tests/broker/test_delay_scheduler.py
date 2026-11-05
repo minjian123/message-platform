@@ -29,6 +29,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_msg.broker.delay import DelayRecord, DelayStore
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 pytestmark = pytest.mark.kiwi_id(2417)
 
@@ -129,6 +130,9 @@ class _FailingMessageStore(MessageStore):
         headers: ConcurrentStableDict[str, str],
         trace_id: str | None,
         published_at: datetime,
+        content_type: str = DEFAULT_CONTENT_TYPE,
+        compression: str = COMPRESSION_NONE,
+        uncompressed_len: int | None = None,
     ) -> StoredMessage:
         """转调真实实现（`fail_next` 为真时抛错，模拟主题停用 / 存储故障）。
 
@@ -162,6 +166,9 @@ class _FailingMessageStore(MessageStore):
             headers=headers,
             trace_id=trace_id,
             published_at=published_at,
+            content_type=content_type,
+            compression=compression,
+            uncompressed_len=uncompressed_len,
         )
 
     async def fetch(

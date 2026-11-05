@@ -318,6 +318,33 @@
         "title": "ApiResponse[MemberAssignment]",
         "type": "object"
       },
+      "ApiResponse_NackResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NackResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[NackResult]",
+        "type": "object"
+      },
       "ApiResponse_PublishResult_": {
         "additionalProperties": false,
         "properties": {
@@ -1113,6 +1140,18 @@
         "additionalProperties": false,
         "description": "一条投递的消息（`delivery_count` 供消费端识别重复；幂等键由业务自选）。",
         "properties": {
+          "compression": {
+            "default": "none",
+            "description": "压缩算法（none 表示未压缩，恒有值）",
+            "title": "Compression",
+            "type": "string"
+          },
+          "content_type": {
+            "default": "application/msgpack",
+            "description": "消息体内容类型（缺省 application/msgpack，恒有值）",
+            "title": "Content Type",
+            "type": "string"
+          },
           "delivery_count": {
             "description": "投递次数（首次 1，重投递增）",
             "title": "Delivery Count",
@@ -1154,7 +1193,7 @@
             "type": "integer"
           },
           "payload": {
-            "description": "消息体（base64 编码）",
+            "description": "消息体（base64 编码；帧路径由私有原始字节通道替代）",
             "title": "Payload",
             "type": "string"
           },
@@ -1180,6 +1219,18 @@
             ],
             "description": "链路标识",
             "title": "Trace Id"
+          },
+          "uncompressed_len": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "解压后字节数（生产者可选声明）",
+            "title": "Uncompressed Len"
           }
         },
         "required": [
@@ -1194,6 +1245,102 @@
           "published_at"
         ],
         "title": "MessageItem",
+        "type": "object"
+      },
+      "NackReason": {
+        "description": "拒绝原因（消费端上报；`delivery_exhausted` 由 broker 独占，不接受外部指定）。",
+        "enum": [
+          "schema_invalid",
+          "processing_failed"
+        ],
+        "title": "NackReason",
+        "type": "string"
+      },
+      "NackRequest": {
+        "additionalProperties": false,
+        "description": "拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。\n\n成员制与 `ack` 同口径：组须存在、成员须活跃、分区须在其分配内。",
+        "properties": {
+          "consumer_id": {
+            "description": "成员标识（客户端自带，组内唯一；同 id 再次 join 视为重连）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._:-]{1,128}$",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "失败详情（字段名 → 说明，如 field / expected / actual）",
+            "title": "Detail",
+            "type": "object"
+          },
+          "group": {
+            "description": "消费组名（组元数据与再均衡归 01-4）",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+            "title": "Group",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset": {
+            "description": "待拒绝消息的分区内序号",
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "分区号（必带；组内分摊与再均衡归 01-4）",
+            "minimum": 0.0,
+            "title": "Partition",
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/NackReason",
+            "description": "拒绝原因（schema_invalid / processing_failed）"
+          },
+          "topic": {
+            "description": "主题名（与创建主题时的 name 同值）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic",
+          "group",
+          "consumer_id",
+          "partition",
+          "offset",
+          "reason"
+        ],
+        "title": "NackRequest",
+        "type": "object"
+      },
+      "NackResult": {
+        "additionalProperties": false,
+        "description": "拒绝结果（与 `AckResult` 同口径：`committed_offset` 为下一条待消费的 offset）。",
+        "properties": {
+          "committed_offset": {
+            "description": "已提交位点（被拒消息之后的第一条）",
+            "title": "Committed Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "committed_offset"
+        ],
+        "title": "NackResult",
         "type": "object"
       },
       "PartitionItem": {
@@ -1240,6 +1387,32 @@
         "additionalProperties": false,
         "description": "发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。",
         "properties": {
+          "compression": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "压缩算法（缺省 none；帧路径由 flags.compressed 与它共同判定，两者必须自洽）",
+            "title": "Compression"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "消息体内容类型（缺省按 application/msgpack；见协议契约 payload_content_types）",
+            "title": "Content Type"
+          },
           "delay_level": {
             "anyOf": [
               {
@@ -1304,6 +1477,19 @@
             ],
             "description": "链路标识",
             "title": "Trace Id"
+          },
+          "uncompressed_len": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "解压后字节数（可选声明；broker 只透传，不参与上限判定）",
+            "title": "Uncompressed Len"
           }
         },
         "required": [
@@ -3831,6 +4017,109 @@
         ]
       }
     },
+    "/api/v1/msg/nack": {
+      "post": {
+        "description": "拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。\n\n需要 msg:consume 权限（拿消息的人才能拒消息）；须是该分区的当前持有者（组不存在 350013，\n成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。\n已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。",
+        "operationId": "nack_api_v1_msg_nack_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NackResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Nack",
+        "tags": [
+          "msg-data"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350002,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
     "/api/v1/msg/publish": {
       "post": {
         "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
@@ -4230,6 +4519,109 @@
         ]
       }
     },
+    "/msg/nack": {
+      "post": {
+        "description": "拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。\n\n需要 msg:consume 权限（拿消息的人才能拒消息）；须是该分区的当前持有者（组不存在 350013，\n成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。\n已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。",
+        "operationId": "nack_msg_nack_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NackResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Nack",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350002,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
     "/msg/publish": {
       "post": {
         "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
@@ -4534,7 +4926,13 @@
   },
   "x-msg-frame": {
     "byte_order": "big-endian",
-    "content_type": "application/x-msg-frame",
+    "compressions": [
+      "none",
+      "gzip",
+      "zstd",
+      "lz4",
+      "snappy"
+    ],
     "endpoint_fields": {
       "ack": {
         "optional": [],
@@ -4562,14 +4960,32 @@
           "partition"
         ]
       },
+      "nack": {
+        "optional": [
+          "detail"
+        ],
+        "payload": "必须为空（拒绝原因走 header）",
+        "required": [
+          "namespace",
+          "topic",
+          "group",
+          "consumer_id",
+          "partition",
+          "offset",
+          "reason"
+        ]
+      },
       "publish": {
         "optional": [
           "key",
           "headers",
           "trace_id",
-          "delay_level"
+          "delay_level",
+          "content_type",
+          "compression",
+          "uncompressed_len"
         ],
-        "payload": "消息体原始字节",
+        "payload": "消息体原始字节（可压缩；broker 不解析）",
         "required": [
           "namespace",
           "topic"
@@ -4581,7 +4997,9 @@
         "protocol_version",
         "tenant",
         "trace_id",
-        "content_type"
+        "content_type",
+        "compression",
+        "uncompressed_len"
       ],
       "required": [
         "request_id"
@@ -4663,13 +5081,15 @@
       "4": "response"
     },
     "frame_header_bytes": 15,
+    "frame_media_type": "application/x-msg-frame",
     "frame_types": {
       "1": "publish",
       "16": "error",
       "17": "heartbeat",
       "2": "consume",
       "3": "ack",
-      "4": "subscribe"
+      "4": "subscribe",
+      "5": "nack"
     },
     "known_unsupported": {
       "heartbeat": "心跳端点与超时判定归 03-4（当前回 350018 并提示后续任务开放）",
@@ -4680,11 +5100,41 @@
       "payload_bytes": 1048576
     },
     "magic": "4D53",
+    "payload_content_types": [
+      {
+        "status": "default",
+        "value": "application/msgpack"
+      },
+      {
+        "status": "known",
+        "value": "application/json"
+      },
+      {
+        "status": "known",
+        "value": "text/plain"
+      },
+      {
+        "status": "known",
+        "value": "application/octet-stream"
+      },
+      {
+        "status": "reserved",
+        "value": "application/x-protobuf"
+      }
+    ],
+    "payload_rules": {
+      "compression_flag": "flags.compressed 表是否压缩；header.compression 表算法；两者必须自洽",
+      "default_content_type": "application/msgpack",
+      "limit": "上限判压缩后字节（≤ 1 MiB）；broker 不解压",
+      "top_level": "map<str, any>（payload 解出的顶层必须是 Map，才谈得上只增字段）",
+      "uncompressed_len": "可选声明，仅形态校验与透传，不参与上限判定",
+      "unknown_content_type": "语法合法即透传（broker 不解 payload，不做白名单拒绝）"
+    },
     "protocol_version": "1.0",
     "reserved_types": [
       {
         "name": "data-plane-reserved",
-        "range": "5-15"
+        "range": "6-15"
       },
       {
         "name": "control-plane-reserved",
@@ -4709,7 +5159,7 @@
       ],
       "current_minor": 0,
       "incompatible": "350019 + 结束该 stream，由客户端断开连接（GOAWAY 归 03-4）",
-      "minor": "any（只增可选字段，未知字段忽略）"
+      "minor": "any（只增可选字段 / 新增帧类型都不升次版本；未知字段与未知类型一律忽略）"
     }
   }
 }

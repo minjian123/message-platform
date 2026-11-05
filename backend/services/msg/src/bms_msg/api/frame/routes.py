@@ -2,7 +2,7 @@
 
 三件事：
 
-1. **复用数据面三端点**：`/msg/publish`、`/msg/consume`、`/msg/ack` 直接调 `mount_data_plane()` 挂载，
+1. **复用数据面端点**：`/msg/publish`、`/msg/consume`、`/msg/ack`、`/msg/nack` 直接调 `mount_data_plane()` 挂载，
    与 `/api/v1/msg/*` **同一个实现、同一份错误码声明**——HTTP/2 下先跑通同一套语义，03-2 再把 body
    换成二进制帧（路径与网关口径此后不再动）。
 2. **`GET /msg/subscribe`**：SSE 长驻流（server streaming）。内部逐批调用 `DeliveryService.consume`，
@@ -99,7 +99,7 @@ def _frame_gate(spec: DataPlaneRoute) -> params.Depends:
 
 
 mount_data_plane(router, frame_gate=_frame_gate)
-"""复用数据面三端点（与 `/api/v1/msg/*` 同一规格），并挂 `application/x-msg-frame` 帧形态。"""
+"""复用数据面端点（与 `/api/v1/msg/*` 同一规格），并挂 `application/x-msg-frame` 帧形态。"""
 
 _CONSUME = Depends(require_permission(CONSUME_PERMISSION))
 """长驻流权限依赖（与拉取 / 确认同码：消费即持有 `msg:consume`）。"""

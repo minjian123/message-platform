@@ -14,7 +14,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, classify, error_frame, result_frame
 from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame
-from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, PublishResult
+from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 
 pytestmark = pytest.mark.kiwi_id(2421)
 
@@ -180,3 +180,61 @@ def test_classify_table(code: int, layer: str, retryable: bool) -> None:
 def test_frame_media_type_constant() -> None:
     """响应媒体类型与请求协商键一致（客户端只认一个值）。"""
     assert FRAME_MEDIA_TYPE == "application/x-msg-frame"
+
+
+def test_consume_payload_prefers_raw_bytes() -> None:
+    """直通：装配时给的是原始字节，则 payload 段直接用它，且 JSON 序列化仍补 base64。
+
+    `payload` 字段空串 + 原始字节通道，是 03-3 消掉帧路径 base64 往返的做法（详细设计 §4.7）；
+    JSON / SSE 出口靠字段序列化器补位，因此同一份明细在两条出口上都有载荷。
+    """
+    item = MessageItem(
+        message_id="m9",
+        topic="audit.operation",
+        partition=0,
+        offset=9,
+        key=None,
+        payload="",
+        headers=ConcurrentStableDict({"trace": "t1"}),
+        trace_id="t1",
+        delivery_count=1,
+        published_at=_NOW,
+        content_type="application/json",
+        compression="gzip",
+        uncompressed_len=11,
+    )
+    item.set_raw_payload(b"\x1f\x8b raw")
+
+    frame = _result(int(FrameType.CONSUME), ConsumeResult(messages=ConcurrentStableList([item])))
+
+    assert bytes(frame.payload) == b"\x1f\x8b raw"
+    meta = frame.header["messages"][0]
+    assert meta["length"] == 6
+    assert meta["content_type"] == "application/json"
+    assert meta["compression"] == "gzip"
+    assert meta["uncompressed_len"] == 11
+    assert item.model_dump()["payload"] == base64.b64encode(b"\x1f\x8b raw").decode("ascii")
+
+
+def test_consume_payload_falls_back_to_base64() -> None:
+    """回落：未设原始字节通道的模型（非本装配构造）仍按 base64 解码。"""
+    item = _item(payload=b"fallback")
+
+    frame = _result(int(FrameType.CONSUME), ConsumeResult(messages=ConcurrentStableList([item])))
+
+    assert bytes(frame.payload) == b"fallback"
+    assert frame.header["messages"][0]["length"] == len(b"fallback")
+    assert frame.header["messages"][0]["content_type"] == "application/msgpack"
+    assert frame.header["messages"][0]["compression"] == "none"
+    # 已有 base64 值的模型：序列化原样返回（不走私有通道补位）
+    assert item.model_dump()["payload"] == base64.b64encode(b"fallback").decode("ascii")
+
+
+def test_nack_result_frame_carries_committed_offset() -> None:
+    """nack 结果帧与 ack 同口径：只回 committed_offset（类型沿用请求类型）。"""
+    frame = _result(int(FrameType.NACK), NackResult(committed_offset=5))
+
+    assert frame.frame_type == int(FrameType.NACK)
+    assert frame.flags & FrameFlags.RESPONSE
+    assert frame.header["committed_offset"] == 5
+    assert bytes(frame.payload) == b""

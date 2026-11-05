@@ -17,7 +17,7 @@ from typing import Any
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
-from bms_msg.schemas.message import AckResult, ConsumeResult, PublishResult
+from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 
 __all__ = ["FRAME_MEDIA_TYPE", "classify", "error_frame", "result_frame"]
 
@@ -157,7 +157,8 @@ def result_frame(*, frame_type: int, request_id: str | None, result: object) -> 
         header.set("count", len(result.messages))
         header.set("messages", _consume_meta(result))
         payload = _consume_payload(result)
-    elif frame_type == int(FrameType.ACK) and isinstance(result, AckResult):
+    elif frame_type in (int(FrameType.ACK), int(FrameType.NACK)) and isinstance(result, (AckResult, NackResult)):
+        # 两种「确认类」结果同构（都只有一个 committed_offset），共用一支装配。
         header.set("committed_offset", result.committed_offset)
     else:
         raise TypeError(f"帧类型 {frame_type} 与结果类型 {type(result).__name__} 不匹配")
@@ -169,8 +170,26 @@ def result_frame(*, frame_type: int, request_id: str | None, result: object) -> 
     )
 
 
+def _item_bytes(item: MessageItem) -> bytes:
+    """取消息体原始字节（优先私有通道，回落 base64 字段）。
+
+    运行期两条入口都由 `message_item()` 统一设置原始字节；回落分支只服务「非本装配构造」的模型
+    （测试直接构造、或将来内部转发反序列化），不是第二条运行路径（03-3 详细设计 §4.7）。
+
+    Args:
+        item: 投递明细。
+
+    Returns:
+        bytes: 消息体字节。
+    """
+    raw = item.raw_payload
+    if raw is not None:
+        return raw
+    return base64.b64decode(item.payload)
+
+
 def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
-    """构造 consume 响应头的消息元数据（含切分用的 `length`）。
+    """构造 consume 响应头的消息元数据（含切分用的 `length` 与内容类型标记）。
 
     Args:
         result: 拉取结果。
@@ -180,7 +199,7 @@ def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStabl
     """
     metas: ConcurrentStableList[ConcurrentStableDict[str, Any]] = ConcurrentStableList()
     for item in result.messages:
-        body = base64.b64decode(item.payload)
+        body = _item_bytes(item)
         meta: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
         meta.set("message_id", item.message_id)
         meta.set("topic", item.topic)
@@ -191,6 +210,9 @@ def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStabl
         meta.set("delivery_count", item.delivery_count)
         meta.set("published_at", _iso(item.published_at))
         meta.set("headers", dict(item.headers.items()))
+        meta.set("content_type", item.content_type)
+        meta.set("compression", item.compression)
+        meta.set("uncompressed_len", item.uncompressed_len)
         meta.set("length", len(body))
         metas.add(meta)
     return metas
@@ -205,7 +227,7 @@ def _consume_payload(result: ConsumeResult) -> bytes:
     Returns:
         bytes: 拼接后的消息体。
     """
-    return b"".join(base64.b64decode(item.payload) for item in result.messages)
+    return b"".join(_item_bytes(item) for item in result.messages)
 
 
 FRAME_MEDIA_TYPE = FRAME_CONTENT_TYPE

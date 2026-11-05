@@ -671,6 +671,9 @@ class ReplayRunner:
             headers=message.headers,
             trace_id=message.trace_id,
             published_at=self._now(),
+            content_type=message.content_type,
+            compression=message.compression,
+            uncompressed_len=message.uncompressed_len,
         )
 
     def _progress_values(

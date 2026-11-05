@@ -18,7 +18,6 @@
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
 """
 
-import base64
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
@@ -61,6 +60,8 @@ from bms_msg.schemas.message import (
     ConsumeRequest,
     ConsumeResult,
     MessageItem,
+    NackRequest,
+    NackResult,
     PublishRequest,
     PublishResult,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "CONSUME_ERROR_CODES",
     "CONSUME_PERMISSION",
     "DATA_PLANE_ROUTES",
+    "NACK_ERROR_CODES",
     "PUBLISH_ERROR_CODES",
     "PUBLISH_PERMISSION",
     "DataPlaneRoute",
@@ -79,6 +81,7 @@ __all__ = [
     "ensure_member",
     "message_item",
     "mount_data_plane",
+    "nack",
     "router",
 ]
 
@@ -135,6 +138,21 @@ ACK_ERROR_CODES = ConcurrentStableList(
     ]
 )
 """确认端点声明的错误码（`x-error-codes`；01-4 追加组 / 成员两项）。"""
+
+NACK_ERROR_CODES = ConcurrentStableList(
+    [
+        int(MsgErrorCode.TOPIC_NOT_FOUND),
+        int(MsgErrorCode.GROUP_NOT_FOUND),
+        int(MsgErrorCode.MEMBER_INVALID),
+        int(MsgErrorCode.OFFSET_INVALID),
+        int(MsgErrorCode.MESSAGE_NOT_FOUND),
+        int(MsgErrorCode.PARTITION_COUNT_INVALID),
+        int(MsgErrorCode.NAMESPACE_INVALID),
+        int(MsgErrorCode.TENANT_SUSPENDED),
+        int(MsgErrorCode.TENANT_NOT_FOUND),
+    ]
+)
+"""拒绝端点声明的错误码（`x-error-codes`；03-3 新增；无「已死信」项——重复上报幂等返回）。"""
 
 router = BaseRouter(
     key="msg_data_messages",
@@ -243,7 +261,7 @@ async def ensure_member(
     uow: UnitOfWork,
     groups: GroupStore,
     state: DeliveryState,
-    request: ConsumeRequest | AckRequest,
+    request: ConsumeRequest | AckRequest | NackRequest,
 ) -> None:
     """成员制校验：组存在、成员活跃、分区在该成员分配内（01-4 详细设计 §6.1）。
 
@@ -278,26 +296,35 @@ async def ensure_member(
 def message_item(message: StoredMessage, topic: str, delivery_count: int) -> MessageItem:
     """存储记录 + 投递次数 → 响应明细（跨模块出口：长驻流的 `message` 事件复用同一结构）。
 
+    **载荷不在这里编码 base64**：原始字节放进私有通道，JSON / SSE 序列化时由
+    `MessageItem._payload_text` 补位、帧装配直接取原始字节——帧路径因此不再往返一次
+    base64（03-3 详细设计 §4.7）。
+
     Args:
         message: 存储记录。
         topic: 主题名。
         delivery_count: 投递次数。
 
     Returns:
-        MessageItem: 响应明细（载荷 base64 编码）。
+        MessageItem: 响应明细（含内容类型与压缩标记；载荷走原始字节通道）。
     """
-    return MessageItem(
+    item = MessageItem(
         message_id=message.message_id,
         topic=topic,
         partition=message.partition_no,
         offset=message.offset,
         key=message.key,
-        payload=base64.b64encode(message.payload).decode("ascii"),
+        payload="",
         headers=message.headers,
         trace_id=message.trace_id,
         delivery_count=delivery_count,
         published_at=message.published_at,
+        content_type=message.content_type,
+        compression=message.compression,
+        uncompressed_len=message.uncompressed_len,
     )
+    item.set_raw_payload(message.payload)
+    return item
 
 
 async def publish(
@@ -412,6 +439,27 @@ async def ack(
     return ApiResponse.ok(AckResult(committed_offset=committed))
 
 
+async def nack(
+    req: NackRequest,
+    tenant: DataPlaneTenantDep,
+    uow: PlatformUowDep,
+    store: MessageStoreDep,
+    offsets: OffsetStoreDep,
+    dead_letters: DeadLetterQueueDep,
+    state: DeliveryStateDep,
+    groups: GroupStoreDep,
+) -> ApiResponse[NackResult]:
+    """拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。
+
+    需要 msg:consume 权限（拿消息的人才能拒消息）；须是该分区的当前持有者（组不存在 350013，
+    成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。
+    已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。
+    """
+    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
+    committed = await delivery_service(uow, store, offsets, dead_letters, state).nack(tenant=tenant, request=req)
+    return ApiResponse.ok(NackResult(committed_offset=committed))
+
+
 @dataclass(frozen=True)
 class DataPlaneRoute:
     """一个数据面端点的挂载规格（两条聚合路由共用，防语义与错误码漂移）。"""
@@ -468,6 +516,14 @@ DATA_PLANE_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
             frame_type=int(FrameType.ACK),
             request_model=AckRequest,
         ),
+        DataPlaneRoute(
+            path="/nack",
+            endpoint=nack,
+            dependencies=[_CONSUME],
+            error_codes=NACK_ERROR_CODES,
+            frame_type=int(FrameType.NACK),
+            request_model=NackRequest,
+        ),
     ]
 )
 """数据面端点规格（**唯一出处**：路径 / 方法 / 权限 / 错误码只在这里写一次）。
@@ -477,7 +533,7 @@ DATA_PLANE_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
 
 
 def mount_data_plane(target: BaseRouter, *, frame_gate: FrameGateFactory | None = None) -> None:
-    """把数据面三端点挂到给定聚合路由（`/api/v1/msg/*` 与根路径 `/msg/*` 共用）。
+    """把数据面端点挂到给定聚合路由（`/api/v1/msg/*` 与根路径 `/msg/*` 共用）。
 
     Args:
         target: 目标聚合路由（其 `prefix` 决定最终路径）。
@@ -498,4 +554,4 @@ def mount_data_plane(target: BaseRouter, *, frame_gate: FrameGateFactory | None 
 
 
 mount_data_plane(router)
-"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{publish,consume,ack}`；纯 JSON，无帧闸门）。"""
+"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{publish,consume,ack,nack}`；纯 JSON，无帧闸门）。"""

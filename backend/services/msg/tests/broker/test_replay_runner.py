@@ -35,6 +35,7 @@ from bms_msg.broker.replay import ReplayAuditor, ReplayRunner, ReplayService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.models.replay import TASK_CANCELLED, TASK_COMPLETED, TASK_FAILED, TASK_PAUSED, TASK_RUNNING
 from bms_msg.models.topic import MsgTopic
+from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.replay import ReplayRequest
@@ -83,6 +84,9 @@ class RecordingStore(InMemoryMessageStore):
         headers: ConcurrentStableDict[str, str],
         trace_id: str | None,
         published_at: datetime,
+        content_type: str = DEFAULT_CONTENT_TYPE,
+        compression: str = COMPRESSION_NONE,
+        uncompressed_len: int | None = None,
     ) -> StoredMessage:
         """写入前按开关抛异常。
 
@@ -115,6 +119,9 @@ class RecordingStore(InMemoryMessageStore):
             headers=headers,
             trace_id=trace_id,
             published_at=published_at,
+            content_type=content_type,
+            compression=compression,
+            uncompressed_len=uncompressed_len,
         )
 
 

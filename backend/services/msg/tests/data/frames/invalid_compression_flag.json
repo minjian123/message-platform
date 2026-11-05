@@ -1,0 +1,14 @@
+{
+  "name": "invalid_compression_flag",
+  "note": "置位 flags.compressed 但缺 compression：结构可解，闸门按 350018 拒绝",
+  "kind": "hex",
+  "hex": "4d530100010005000000330000000183aa726571756573745f6964a27231a96e616d657370616365a36d7367a5746f706963af61756469742e6f7065726174696f6e78",
+  "expect": "ok",
+  "assert": {
+    "type": 1,
+    "header": {
+      "request_id": "r1"
+    },
+    "payload_len": 1
+  }
+}

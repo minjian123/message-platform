@@ -22,6 +22,7 @@ from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
 
 from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
+from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 __all__ = [
     "InMemoryMessageStore",
@@ -69,6 +70,15 @@ class StoredMessage(BaseValueObject):
     published_at: datetime
     """发布时间（UTC）。"""
 
+    content_type: str = DEFAULT_CONTENT_TYPE
+    """消息体内容类型（03-3：随记录长期保留；缺省 MessagePack，恒有值）。"""
+
+    compression: str = COMPRESSION_NONE
+    """压缩算法（03-3：`none` 表示未压缩；压缩后字节即 `payload`）。"""
+
+    uncompressed_len: int | None = None
+    """解压后字节数（生产者可选声明；broker 不校验也不解压）。"""
+
 
 @dataclass(frozen=True)
 class SegmentMeta(BaseValueObject):
@@ -106,6 +116,9 @@ class MessageStore(ABC):
         headers: ConcurrentStableDict[str, str],
         trace_id: str | None,
         published_at: datetime,
+        content_type: str = DEFAULT_CONTENT_TYPE,
+        compression: str = COMPRESSION_NONE,
+        uncompressed_len: int | None = None,
     ) -> StoredMessage:
         """追加一条消息并分配 offset。
 
@@ -119,6 +132,9 @@ class MessageStore(ABC):
             headers: 结构化头。
             trace_id: 链路标识（可空）。
             published_at: 发布时间（UTC）。
+            content_type: 消息体内容类型（缺省 MessagePack）。
+            compression: 压缩算法（缺省 `none`）。
+            uncompressed_len: 解压后字节数（生产者可选声明）。
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
@@ -226,6 +242,9 @@ class InMemoryMessageStore(MessageStore):
         headers: ConcurrentStableDict[str, str],
         trace_id: str | None,
         published_at: datetime,
+        content_type: str = DEFAULT_CONTENT_TYPE,
+        compression: str = COMPRESSION_NONE,
+        uncompressed_len: int | None = None,
     ) -> StoredMessage:
         """追加一条消息并分配 offset（= 起点 + 当前可读条数）。
 
@@ -239,6 +258,9 @@ class InMemoryMessageStore(MessageStore):
             headers: 结构化头。
             trace_id: 链路标识（可空）。
             published_at: 发布时间（UTC）。
+            content_type: 消息体内容类型（缺省 MessagePack）。
+            compression: 压缩算法（缺省 `none`）。
+            uncompressed_len: 解压后字节数（生产者可选声明）。
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
@@ -256,6 +278,9 @@ class InMemoryMessageStore(MessageStore):
             headers=headers,
             trace_id=trace_id,
             published_at=published_at,
+            content_type=content_type,
+            compression=compression,
+            uncompressed_len=uncompressed_len,
         )
         log.append(message)
         return message

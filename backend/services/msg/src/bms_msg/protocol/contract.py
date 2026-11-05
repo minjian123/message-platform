@@ -5,7 +5,8 @@
 评审与后续 SDK 生成读到。因此把帧结构做成**代码里的常量表**，由 `ops.contract_snapshot` 在导出时
 注入快照顶层——代码与快照只有一处事实源，零漂移由 `check` 自动保证。
 
-口径来源：03-2 详细设计 §4（帧布局 / 类型 / 标志位 / 上限 / 版本规则）。
+口径来源：03-2 详细设计 §4（帧布局 / 类型 / 标志位 / 上限 / 版本规则）、03-3 详细设计 §4 与 §7
+（内容类型取值 / 压缩白名单 / 消息体规则；`content_type` 键改名 `frame_media_type` 与消息体消歧）。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.protocol.frame import (
+    FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
     FRAME_MAGIC,
     MAX_FRAME_HEADER_BYTES,
@@ -25,6 +27,7 @@ from bms_msg.protocol.frame import (
     FrameFlags,
     FrameType,
 )
+from bms_msg.protocol.payload import payload_contract
 
 __all__ = ["FRAME_CONTRACT_KEY", "frame_contract"]
 
@@ -44,7 +47,7 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
     return ConcurrentStableDict(
         {
             "protocol_version": PROTOCOL_VERSION,
-            "content_type": "application/x-msg-frame",
+            "frame_media_type": FRAME_CONTENT_TYPE,
             "magic": FRAME_MAGIC.hex().upper(),
             "byte_order": "big-endian",
             "frame_header_bytes": FRAME_HEADER_BYTES,
@@ -66,7 +69,7 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "frame_types": ConcurrentStableDict({str(int(member)): member.name.lower() for member in FrameType}),
             "reserved_types": ConcurrentStableList(
                 [
-                    {"range": "5-15", "name": "data-plane-reserved"},
+                    {"range": "6-15", "name": "data-plane-reserved"},
                     {"range": "18-31", "name": "control-plane-reserved"},
                     {"range": "32-47", "name": "admin"},
                     {"range": "48-63", "name": "rpc"},
@@ -83,15 +86,27 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "envelope": ConcurrentStableDict(
                 {
                     "required": ConcurrentStableList(["request_id"]),
-                    "optional": ConcurrentStableList(["protocol_version", "tenant", "trace_id", "content_type"]),
+                    "optional": ConcurrentStableList(
+                        ["protocol_version", "tenant", "trace_id", "content_type", "compression", "uncompressed_len"]
+                    ),
                 }
             ),
             "endpoint_fields": ConcurrentStableDict(
                 {
                     "publish": {
                         "required": ConcurrentStableList(["namespace", "topic"]),
-                        "optional": ConcurrentStableList(["key", "headers", "trace_id", "delay_level"]),
-                        "payload": "消息体原始字节",
+                        "optional": ConcurrentStableList(
+                            [
+                                "key",
+                                "headers",
+                                "trace_id",
+                                "delay_level",
+                                "content_type",
+                                "compression",
+                                "uncompressed_len",
+                            ]
+                        ),
+                        "payload": "消息体原始字节（可压缩；broker 不解析）",
                     },
                     "consume": {
                         "required": ConcurrentStableList(["namespace", "topic", "group", "consumer_id", "partition"]),
@@ -104,6 +119,13 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                         ),
                         "optional": ConcurrentStableList([]),
                         "payload": "必须为空",
+                    },
+                    "nack": {
+                        "required": ConcurrentStableList(
+                            ["namespace", "topic", "group", "consumer_id", "partition", "offset", "reason"]
+                        ),
+                        "optional": ConcurrentStableList(["detail"]),
+                        "payload": "必须为空（拒绝原因走 header）",
                     },
                 }
             ),
@@ -120,9 +142,10 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                 {
                     "accept_major": ConcurrentStableList([PROTOCOL_MAJOR]),
                     "current_minor": PROTOCOL_MINOR,
-                    "minor": "any（只增可选字段，未知字段忽略）",
+                    "minor": "any（只增可选字段 / 新增帧类型都不升次版本；未知字段与未知类型一律忽略）",
                     "incompatible": "350019 + 结束该 stream，由客户端断开连接（GOAWAY 归 03-4）",
                 }
             ),
+            **payload_contract(),
         }
     )

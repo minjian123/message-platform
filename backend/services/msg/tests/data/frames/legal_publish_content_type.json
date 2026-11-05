@@ -1,0 +1,17 @@
+{
+  "name": "legal_publish_content_type",
+  "note": "合法 publish：内容类型 + 压缩标记（payload 为 gzip 压缩后的 JSON）",
+  "kind": "hex",
+  "hex": "4d530100010005000000740000001b86aa726571756573745f6964a27231a96e616d657370616365a36d7367a5746f706963af61756469742e6f7065726174696f6eac636f6e74656e745f74797065b06170706c69636174696f6e2f6a736f6eab636f6d7072657373696f6ea4677a6970b0756e636f6d707265737365645f6c656e071f8b08000000000002ffab564a54b232ac0500afac1b5607000000",
+  "expect": "ok",
+  "assert": {
+    "type": 1,
+    "header": {
+      "request_id": "r1",
+      "content_type": "application/json",
+      "compression": "gzip",
+      "uncompressed_len": 7
+    },
+    "payload_len": 27
+  }
+}

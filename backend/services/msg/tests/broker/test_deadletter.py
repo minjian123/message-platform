@@ -6,8 +6,14 @@
 from datetime import UTC, datetime
 
 import pytest
+from bms_core.core.concurrent import ConcurrentStableDict
 
-from bms_msg.broker.deadletter import DEAD_LETTER_EXHAUSTED, DeadLetter, InMemoryDeadLetterQueue
+from bms_msg.broker.deadletter import (
+    DEAD_LETTER_EXHAUSTED,
+    DeadLetter,
+    DeadLetterReason,
+    InMemoryDeadLetterQueue,
+)
 
 pytestmark = pytest.mark.kiwi_id(2414)
 
@@ -60,3 +66,42 @@ async def test_contains_scopes_by_partition_and_offset(dead_letters: InMemoryDea
     assert await dead_letters.contains(topic_id=1, partition_no=0, offset=2)
     assert not await dead_letters.contains(topic_id=1, partition_no=0, offset=3)
     assert not await dead_letters.contains(topic_id=1, partition_no=1, offset=2)
+
+
+def test_reason_enum_values() -> None:
+    """原因三值：两值由消费端上报，`delivery_exhausted` 由 broker 独占。
+
+    `StrEnum` 与字符串相等，因此既有比较、日志与 06 域展示都不需要改。
+    """
+    assert str(DeadLetterReason.DELIVERY_EXHAUSTED) == "delivery_exhausted"
+    assert str(DeadLetterReason.SCHEMA_INVALID) == "schema_invalid"
+    assert str(DeadLetterReason.PROCESSING_FAILED) == "processing_failed"
+    assert DEAD_LETTER_EXHAUSTED == "delivery_exhausted"
+    assert DEAD_LETTER_EXHAUSTED is DeadLetterReason.DELIVERY_EXHAUSTED
+
+
+async def test_detail_is_preserved(dead_letters: InMemoryDeadLetterQueue) -> None:
+    """消费端上报的字段级详情原样保存（06 域据此展示「哪个字段错了」）。"""
+    letter = DeadLetter(
+        message_id="m1",
+        topic_id=1,
+        partition_no=0,
+        offset=0,
+        attempts=1,
+        failed_at=_FAILED_AT,
+        reason=DeadLetterReason.SCHEMA_INVALID,
+        detail=ConcurrentStableDict({"field": "order_id", "expected": "str", "actual": "int"}),
+    )
+    await dead_letters.add(letter)
+
+    listed = await dead_letters.list_all()
+    assert listed[0].detail["field"] == "order_id"
+    assert str(listed[0].reason) == "schema_invalid"
+
+
+def test_detail_defaults_to_empty() -> None:
+    """不传详情：默认空映射（不是 None，展示侧不必判空）。"""
+    letter = _letter(0)
+
+    assert letter.detail == {}
+    assert list(letter.detail.items()) == []

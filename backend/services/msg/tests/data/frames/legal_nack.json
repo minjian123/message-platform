@@ -1,0 +1,21 @@
+{
+  "name": "legal_nack",
+  "note": "合法 nack：拒绝原因 + 字段级详情（payload 必须为空）",
+  "kind": "hex",
+  "hex": "4d530100050004000000a60000000089aa726571756573745f6964a27231a96e616d657370616365a36d7367a5746f706963af61756469742e6f7065726174696f6ea567726f7570a56175646974ab636f6e73756d65725f6964a26331a9706172746974696f6e00a66f666673657407a6726561736f6eae736368656d615f696e76616c6964a664657461696c83a56669656c64a86f726465725f6964a86578706563746564a3737472a661637475616ca3696e74",
+  "expect": "ok",
+  "assert": {
+    "type": 5,
+    "header": {
+      "request_id": "r1",
+      "offset": 7,
+      "reason": "schema_invalid",
+      "detail": {
+        "field": "order_id",
+        "expected": "str",
+        "actual": "int"
+      }
+    },
+    "payload_len": 0
+  }
+}

@@ -23,11 +23,17 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
 
-from bms_msg.broker.delivery import decode_payload
+from bms_msg.broker.delivery import resolve_payload
 from bms_msg.broker.router import TopicRouter
 from bms_msg.core.config import DELAY_LEVEL_MS, DELAY_MAX_SPAN_MS, DELAY_QUOTA_PER_TENANT
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import MsgDelayQuotaExceededError
+from bms_msg.protocol.payload import (
+    COMPRESSION_NONE,
+    DEFAULT_CONTENT_TYPE,
+    normalize_compression,
+    normalize_content_type,
+)
 from bms_msg.schemas.message import PublishRequest
 from bms_msg.services.topic import MAX_LIST_SIZE
 from bms_msg.tenant.context import CurrentTenant
@@ -148,6 +154,15 @@ class DelayRecord(BaseValueObject):
 
     attempts: int = 0
     """转投失败次数（只计数与告警，**不作为丢弃依据**）。"""
+
+    content_type: str = DEFAULT_CONTENT_TYPE
+    """消息体内容类型（03-3：到期转投时原样带入日志记录）。"""
+
+    compression: str = COMPRESSION_NONE
+    """压缩算法（03-3：`none` 表示未压缩；延迟区不解析也不解压）。"""
+
+    uncompressed_len: int | None = None
+    """解压后字节数（生产者可选声明；随记录带入日志）。"""
 
 
 @dataclass(frozen=True)
@@ -373,11 +388,14 @@ class DelayService:
             partition_no=partition_no,
             delay_level=level,
             key=request.key,
-            payload=decode_payload(request.payload),
+            payload=resolve_payload(request),
             headers=ConcurrentStableDict(request.headers.items()),
             trace_id=request.trace_id,
             published_at=published_at,
             deliver_at=published_at + timedelta(milliseconds=delay_ms),
+            content_type=normalize_content_type(request.content_type),
+            compression=normalize_compression(request.compression),
+            uncompressed_len=request.uncompressed_len,
         )
         await self._store.enqueue(record)
         self._wheel.place(record)

@@ -276,3 +276,36 @@ async def test_inspector_rejects_invalid_paging(delay_inspector: DelayInspector,
                 tenant=current_tenant, namespace=None, topic=None, partition=None, level=None, page=page, size=size
             )
         assert rejected.value.code == 10001
+
+
+async def test_delayed_publish_keeps_payload_marks(
+    delay_service: DelayService,
+    delay_store: InMemoryDelayStore,
+    topic: MsgTopic,
+    current_tenant: CurrentTenant,
+) -> None:
+    """延迟记录保留内容类型 / 压缩标记 / 解压长度（到期转投时原样带入日志记录）。
+
+    Args:
+        delay_service: 延迟发布服务。
+        delay_store: 延迟区。
+        topic: 单分区主题。
+        current_tenant: 当前租户。
+    """
+    del topic
+    request = PublishRequest(
+        namespace=NAMESPACE,
+        topic=TOPIC_NAME,
+        key="order-1",
+        payload=base64.b64encode(b"packed").decode("ascii"),
+        delay_level=DelayLevel.SECOND_5,
+        content_type="application/json",
+        compression="gzip",
+        uncompressed_len=64,
+    )
+
+    order = await delay_service.publish(tenant=current_tenant, request=request)
+    records = await delay_store.list_for_tenant(tenant_id=int(current_tenant.tenant_id))
+
+    record = next(item for item in records if item.log_id == order.log_id)
+    assert (record.content_type, record.compression, record.uncompressed_len) == ("application/json", "gzip", 64)

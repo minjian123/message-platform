@@ -340,7 +340,11 @@ async def test_consume_frame_with_payload_rejected(client: AsyncClient) -> None:
 
 
 async def test_unknown_header_key_and_flag_ignored(client: AsyncClient) -> None:
-    """未知 header 键与未知标志位一律忽略（铁律 2）。"""
+    """未知 header 键与未知标志位一律忽略（铁律 2）。
+
+    只置**未定义位**（bit5~15）：bit0 `compressed` 自 03-3 起是已定义位，置位却不给算法属矛盾，
+    会按 `350018` 拒绝（该分支由 `test_frame_payload.py` 覆盖）。
+    """
     await _create_topic(client)
 
     response = await _post_frame(
@@ -350,7 +354,7 @@ async def test_unknown_header_key_and_flag_ignored(client: AsyncClient) -> None:
             int(FrameType.PUBLISH),
             _header(extra={"namespace": NAMESPACE, "topic": TOPIC_NAME, "future_field": {"x": 1}}),
             b"ok",
-            flags=0xFFFF,
+            flags=0xFFE0,
         ),
     )
 

@@ -228,6 +228,10 @@ async def test_stream_emits_open_then_message_then_deadline(
     assert message["payload"] == "cGF5bG9hZA=="
     assert message["delivery_count"] == 1
     assert message["topic"] == TOPIC_NAME
+    # 03-3：SSE 与帧 / JSON 两个出口同口径，内容类型与压缩标记一并回显（缺省 msgpack / 未压缩）。
+    assert message["content_type"] == "application/msgpack"
+    assert message["compression"] == "none"
+    assert message["uncompressed_len"] is None
 
     events = await _drain_until_close(agen)
     assert events[-1] == ("close", {"reason": "deadline"})

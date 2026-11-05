@@ -100,6 +100,9 @@ class FrameType(IntEnum):
     SUBSCRIBE = 4
     """订阅长驻流（只登记编号：帧式推送归 03-5）。"""
 
+    NACK = 5
+    """拒绝一条消息并给出原因（03-3：转死信 + 位点前移；payload 必须为空）。"""
+
     ERROR = 16
     """错误帧（响应帧，携带 `code` / `layer` / `retryable`）。"""
 
@@ -111,7 +114,7 @@ class FrameFlags(IntFlag):
     """标志位（16 位；未定义位一律忽略，为后续留位且不破坏兼容）。"""
 
     COMPRESSED = 1 << 0
-    """payload 已压缩（算法由 03-3 的 `content_type` 决定；本任务只透传）。"""
+    """payload 已压缩（算法由 header 的 `compression` 给；03-3 启用，broker 只透传不解压）。"""
 
     END_OF_STREAM = 1 << 1
     """本帧是该 stream 的最后一帧（单帧请求恒为最后帧，本任务不置位）。"""
