@@ -1,8 +1,9 @@
 """消息存储端口与内存实现（详细设计 §5.1；01-6 扩段元数据与起点前移）。
 
 - **端口** `MessageStore`：`append` / `fetch` / `leo` / `start_offset` 是数据面对存储的基本要求；
-  01-6 增 `segments` / `truncate_before` 支撑「按段保留 + 可读区间起点前移」。8B_02 以文件段 +
-  稀疏索引 + CRC 恢复替换 `InMemoryMessageStore`，**端口签名不变**（只换实现）。
+  01-6 增 `segments` / `truncate_before` 支撑「按段保留 + 可读区间起点前移」。生产实现是
+  `broker/file_store.py::FileMessageStore`（文件段 + 稀疏索引 + length 级尾部恢复，02-1），
+  **端口签名不变**；`InMemoryMessageStore` 保留作轻量用例替身（段粒度按条数是替身口径，不是生产口径）。
 - **offset 唯一分配方**：`append` 返回记录时已带上分区内序号；其他模块不得自行编号（概要设计 §5 约束）。
 - **可读区间 = `[start_offset, leo)`**：`truncate_before` 只前移起点、不改末端；`fetch` 早于起点时按
   起点返回（**不抛错**——「位点早于起点」的业务判定只在 `consume` 一处给 `350003`，端口抛错会盖掉它）。
@@ -199,7 +200,7 @@ class MessageStore(ABC):
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
-            offset: 新的起点（须为段边界；`<= 现起点` 幂等无操作，`> leo` 拒绝）。
+            offset: 新的起点（`<= 现起点` 幂等无操作，`> leo` 拒绝；非段边界向下取整到段边界）。
 
         Returns:
             int: 前移后的起点。
@@ -369,6 +370,8 @@ class InMemoryMessageStore(MessageStore):
         Raises:
             ParamError: `offset > leo`（10001）。
         """
+        # 替身按「任意 offset 切片」：它没有真实段文件，切片粒度比真实实现更细；
+        # 调用方（RetentionService）一律传段边界，故两者在**契约内**行为一致。
         bucket: PartitionKey = (topic_id, partition_no)
         start = self._starts.get(bucket, 0)
         log = self._logs.setdefault(bucket, [])

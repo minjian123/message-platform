@@ -1,0 +1,484 @@
+"""段文件与索引（02-1 详细设计 §6）：`.log` / `.index` / `.timeindex` 三件套。
+
+四条结构性口径：
+
+1. **段名即 base offset**：20 位零填充，字典序等于 offset 序——段名二分与目录排序用的是同一份序，
+   不需要额外元数据文件来记「有哪些段」。
+2. **索引是稀疏的、且与 `append` 同源**：offset 索引每越过 `INDEX_INTERVAL_BYTES` 记一条；时间索引每越过
+   `TIME_INDEX_INTERVAL_MS` 记一条（且时间戳单调不减）。写入顺序固定「先日志、后索引」——反过来的话
+   索引会指向尚未落盘的记录。
+3. **时间索引末条 = 段内最大发布时间的来源**：条目只在「时间创新高且越过间隔」时追加，故末条时间
+   恒不小于真实最大值（时间回退的记录不写条目），保留判定因此不会提前删段（误差上界见详细设计 §6.5）。
+4. **尾部扫描只读头、不读载荷**：顺序扫描拿到 `length` 就跳到下一条，`payload` 一个字节都不进内存
+   （零拷贝与启动成本的前提）；只有真正的读取路径才 `read_record` 解整条。
+"""
+
+import os
+import re
+import struct
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from bms_core.core.objects import BaseValueObject
+
+from bms_msg.broker.record import (
+    CorruptedRecordError,
+    ParsedRecord,
+    RecordHeader,
+    decode_header_blob,
+    decode_record,
+    read_frame,
+)
+from bms_msg.core.config import INDEX_INTERVAL_BYTES, RECORD_FRAME_BYTES, TIME_INDEX_INTERVAL_MS
+
+__all__ = [
+    "INDEX_SUFFIX",
+    "LOG_SUFFIX",
+    "TIME_SUFFIX",
+    "SegmentFile",
+    "TailScan",
+    "list_segment_bases",
+]
+
+LOG_SUFFIX = ".log"
+"""日志段后缀。"""
+
+INDEX_SUFFIX = ".index"
+"""稀疏 offset 索引后缀（条目 8 字节：相对 offset + 段内位置）。"""
+
+TIME_SUFFIX = ".timeindex"
+"""时间索引后缀（条目 12 字节：微秒时间戳 + 相对 offset）。"""
+
+_OPEN_MODE = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0)
+"""追加写的打开标志。
+
+**必须带 `O_BINARY`**：Windows 上 `os.open` 默认是文本模式，会把 `0x0A` 翻译成 `0x0D 0x0A`——
+记录头里的 msgpack 字节很容易撞上 `0x0A`，落盘后偏移全错（实测每条多 1 字节、后续记录读成垃圾）。
+"""
+
+_SEGMENT_PATTERN = re.compile(r"^(\d{20})\.log$")
+"""段文件名形态（20 位零填充的 base offset）。"""
+
+_INDEX_ENTRY = struct.Struct(">II")
+"""offset 索引条目：`relative_offset` / `position`（段大小 64 MiB，两者都在 u32 内）。"""
+
+_TIME_ENTRY = struct.Struct(">qI")
+"""时间索引条目：`timestamp_us` / `relative_offset`。"""
+
+
+@dataclass(frozen=True)
+class TailScan(BaseValueObject):
+    """末段尾部扫描结果（结构级恢复的唯一输入）。"""
+
+    from_rel: int
+    """扫描起点在段内的相对 offset（索引导航点；无索引为 0）。"""
+
+    from_position: int
+    """扫描起点在段文件内的字节偏移。"""
+
+    count: int
+    """从起点起扫到的完整记录条数。"""
+
+    complete_bytes: int
+    """完整区间的字节长度（小于文件大小即需要截断到这个位置）。"""
+
+
+def list_segment_bases(directory: Path) -> list[int]:
+    """列出一个分区目录下的段 base offset（升序；目录不存在返回空）。
+
+    Args:
+        directory: 分区目录。
+
+    Returns:
+        list[int]: 段 base offset 升序列表。
+    """
+    if not directory.is_dir():
+        return []
+    bases: list[int] = []
+    for entry in directory.iterdir():
+        matched = _SEGMENT_PATTERN.match(entry.name)
+        if matched is not None:
+            bases.append(int(matched.group(1)))
+    return sorted(bases)
+
+
+class SegmentFile:
+    """一个段（三个文件）：只追加、可顺序扫描、可按 offset 定位、可整段删除。"""
+
+    def __init__(
+        self,
+        *,
+        partition_dir: Path,
+        base_offset: int,
+        index_interval: int = INDEX_INTERVAL_BYTES,
+        time_interval_ms: int = TIME_INDEX_INTERVAL_MS,
+    ) -> None:
+        """初始化（不读文件内容，索引与大小按需加载）。
+
+        Args:
+            partition_dir: 分区目录（段文件所在目录）。
+            base_offset: 段首 offset（同时是文件名）。
+            index_interval: 稀疏 offset 索引的字节间隔。
+            time_interval_ms: 时间索引的毫秒间隔。
+        """
+        self._partition_dir = partition_dir
+        self._base_offset = base_offset
+        self._index_interval = index_interval
+        self._time_interval_us = time_interval_ms * 1_000
+        self._log_path = partition_dir / f"{base_offset:020d}{LOG_SUFFIX}"
+        self._index_path = partition_dir / f"{base_offset:020d}{INDEX_SUFFIX}"
+        self._time_path = partition_dir / f"{base_offset:020d}{TIME_SUFFIX}"
+        self._size = self._log_path.stat().st_size if self._log_path.exists() else 0
+        self._index: list[tuple[int, int]] | None = None
+        self._time_index: list[tuple[int, int]] | None = None
+        self._write_fd: int | None = None
+
+    @property
+    def base_offset(self) -> int:
+        """段首 offset（含）。
+
+        Returns:
+            int: base offset。
+        """
+        return self._base_offset
+
+    @property
+    def log_path(self) -> Path:
+        """`.log` 文件路径。
+
+        Returns:
+            Path: 段文件。
+        """
+        return self._log_path
+
+    @property
+    def size_bytes(self) -> int:
+        """段内字节合计（真实文件大小；写入时内存累加，不必每次 stat）。
+
+        Returns:
+            int: 字节数。
+        """
+        return self._size
+
+    def index_path(self) -> Path:
+        """`.index` 文件路径。
+
+        Returns:
+            Path: 稀疏 offset 索引。
+        """
+        return self._index_path
+
+    def time_index_path(self) -> Path:
+        """`.timeindex` 文件路径。
+
+        Returns:
+            Path: 时间索引。
+        """
+        return self._time_path
+
+    def ensure_indexes(self) -> None:
+        """加载索引到内存（幂等；段内无索引文件即视为空索引）。"""
+        if self._index is not None and self._time_index is not None:
+            return
+        self._index = _read_entries(self._index_path, _INDEX_ENTRY)
+        self._time_index = _read_entries(self._time_path, _TIME_ENTRY)
+
+    def max_published_us(self) -> int:
+        """段内最大发布时间的取值来源：时间索引末条时间戳。
+
+        Returns:
+            int: epoch 微秒；无记录（空段）返回 0。
+        """
+        entries = self.time_index_entries()
+        return entries[-1][0] if entries else 0
+
+    def time_index_entries(self) -> list[tuple[int, int]]:
+        """时间索引条目（`(timestamp_us, relative_offset)` 升序）。
+
+        Returns:
+            list[tuple[int, int]]: 条目列表。
+        """
+        self.ensure_indexes()
+        assert self._time_index is not None  # ensure_indexes 后必非空
+        return self._time_index
+
+    def iter_frames(self, *, from_position: int = 0, limit: int | None = None) -> Iterator[tuple[int, int, int]]:
+        """从给定偏移起顺序产出「字节偏移 / 记录总长 / 头长」（只读框架，不读头与载荷）。
+
+        Args:
+            from_position: 起始字节偏移。
+            limit: 最多产出条数（None 表示到段尾）。
+
+        Yields:
+            tuple[int, int, int]: 偏移 / 总长 / 头长。
+
+        Raises:
+            CorruptedRecordError: 遇到不完整或非法记录。
+        """
+        size = self._size
+        position = from_position
+        produced = 0
+        with self._log_path.open("rb") as handle:
+            while position < size and (limit is None or produced < limit):
+                handle.seek(position)
+                frame_bytes = handle.read(RECORD_FRAME_BYTES)
+                frame = read_frame(frame_bytes)
+                total = 4 + frame.length
+                if position + total > size:
+                    raise CorruptedRecordError(f"记录不完整：{position}+{total} > {size}")
+                yield position, total, frame.header_len
+                position += total
+                produced += 1
+
+    def position_of(self, *, offset: int) -> tuple[int, int]:
+        """段内相对 offset 定位到「字节偏移 + 相对 offset」（二分最近索引项）。
+
+        Args:
+            offset: 绝对 offset（须在本段范围内）。
+
+        Returns:
+            tuple[int, int]: 索引项给出的「字节偏移 / 相对 offset」；无索引项时为 `(0, 0)`。
+        """
+        self.ensure_indexes()
+        assert self._index is not None  # ensure_indexes 后必非空
+        relative = offset - self._base_offset
+        index = self._index
+        if not index:
+            return 0, 0
+        position = 0
+        located = 0
+        low = 0
+        high = len(index)
+        while low < high:  # 手写二分：找最后一个 relative <= 目标的条目
+            middle = (low + high) // 2
+            if index[middle][0] <= relative:
+                position = index[middle][1]
+                located = index[middle][0]
+                low = middle + 1
+            else:
+                high = middle
+        return position, located
+
+    def append_record(self, *, offset: int, published_at_us: int, blob: bytes) -> int:
+        """追加一条已编码记录，并按间隔补索引条目。
+
+        Args:
+            offset: 本条记录的绝对 offset（由 `append` 唯一分配）。
+            published_at_us: 本条记录的发布时间（epoch 微秒；时间索引判据）。
+            blob: 已编码的完整记录字节。
+
+        Returns:
+            int: 本条记录在段文件内的字节偏移（读取原语用）。
+        """
+        position = self._size
+        self._write(blob)
+        self._size += len(blob)
+        relative = offset - self._base_offset
+        self.ensure_indexes()
+        assert self._index is not None and self._time_index is not None  # ensure_indexes 后必非空
+        if not self._index or position - self._index[-1][1] >= self._index_interval:
+            _append_entry(self._index_path, _INDEX_ENTRY, (relative, position))
+            self._index.append((relative, position))
+        if not self._time_index or published_at_us - self._time_index[-1][0] >= self._time_interval_us:
+            _append_entry(self._time_path, _TIME_ENTRY, (published_at_us, relative))
+            self._time_index.append((published_at_us, relative))
+        return position
+
+    def scan_tail(self) -> TailScan:
+        """从最后一个索引项起顺序扫描到段尾，给出完整区间（结构级恢复）。
+
+        扫描只读 12 字节框架 + 头，不读载荷；遇到不完整 / 非法记录即停止。
+
+        Returns:
+            TailScan: 起点、完整条数与完整区间的字节长度。
+        """
+        self.ensure_indexes()
+        assert self._index is not None  # ensure_indexes 后必非空
+        if self._index:
+            from_rel, from_position = self._index[-1]
+        else:
+            from_rel, from_position = 0, 0
+        size = self._size
+        position = min(from_position, size)
+        count = 0
+        with self._log_path.open("rb") as handle:
+            while position < size:
+                handle.seek(position)
+                frame_bytes = handle.read(RECORD_FRAME_BYTES)
+                try:
+                    frame = read_frame(frame_bytes)
+                    total = 4 + frame.length
+                    if position + total > size:
+                        break
+                    # 解头是版本校验的唯一时机：版本高于实现即冒泡拒绝加载（不截断）
+                    decode_header_blob(handle.read(frame.header_len))
+                except CorruptedRecordError:
+                    break
+                count += 1
+                position += total
+        return TailScan(from_rel=from_rel, from_position=from_position, count=count, complete_bytes=position)
+
+    def iter_headers(
+        self, *, from_position: int = 0, limit: int | None = None
+    ) -> Iterator[tuple[int, int, RecordHeader]]:
+        """从给定偏移起顺序产出「字节偏移 / 记录总长 / 头」（不读载荷）。
+
+        Args:
+            from_position: 起始字节偏移。
+            limit: 最多产出条数（None 表示到段尾）。
+
+        Yields:
+            tuple[int, int, RecordHeader]: 偏移 / 总长 / 头。
+
+        Raises:
+            CorruptedRecordError: 扫描途中遇到不完整或非法记录。
+        """
+        size = self._size
+        position = from_position
+        produced = 0
+        with self._log_path.open("rb") as handle:
+            while position < size and (limit is None or produced < limit):
+                handle.seek(position)
+                frame_bytes = handle.read(RECORD_FRAME_BYTES)
+                frame = read_frame(frame_bytes)
+                total = 4 + frame.length
+                if position + total > size:
+                    raise CorruptedRecordError(f"记录不完整：{position}+{total} > {size}")
+                header_blob = handle.read(frame.header_len)
+                if len(header_blob) != frame.header_len:  # pragma: no cover - read_frame 已保证 total ≥ 12+header_len
+                    raise CorruptedRecordError(f"记录头不完整：偏移 {position}")
+                yield position, total, decode_header_blob(header_blob)
+                position += total
+                produced += 1
+
+    def read_record(self, *, position: int) -> ParsedRecord:
+        """读一条完整记录并校验 CRC（读取路径与读取原语用）。
+
+        Args:
+            position: 记录起始的字节偏移。
+
+        Returns:
+            ParsedRecord: 头 / 载荷 / 总长。
+
+        Raises:
+            CorruptedRecordError: 记录不完整 / CRC 不符 / 头非法。
+        """
+        with self._log_path.open("rb") as handle:
+            handle.seek(position)
+            head = handle.read(RECORD_FRAME_BYTES)
+            frame = read_frame(head)
+            total = 4 + frame.length
+            rest = handle.read(total - RECORD_FRAME_BYTES)
+            if len(rest) != total - RECORD_FRAME_BYTES:
+                raise CorruptedRecordError(f"记录不完整：偏移 {position}")
+            return decode_record(head + rest)
+
+    def truncate(self, *, size: int, max_relative_offset: int) -> None:
+        """把段文件截断到给定字节数（结构级恢复用），并丢弃越界的索引条目。
+
+        Args:
+            size: 保留的字节数（须不超过当前大小）。
+            max_relative_offset: 截断后仍存在记录的最大相对 offset（含）；更晚的索引条目全部丢弃。
+        """
+        if size >= self._size:
+            return
+        self.close()
+        with self._log_path.open("r+b") as handle:
+            handle.truncate(size)
+        self._size = size
+        self.ensure_indexes()
+        assert self._index is not None and self._time_index is not None  # ensure_indexes 后必非空
+        kept_index = [entry for entry in self._index if entry[0] <= max_relative_offset]
+        kept_time = [entry for entry in self._time_index if entry[1] <= max_relative_offset]
+        if len(kept_index) != len(self._index):
+            _rewrite_entries(self._index_path, _INDEX_ENTRY, kept_index)
+            self._index = kept_index
+        if len(kept_time) != len(self._time_index):
+            _rewrite_entries(self._time_path, _TIME_ENTRY, kept_time)
+            self._time_index = kept_time
+
+    def fsync(self) -> None:
+        """把当前写句柄的内容刷到磁盘（无写句柄即无操作）。"""
+        if self._write_fd is not None:
+            os.fsync(self._write_fd)
+
+    def close(self) -> None:
+        """关闭写句柄（幂等；读路径不持句柄）。"""
+        if self._write_fd is not None:
+            os.close(self._write_fd)
+            self._write_fd = None
+
+    def delete(self) -> None:
+        """整段删除（三个文件一起删；幂等）。"""
+        self.close()
+        for path in (self._log_path, self._index_path, self._time_path):
+            path.unlink(missing_ok=True)
+
+    def refresh_size(self) -> None:
+        """按文件实际大小刷新内存中的段大小（外部改写后对账用）。"""
+        self._size = self._log_path.stat().st_size if self._log_path.exists() else 0
+
+    def _write(self, blob: bytes) -> None:
+        """追加写 `.log`（持写句柄；短写循环补齐）。
+
+        Args:
+            blob: 完整记录字节。
+        """
+        if self._write_fd is None:
+            self._write_fd = os.open(self._log_path, _OPEN_MODE, 0o644)
+        written = 0
+        while written < len(blob):
+            written += os.write(self._write_fd, blob[written:])
+
+
+def _read_entries(path: Path, layout: struct.Struct) -> list[tuple[int, int]]:
+    """读一个定长条目索引文件（尾部残条忽略——写入崩溃只丢最后一条索引，读取会从更早的项扫起）。
+
+    Args:
+        path: 索引文件路径。
+        layout: 条目布局（两个字段）。
+
+    Returns:
+        list[tuple[int, int]]: 条目列表（按写入顺序）。
+    """
+    if not path.exists():
+        return []
+    blob = path.read_bytes()
+    entry_size = layout.size
+    count = len(blob) // entry_size
+    entries: list[tuple[int, int]] = []
+    for index in range(count):
+        first, second = layout.unpack_from(blob, index * entry_size)
+        entries.append((first, second))
+    return entries
+
+
+def _append_entry(path: Path, layout: struct.Struct, entry: tuple[int, int]) -> None:
+    """追加一条索引条目（打开 → 写 → 关闭：索引写入频率低，不值得持句柄）。
+
+    Args:
+        path: 索引文件路径。
+        layout: 条目布局。
+        entry: 两个字段的值。
+    """
+    descriptor = os.open(path, _OPEN_MODE, 0o644)
+    try:
+        os.write(descriptor, layout.pack(*entry))
+    finally:
+        os.close(descriptor)
+
+
+def _rewrite_entries(path: Path, layout: struct.Struct, entries: list[tuple[int, int]]) -> None:
+    """重写索引文件（截断后丢弃越界条目；先写临时文件再替换，避免半截文件）。
+
+    Args:
+        path: 索引文件路径。
+        layout: 条目布局。
+        entries: 保留的条目。
+    """
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as handle:
+        for entry in entries:
+            handle.write(layout.pack(*entry))
+    temporary.replace(path)

@@ -14,8 +14,8 @@ from bms_core.core.plugin import default_plugin_registry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry
@@ -121,9 +121,11 @@ def test_application_assembles_data_plane_state() -> None:
             "/msg/subscribe",
             "/msg/connection",
         } <= paths
-        # 03-5 起存储外面包了一层「写入即唤醒」：内层仍是内存实现，端口与行为不变。
+        # 03-5 起存储外面包了一层「写入即唤醒」；02-1 起内层换成文件段实现（端口与行为不变）。
+        # **顺序是硬约束**：通知包装必须最外层，装反了不报错、只是长轮询退化为「等到超时」。
         assert isinstance(app.state.message_store, NotifyingMessageStore)
-        assert isinstance(app.state.message_store.inner, InMemoryMessageStore)
+        assert isinstance(app.state.message_store.inner, FileMessageStore)
+        assert isinstance(app.state.partition_directory, PartitionDirectory)
         assert isinstance(app.state.offset_store, InMemoryOffsetStore)
         assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)

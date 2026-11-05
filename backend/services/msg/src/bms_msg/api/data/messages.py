@@ -48,6 +48,7 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    PartitionDirectoryDep,
     RateLimiterDep,
     RetentionThrottleDep,
     TopicCacheDep,
@@ -59,6 +60,7 @@ from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayService, DelayStore
 from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
@@ -191,8 +193,14 @@ _LOGGER = get_logger("bms_msg.data")
 """数据面日志（只出结构化事件：`msg_retention`）。"""
 
 
-def topic_router(uow: UnitOfWork, *, cache: TopicCache | None, tenant_id: int | None) -> TopicRouter:
-    """组装主题路由（请求级仓储 + 可选进程内快照缓存）。
+def topic_router(
+    uow: UnitOfWork,
+    *,
+    cache: TopicCache | None,
+    tenant_id: int | None,
+    directory: PartitionDirectory | None = None,
+) -> TopicRouter:
+    """组装主题路由（请求级仓储 + 可选进程内快照缓存 + 可选分区目录登记表）。
 
     跨模块出口：数据面 / 帧入口 / 长驻流复用同一装配口径（缓存键含租户，两者必须同给或同不给）。
 
@@ -200,12 +208,13 @@ def topic_router(uow: UnitOfWork, *, cache: TopicCache | None, tenant_id: int | 
         uow: 平台库工作单元（取主题仓储会话）。
         cache: 进程内主题快照缓存（None = 不缓存、直接查库）。
         tenant_id: 当前租户主键（缓存键的一部分）。
+        directory: 分区目录登记表（02-1；给出即登记，文件存储靠它拼落盘路径）。
 
     Returns:
         TopicRouter: 主题路由。
     """
     session = cast("DbSession", uow.session)
-    return TopicRouter(TopicRepository(session), cache=cache, tenant_id=tenant_id)
+    return TopicRouter(TopicRepository(session), cache=cache, tenant_id=tenant_id, directory=directory)
 
 
 def delivery_service(
@@ -219,6 +228,7 @@ def delivery_service(
     tenant_id: int | None,
     backpressure: BackpressureTuning | None = None,
     waiter: DeliveryWaiter | None = None,
+    directory: PartitionDirectory | None = None,
 ) -> DeliveryService:
     """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态 / 背压参数）。
 
@@ -234,6 +244,7 @@ def delivery_service(
         tenant_id: 当前租户主键（缓存键的一部分）。
         backpressure: inflight 双阈值（None 表示不限）。
         waiter: 分区唤醒器（None 表示不唤醒，仅单测直连时出现）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         DeliveryService: 投递服务。
@@ -242,7 +253,7 @@ def delivery_service(
         store=store,
         offsets=offsets,
         dead_letters=dead_letters,
-        router=topic_router(uow, cache=cache, tenant_id=tenant_id),
+        router=topic_router(uow, cache=cache, tenant_id=tenant_id, directory=directory),
         state=state,
         backpressure=backpressure,
         waiter=waiter,
@@ -256,6 +267,7 @@ def _delay_service(
     *,
     cache: TopicCache | None,
     tenant_id: int | None,
+    directory: PartitionDirectory | None = None,
 ) -> DelayService:
     """组装延迟发布服务（请求级主题仓储 + 进程级延迟区 / 时间轮）。
 
@@ -265,13 +277,14 @@ def _delay_service(
         scheduler: 推进器（时间轮与其共用同一实例，发布侧装填后才能被推进）。
         cache: 进程内主题快照缓存（None = 不缓存）。
         tenant_id: 当前租户主键（缓存键的一部分）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         DelayService: 延迟发布服务。
     """
     return DelayService(
         store=store,
-        router=topic_router(uow, cache=cache, tenant_id=tenant_id),
+        router=topic_router(uow, cache=cache, tenant_id=tenant_id, directory=directory),
         wheel=scheduler.wheel,
     )
 
@@ -287,6 +300,7 @@ async def apply_retention(
     throttle: RetentionThrottle,
     partition_no: int | None = None,
     key: str | None = None,
+    directory: PartitionDirectory | None = None,
 ) -> tuple[int, int]:
     """按主题保留口径清理目标分区到期段（请求驱动，幂等），并回传解析结果。
 
@@ -313,6 +327,7 @@ async def apply_retention(
         throttle: 清理节流窗口表（进程级单例）。
         partition_no: 目标分区号（`consume` 用）；None 时按 `key` 路由。
         key: 分区键（`publish` 用；可空）。
+        directory: 分区目录登记表（02-1；解析即登记，文件存储靠它拼落盘路径）。
 
     Returns:
         tuple[int, int]: `(主题主键, 目标分区号)`。
@@ -323,7 +338,7 @@ async def apply_retention(
         MsgPartitionCountInvalidError: 分区号越界（350009）。
     """
     tenant.ensure_namespace(namespace)
-    router = topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id))
+    router = topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id), directory=directory)
     resolved = await router.resolve(namespace=namespace, name=topic)
     target = router.partition(resolved, partition_no) if partition_no is not None else router.route(resolved, key)
     topic_id = int(resolved.id)
@@ -362,6 +377,7 @@ async def ensure_member(
     state: DeliveryState,
     cache: TopicCache | None,
     request: ConsumeRequest | AckRequest | NackRequest,
+    directory: PartitionDirectory | None = None,
 ) -> None:
     """成员制校验：组存在、成员活跃、分区在该成员分配内（01-4 详细设计 §6.1）。
 
@@ -375,6 +391,7 @@ async def ensure_member(
         state: 投递状态（协调器撤销易主分区时清在途）。
         cache: 进程内主题快照缓存（None = 不缓存）。
         request: 拉取 / 确认请求（两者都带 `group` / `consumer_id` / `partition`）。
+        directory: 分区目录登记表（02-1）。
 
     Raises:
         MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
@@ -384,7 +401,7 @@ async def ensure_member(
     """
     coordinator = GroupCoordinator(
         groups=groups,
-        router=topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id)),
+        router=topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id), directory=directory),
         delivery=state,
     )
     await coordinator.ensure_owner(
@@ -445,6 +462,7 @@ async def publish(
     metrics: BackpressureMetricsDep,
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
+    directory: PartitionDirectoryDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -465,7 +483,12 @@ async def publish(
         )
     if req.delay_level is not None:
         order = await _delay_service(
-            uow, delay_store, delay_scheduler, cache=cache, tenant_id=int(tenant.tenant_id)
+            uow,
+            delay_store,
+            delay_scheduler,
+            cache=cache,
+            tenant_id=int(tenant.tenant_id),
+            directory=directory,
         ).publish(tenant=tenant, request=req)
         delay_scheduler.ensure_started()
         return ApiResponse.ok(
@@ -487,6 +510,7 @@ async def publish(
         cache=cache,
         throttle=throttle,
         key=req.key,
+        directory=directory,
     )
     message = await delivery_service(
         uow,
@@ -496,6 +520,7 @@ async def publish(
         state,
         cache=cache,
         tenant_id=int(tenant.tenant_id),
+        directory=directory,
     ).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
@@ -553,6 +578,7 @@ async def consume(
     metrics: BackpressureMetricsDep,
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
+    directory: PartitionDirectoryDep,
 ) -> ApiResponse[ConsumeResult]:
     """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
@@ -577,6 +603,7 @@ async def consume(
         cache=cache,
         throttle=throttle,
         partition_no=req.partition,
+        directory=directory,
     )
     state_key = (req.group, topic_id, partition_no)
     wait_key = (topic_id, partition_no)
@@ -589,7 +616,9 @@ async def consume(
     while True:
         # 版本号必须在拉取**之前**取：拉取期间到达的消息靠版本差判定，不必睡满超时。
         version = waiter.version(wait_key)
-        await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
+        await ensure_member(
+            tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
+        )
         delivered = await delivery_service(
             uow,
             store,
@@ -600,6 +629,7 @@ async def consume(
             tenant_id=int(tenant.tenant_id),
             backpressure=backpressure,
             waiter=waiter,
+            directory=directory,
         ).consume(tenant=tenant, request=req)
         measured = state.usage(state_key)
         metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)
@@ -626,15 +656,26 @@ async def ack(
     groups: GroupStoreDep,
     waiter: WaiterDep,
     cache: TopicCacheDep,
+    directory: PartitionDirectoryDep,
 ) -> ApiResponse[AckResult]:
     """确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。
 
     需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。
     位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
-    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
+    await ensure_member(
+        tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
+    )
     committed = await delivery_service(
-        uow, store, offsets, dead_letters, state, cache=cache, tenant_id=int(tenant.tenant_id), waiter=waiter
+        uow,
+        store,
+        offsets,
+        dead_letters,
+        state,
+        cache=cache,
+        tenant_id=int(tenant.tenant_id),
+        waiter=waiter,
+        directory=directory,
     ).ack(tenant=tenant, request=req)
     return ApiResponse.ok(AckResult(committed_offset=committed))
 
@@ -650,6 +691,7 @@ async def nack(
     groups: GroupStoreDep,
     waiter: WaiterDep,
     cache: TopicCacheDep,
+    directory: PartitionDirectoryDep,
 ) -> ApiResponse[NackResult]:
     """拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。
 
@@ -657,9 +699,19 @@ async def nack(
     成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。
     已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。
     """
-    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
+    await ensure_member(
+        tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
+    )
     committed = await delivery_service(
-        uow, store, offsets, dead_letters, state, cache=cache, tenant_id=int(tenant.tenant_id), waiter=waiter
+        uow,
+        store,
+        offsets,
+        dead_letters,
+        state,
+        cache=cache,
+        tenant_id=int(tenant.tenant_id),
+        waiter=waiter,
+        directory=directory,
     ).nack(tenant=tenant, request=req)
     return ApiResponse.ok(NackResult(committed_offset=committed))
 

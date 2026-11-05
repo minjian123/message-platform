@@ -22,7 +22,7 @@ from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.objects import BaseValueObject
 
 from bms_msg.broker.log import MessageStore, SegmentMeta
-from bms_msg.core.config import MS_PER_SECOND, RETENTION_SCAN_WINDOW_MS
+from bms_msg.core.config import MS_PER_SECOND, RETENTION_SCAN_WINDOW_MS, RETENTION_THROTTLE_KEY_LIMIT
 
 __all__ = ["RetentionOutcome", "RetentionService", "RetentionThrottle"]
 
@@ -133,7 +133,7 @@ class RetentionService:
 
 
 class RetentionThrottle:
-    """请求驱动清理的窗口表（进程级单例；01-7 详细设计 §4）。
+    """请求驱动清理的窗口表（进程级单例；01-7 详细设计 §4，02-1 补键表生命周期）。
 
     只存「每个（主题, 分区）当前窗口序号」，命中判定是一次整数比较：
 
@@ -141,21 +141,29 @@ class RetentionThrottle:
     - **首请求必扫**：新窗口第一个到达的请求登记窗口序号并返回 True；
     - **跨片边界可紧邻两次扫描**（999ms 与 1001ms）：保留期以天计，这点偏差无业务意义，
       换来的是「不需要存上次时刻表」；
-    - **不做淘汰**：条目是「小整数对 → 窗口序号」，量级 = 主题数 × 分区数（分区数只增不减），
-      键表生命周期随 8B_02 的后台清理一并处置。
+    - **键表有上限**（02-1 交接）：`partition_count` 只增不减，键集合原本只增不减；超过
+      `key_limit` 即按「窗口序号最旧」淘汰（被淘汰的分区下一次请求重扫一次，清理幂等，只多一次扫描）；
+    - **`forget`**：主题删除 / 分区目录整体移除时调用（本期无调用方，为 06 域预留），
+      与「上限淘汰」是两条独立路径——前者是精确清理，后者是兜底封顶。
     """
 
     def __init__(
-        self, *, window_ms: int = RETENTION_SCAN_WINDOW_MS, clock: Callable[[], float] = _monotonic_ms
+        self,
+        *,
+        window_ms: int = RETENTION_SCAN_WINDOW_MS,
+        clock: Callable[[], float] = _monotonic_ms,
+        key_limit: int = RETENTION_THROTTLE_KEY_LIMIT,
     ) -> None:
         """初始化。
 
         Args:
             window_ms: 窗口宽度（毫秒；缺省取模块常量）。
             clock: 时钟（缺省单调毫秒；用例注入假时钟以确定性控制窗口边界）。
+            key_limit: 键表上限（超限按窗口序号最旧淘汰）。
         """
         self._window_ms = window_ms
         self._clock = clock
+        self._key_limit = key_limit
         self._windows: dict[tuple[int, int], int] = {}
 
     def admit(self, *, topic_id: int, partition_no: int) -> bool:
@@ -173,4 +181,40 @@ class RetentionThrottle:
         if self._windows.get(key) == window:
             return False
         self._windows[key] = window
+        self._evict()
         return True
+
+    def forget(self, *, topic_id: int, partition_no: int) -> None:
+        """忘掉一个键（主题删除 / 分区目录移除时调用；下一次请求立即重扫一次）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+        """
+        self._windows.pop((topic_id, partition_no), None)
+
+    def __len__(self) -> int:
+        """当前键数（排障与用例断言用）。
+
+        Returns:
+            int: 键数。
+        """
+        return len(self._windows)
+
+    def window_of(self, *, topic_id: int, partition_no: int) -> int | None:
+        """取某键登记的窗口序号（用例断言淘汰行为用）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            int | None: 窗口序号；未登记返回 None。
+        """
+        return self._windows.get((topic_id, partition_no))
+
+    def _evict(self) -> None:
+        """超上限时按「窗口序号最旧」逐个淘汰（窗口序号相同按插入序）。"""
+        while len(self._windows) > self._key_limit:
+            oldest = min(self._windows, key=lambda key: self._windows[key])
+            self._windows.pop(oldest, None)

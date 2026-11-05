@@ -21,6 +21,9 @@ node_modules/
 deploy/.env
 msg文档/用户文档/本地资源.md
 
+# 消息数据根（02-1 缺省开发态落点：backend/var/lib/msg）
+backend/var/
+
 # 基座文档软链不重复入库
 bms文档
 

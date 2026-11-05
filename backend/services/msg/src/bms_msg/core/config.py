@@ -278,3 +278,82 @@ RECONNECT_MAX_MS = 30_000
 
 RECONNECT_JITTER_RATIO = 0.2
 """重连抖动比例（±20%）：防「同一时刻断开的客户端同时重连」形成脉冲。"""
+
+# ---------------------------------------------------------------------------
+# 02-1 分区追加日志（文件段）：数据根 / 记录格式 / 段与索引 / fsync / log_id 索引
+# ---------------------------------------------------------------------------
+
+DATA_DIR_ENV = "MSG_DATA_DIR"
+"""消息数据根的环境变量名（部署注入；代码与脚本不写死绝对路径）。"""
+
+DEFAULT_DATA_DIR = "var/lib/msg"
+"""数据根缺省值（相对进程工作目录）：开发态从 `backend/` 启动即落 `backend/var/lib/msg`。"""
+
+DATA_ROOT_SUBDIR = "data"
+"""数据根下的分区目录子目录名（`{root}/data/{tenant}/{namespace}/{topic}.{topic_id}/{partition}`）。"""
+
+RECORD_FORMAT_VERSION = 1
+"""记录格式版本（写入时写当前值；读取到更高版本即拒绝，不做猜测解析）。"""
+
+RECORD_FRAME_BYTES = 12
+"""记录框架固定前缀字节数：`length` + `crc` + `header_len` 各 4 字节。"""
+
+MAX_RECORD_HEADER_BYTES = 1024 * 1024
+"""记录头上限（1 MiB）：超出即判损坏，防伪造长度导致巨量内存分配。"""
+
+MAX_RECORD_BYTES = 1024 * 1024 + MAX_RECORD_HEADER_BYTES + RECORD_FRAME_BYTES
+"""记录总长上限（载荷 1 MiB + 头 + 框架）：与帧契约的载荷上限同尺。"""
+
+SEGMENT_MAX_BYTES = 64 * 1024 * 1024
+"""段滚动阈值（字节）：下一批写入会越过它即先开新段（单条记录不跨段）。"""
+
+SEGMENT_ROLL_MS = 24 * 60 * 60 * MS_PER_SECOND
+"""段滚动时长（毫秒，一天）：按**段首记录的发布时间**与本条之差判定，不按墙钟。"""
+
+INDEX_INTERVAL_BYTES = 4096
+"""稀疏 offset 索引间隔（字节）：段内首条必写，其后每越过该距离追加一条。
+
+与 Kafka 的 `index.interval.bytes` 同量级：用「少量顺序扫描」换「索引体积远小于数据体积」。
+"""
+
+TIME_INDEX_INTERVAL_MS = 1_000
+"""时间索引间隔（毫秒）：条目时间戳单调不减，同时是「段内最大发布时间」的取值来源。
+
+误差上界即本值（保留期以天计，可忽略）；取 1s 而不是每条都记，是为了让时间索引体积约为数据的 1.6%。
+"""
+
+LOG_ID_INDEX_LIMIT = 100_000
+"""`log_id` → 记录位置的进程内 LRU 上限（条）：未命中走「扫段头」兜底，故内存有界不影响正确性。"""
+
+FSYNC_MODE_ENV = "MSG_FSYNC_MODE"
+"""fsync 档位环境变量名（`batch` / `time` / `each` / `os`）。"""
+
+FSYNC_INTERVAL_MS_ENV = "MSG_FSYNC_INTERVAL_MS"
+"""fsync 时间窗环境变量名（毫秒；`batch` 与 `time` 档使用）。"""
+
+FSYNC_MODE_BATCH = "batch"
+"""fsync 档位：按批（缺省）——累计 N 条或超过时间窗即刷盘。"""
+
+FSYNC_MODE_TIME = "time"
+"""fsync 档位：按时间——只看距上次刷盘的时间窗。"""
+
+FSYNC_MODE_EACH = "each"
+"""fsync 档位：每条——写完即刷盘（单机崩溃窗口 0）。"""
+
+FSYNC_MODE_OS = "os"
+"""fsync 档位：依赖 OS——只写页缓存，不主动刷盘。"""
+
+DEFAULT_FSYNC_MODE = FSYNC_MODE_BATCH
+"""缺省 fsync 档位（任务口径：默认按批，其余三档可切）。"""
+
+FSYNC_BATCH_RECORDS = 64
+"""按批档的单批条数阈值（批次内合并一次刷盘）。"""
+
+FSYNC_INTERVAL_MS = 200
+"""按批 / 按时间档的刷盘时间窗（毫秒）。"""
+
+RETENTION_THROTTLE_KEY_LIMIT = 8_192
+"""保留清理节流键表上限（01-7 交接：键表只增不减，本任务加上限 + 淘汰）。
+
+超限按「窗口序号最旧」淘汰；被淘汰的分区下一次请求重扫一次清理（幂等，只多一次扫描）。
+"""

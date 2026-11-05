@@ -8,12 +8,16 @@
   命中与未命中共用同一条产出路径（详细设计 §3.1、§6）。
 - **分区选择**：物理分区由调用方指定（本任务单分区投递，组内分摊归 01-4）；**发布**走
   `core/routing.py::select_partition`（同 key 恒同分区，**不另写哈希**）。
+- **目录登记（02-1）**：给出 `directory` 时，解析成功（命中缓存或查库）后把 `topic_id → 三段名字` 登记进
+  进程内登记表——文件存储只收 `topic_id`，落盘目录要靠这三段。命中缓存也要登记：重启后首个请求可能直接
+  命中缓存（同一进程内缓存与登记表同生命周期，但重放 / 长驻流等内部路径依赖这份登记）。
 """
 
 import time
 
 from bms_core.core.logging import get_logger
 
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.topic_cache import TopicCache, TopicSnapshot
 from bms_msg.core.routing import select_partition
 from bms_msg.errors import MsgPartitionCountInvalidError, MsgTopicNotFoundError
@@ -34,6 +38,7 @@ class TopicRouter:
         *,
         cache: TopicCache | None = None,
         tenant_id: int | None = None,
+        directory: PartitionDirectory | None = None,
     ) -> None:
         """初始化。
 
@@ -41,6 +46,7 @@ class TopicRouter:
             topics: 主题仓储（请求级会话，租户由上下文注入）。
             cache: 进程内快照缓存（None = 不缓存）；给出时必须同时给出 `tenant_id`。
             tenant_id: 当前租户主键（缓存键的一部分）。
+            directory: 分区目录登记表（02-1；None = 不登记，供管理面或不落盘的直调方使用）。
 
         Raises:
             ValueError: 只给 `cache` 不给 `tenant_id`（键里没有租户即跨租户取主题，属越权）。
@@ -50,9 +56,10 @@ class TopicRouter:
         self._topics = topics
         self._cache = cache
         self._tenant_id = 0 if tenant_id is None else int(tenant_id)
+        self._directory = directory
 
     async def resolve(self, *, namespace: str, name: str) -> TopicSnapshot:
-        """取当前租户下的可用主题（命中缓存则不查库）。
+        """取当前租户下的可用主题（命中缓存则不查库），并登记分区目录身份。
 
         Args:
             namespace: 命名空间（合法性由服务层先行校验）。
@@ -60,6 +67,23 @@ class TopicRouter:
 
         Returns:
             TopicSnapshot: 主题快照（`status == active`）。
+
+        Raises:
+            MsgTopicNotFoundError: 不存在、不属于当前租户，或未启用（350001）。
+        """
+        snapshot = await self._resolve_snapshot(namespace=namespace, name=name)
+        self._bind_directory(snapshot)
+        return snapshot
+
+    async def _resolve_snapshot(self, *, namespace: str, name: str) -> TopicSnapshot:
+        """解析主题快照（缓存优先；不含目录登记）。
+
+        Args:
+            namespace: 命名空间。
+            name: 主题名。
+
+        Returns:
+            TopicSnapshot: 主题快照。
 
         Raises:
             MsgTopicNotFoundError: 不存在、不属于当前租户，或未启用（350001）。
@@ -92,6 +116,21 @@ class TopicRouter:
                 elapsed_ms=round((time.perf_counter() - started) * 1_000, 3),
             )
         return snapshot
+
+    def _bind_directory(self, snapshot: TopicSnapshot) -> None:
+        """把主题的三段名字登记进分区目录表（幂等；冲突由登记表记日志并保留首次值）。
+
+        Args:
+            snapshot: 主题快照。
+        """
+        if self._directory is None:
+            return
+        self._directory.bind(
+            tenant_id=int(snapshot.tenant_id),
+            namespace=snapshot.namespace,
+            name=snapshot.name,
+            topic_id=int(snapshot.id),
+        )
 
     def partition(self, topic: TopicSnapshot, partition_no: int) -> int:
         """校验并返回指定分区号。

@@ -11,8 +11,10 @@
 **不启 lifespan、不连真库**：本辅助只构造应用对象，供 `ASGITransport` 或真实 hypercorn 驱动。
 """
 
+import tempfile
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -36,6 +38,7 @@ from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
@@ -49,6 +52,9 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import MSG_ERROR_MAPPER
 
 __all__ = ["build_frame_app", "install_backpressure_state"]
+
+_TEST_DATA_ROOT = Path(tempfile.gettempdir()) / "msg-test-store"
+"""用例侧数据根（只用于目录登记表拼路径；用例用内存存储，不会真的写盘）。"""
 
 
 def install_backpressure_state(app: FastAPI) -> None:
@@ -65,6 +71,9 @@ def install_backpressure_state(app: FastAPI) -> None:
     # 01-7 的两项与唤醒器无关，先注入（即使下面因幂等提前返回也已就位）。
     app.state.topic_cache = TopicCache()
     app.state.retention_throttle = RetentionThrottle()
+    # 02-1：分区目录登记表（数据面端点声明了该依赖；用例用内存存储，故 root 不落盘即可）。
+    if getattr(app.state, "partition_directory", None) is None:
+        app.state.partition_directory = PartitionDirectory(root=_TEST_DATA_ROOT)
     if getattr(app.state, "waiter", None) is not None:
         return
     waiter = DeliveryWaiter()

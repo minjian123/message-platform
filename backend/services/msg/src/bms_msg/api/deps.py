@@ -18,6 +18,7 @@ from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, conn
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
@@ -46,6 +47,7 @@ __all__ = [
     "GroupStoreDep",
     "MessageStoreDep",
     "OffsetStoreDep",
+    "PartitionDirectoryDep",
     "RateLimiterDep",
     "ReplayRunnerDep",
     "RetentionThrottleDep",
@@ -68,6 +70,7 @@ __all__ = [
     "get_group_store",
     "get_message_store",
     "get_offset_store",
+    "get_partition_directory",
     "get_rate_limiter",
     "get_replay_runner",
     "get_retention_throttle",
@@ -420,3 +423,19 @@ TopicCacheDep = Annotated[TopicCache, Depends(get_topic_cache)]
 
 RetentionThrottleDep = Annotated[RetentionThrottle, Depends(get_retention_throttle)]
 """路由参数写法：`throttle: RetentionThrottleDep`（保留清理节流）。"""
+
+
+def get_partition_directory(request: Request) -> PartitionDirectory:
+    """取分区目录登记表（进程级单例；02-1）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        PartitionDirectory: 主题目录身份登记表。
+    """
+    return cast("PartitionDirectory", request.app.state.partition_directory)
+
+
+PartitionDirectoryDep = Annotated[PartitionDirectory, Depends(get_partition_directory)]
+"""路由参数写法：`directory: PartitionDirectoryDep`（分区目录登记表）。"""

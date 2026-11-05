@@ -46,6 +46,7 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    PartitionDirectoryDep,
     RateLimiterDep,
     RetentionThrottleDep,
     TopicCacheDep,
@@ -57,6 +58,7 @@ from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
@@ -365,6 +367,7 @@ async def _invoke(
     metrics: BackpressureMetrics,
     cache: TopicCache,
     throttle: RetentionThrottle,
+    directory: PartitionDirectory,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -386,6 +389,7 @@ async def _invoke(
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（01-7）。
         throttle: 保留清理节流窗口表（01-7）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         object: 结果模型。
@@ -408,6 +412,7 @@ async def _invoke(
             metrics=metrics,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -424,6 +429,7 @@ async def _invoke(
             metrics=metrics,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -437,6 +443,7 @@ async def _invoke(
             groups=groups,
             waiter=waiter,
             cache=cache,
+            directory=directory,
         )
     elif frame_type == int(FrameType.NACK):
         response = await nack(
@@ -450,6 +457,7 @@ async def _invoke(
             groups=groups,
             waiter=waiter,
             cache=cache,
+            directory=directory,
         )
     else:  # pragma: no cover - 类型在挂载期已固定为三种之一
         raise TypeError(f"未支持的帧类型：{frame_type}")
@@ -478,6 +486,7 @@ async def _handle_frame(
     metrics: BackpressureMetrics,
     cache: TopicCache,
     throttle: RetentionThrottle,
+    directory: PartitionDirectory,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -502,6 +511,7 @@ async def _handle_frame(
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（01-7）。
         throttle: 保留清理节流窗口表（01-7）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -573,6 +583,7 @@ async def _handle_frame(
             metrics=metrics,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -615,6 +626,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         metrics: BackpressureMetricsDep,
         cache: TopicCacheDep,
         throttle: RetentionThrottleDep,
+        directory: PartitionDirectoryDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -635,6 +647,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             metrics: 背压指标收集器。
             cache: 进程内主题快照缓存（01-7）。
             throttle: 保留清理节流窗口表（01-7）。
+            directory: 分区目录登记表（02-1）。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -663,6 +676,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             metrics=metrics,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
         raise FrameHandled(response)
 

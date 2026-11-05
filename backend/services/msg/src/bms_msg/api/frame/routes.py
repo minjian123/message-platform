@@ -62,6 +62,7 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    PartitionDirectoryDep,
     RetentionThrottleDep,
     StreamRegistryDep,
     StreamTuningDep,
@@ -81,6 +82,7 @@ from bms_msg.broker.backpressure import BackpressureTuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
@@ -207,7 +209,12 @@ def _consume_request(query: SubscribeQuery, *, max_messages: int | None = None) 
 
 
 async def _resolve_ids(
-    *, uow_factory: UowFactory, tenant: CurrentTenant, query: SubscribeQuery, cache: TopicCache
+    *,
+    uow_factory: UowFactory,
+    tenant: CurrentTenant,
+    query: SubscribeQuery,
+    cache: TopicCache,
+    directory: PartitionDirectory | None = None,
 ) -> tuple[int, int]:
     """解析 `(topic_id, partition_no)`（等待键需要）。
 
@@ -219,6 +226,7 @@ async def _resolve_ids(
         tenant: 当前租户。
         query: 长驻流参数。
         cache: 进程内主题快照缓存（解析结果与预检共用同一份，命中不查库）。
+        directory: 分区目录登记表（02-1；解析即登记）。
 
     Returns:
         tuple[int, int]: 主题主键与分区号。
@@ -228,7 +236,7 @@ async def _resolve_ids(
     """
     tenant.ensure_namespace(query.namespace)
     async with uow_factory() as uow:
-        router = topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id))
+        router = topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id), directory=directory)
         resolved = await router.resolve(namespace=query.namespace, name=query.topic)
         return int(resolved.id), router.partition(resolved, query.partition)
 
@@ -246,6 +254,7 @@ async def _pull(
     waiter: DeliveryWaiter,
     backpressure: BackpressureTuning,
     cache: TopicCache,
+    directory: PartitionDirectory | None = None,
 ) -> ConcurrentStableList[MessageItem]:
     """开一个短会话拉一批（每轮现开现关，不占请求会话）。
 
@@ -264,6 +273,7 @@ async def _pull(
         waiter: 分区唤醒器（额度归还后唤醒本流）。
         backpressure: inflight 双阈值。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用，命中不查库）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         ConcurrentStableList[MessageItem]: 本批消息（可能为空）。
@@ -272,7 +282,9 @@ async def _pull(
         MsgError: 主题不存在 / 组不存在 / 成员失效 / 分区号越界等（由调用方转 `error` 事件）。
     """
     async with uow_factory() as uow:
-        await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=request)
+        await ensure_member(
+            tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=request, directory=directory
+        )
         delivered = await delivery_service(
             uow,
             store,
@@ -283,6 +295,7 @@ async def _pull(
             tenant_id=int(tenant.tenant_id),
             backpressure=backpressure,
             waiter=waiter,
+            directory=directory,
         ).consume(tenant=tenant, request=request)
     return ConcurrentStableList(
         message_item(delivery.message, request.topic, delivery.delivery_count) for delivery in delivered
@@ -327,6 +340,7 @@ async def _stream_core(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
 ) -> AsyncGenerator[StreamEvent]:
@@ -352,6 +366,7 @@ async def _stream_core(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（预检 / 兜底解析 / 每轮拉取共用）。
+        directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
 
@@ -360,7 +375,9 @@ async def _stream_core(
     """
     request = _consume_request(query)
     if topic_id is None or partition_no is None:
-        topic_id, partition_no = await _resolve_ids(uow_factory=uow_factory, tenant=tenant, query=query, cache=cache)
+        topic_id, partition_no = await _resolve_ids(
+            uow_factory=uow_factory, tenant=tenant, query=query, cache=cache, directory=directory
+        )
     wait_key = (topic_id, partition_no)
     budget_key = (query.group, topic_id, partition_no)
     started = time.monotonic()
@@ -413,6 +430,7 @@ async def _stream_core(
                         waiter=waiter,
                         backpressure=backpressure,
                         cache=cache,
+                        directory=directory,
                     )
             except MsgError as exc:
                 reason = "member_lost" if exc.code in _MEMBER_LOST_CODES else "error"
@@ -436,6 +454,7 @@ async def _stream_core(
                             waiter=waiter,
                             backpressure=backpressure,
                             cache=cache,
+                            directory=directory,
                         )
                     )
                 mark = time.monotonic()
@@ -492,6 +511,7 @@ async def stream_events(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
 ) -> AsyncGenerator[bytes]:
@@ -514,6 +534,7 @@ async def stream_events(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用）。
+        directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
 
@@ -537,6 +558,7 @@ async def stream_events(
         backpressure=backpressure,
         metrics=metrics,
         cache=cache,
+        directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
     )
@@ -589,6 +611,7 @@ async def stream_frames(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
 ) -> AsyncGenerator[bytes]:
@@ -615,6 +638,7 @@ async def stream_frames(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用）。
+        directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
 
@@ -638,6 +662,7 @@ async def stream_frames(
         backpressure=backpressure,
         metrics=metrics,
         cache=cache,
+        directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
     )
@@ -664,6 +689,7 @@ async def _preflight(
     state: DeliveryState,
     cache: TopicCache,
     throttle: RetentionThrottle,
+    directory: PartitionDirectory | None = None,
 ) -> tuple[int, int]:
     """进流前的预检（保留期清理 + 成员制），并回传 `(topic_id, partition_no)`。
 
@@ -676,6 +702,7 @@ async def _preflight(
         state: 投递状态。
         cache: 进程内主题快照缓存。
         throttle: 保留清理节流（与 publish / consume 共用同一窗口表）。
+        directory: 分区目录登记表（02-1）。
 
     Returns:
         tuple[int, int]: 主题主键与分区号。
@@ -693,6 +720,7 @@ async def _preflight(
             cache=cache,
             throttle=throttle,
             partition_no=request.partition,
+            directory=directory,
         )
         await ensure_member(
             tenant=tenant,
@@ -701,6 +729,7 @@ async def _preflight(
             state=state,
             cache=cache,
             request=_consume_request(request),
+            directory=directory,
         )
     return topic_id, partition_no
 
@@ -736,6 +765,7 @@ async def subscribe(
     metrics: BackpressureMetricsDep,
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
+    directory: PartitionDirectoryDep,
 ) -> StreamingResponse:
     """订阅一条分区（SSE 长驻流，server streaming）。
 
@@ -760,6 +790,7 @@ async def subscribe(
             state=state,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
     except BaseException:
         connections.close_stream(connection_key)
@@ -858,6 +889,7 @@ async def subscribe_frames(
     metrics: BackpressureMetricsDep,
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
+    directory: PartitionDirectoryDep,
 ) -> StreamingResponse:
     """订阅一条分区（帧流形态，`application/x-msg-frame`）。
 
@@ -887,6 +919,7 @@ async def subscribe_frames(
             state=state,
             cache=cache,
             throttle=throttle,
+            directory=directory,
         )
     except MsgError as exc:
         connections.close_stream(connection_key)
@@ -917,6 +950,7 @@ async def subscribe_frames(
             backpressure=backpressure,
             metrics=metrics,
             cache=cache,
+            directory=directory,
             topic_id=topic_id,
             partition_no=partition_no,
         ),

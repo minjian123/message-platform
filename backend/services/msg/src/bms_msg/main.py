@@ -8,7 +8,9 @@
 > 03-1 接入 HTTP/2 帧入口（根路径 `/msg/*` 复用数据面 + SSE 长驻流 + 连接元数据），并把
 > 延迟推进器与重放执行器挂到基座 `startup_hooks()`（装配后启动、停机随资源管理器回收）；
 > 03-4 接入连接管理（连接登记表 + 连接数 / 长驻流上限 + 应用层心跳 + drain 协商）；
-> 03-5 接入背压与流控（分区唤醒器 + inflight 双阈值 + 两级限流 + 指标 collector，消息存储包一层通知）。
+> 03-5 接入背压与流控（分区唤醒器 + inflight 双阈值 + 两级限流 + 指标 collector，消息存储包一层通知）；
+> 02-1 把消息存储换成**文件段实现**（目录登记表 + 记录格式 + 段与索引 + length 级尾部恢复），
+> `NotifyingMessageStore` 仍是最外层。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -36,9 +38,9 @@ from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.lifecycle import start_background_tasks
-from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
@@ -107,8 +109,14 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         """
         waiter = DeliveryWaiter()
         app.state.waiter = waiter
+        # 02-1：主题目录登记表（topic_id → tenant/namespace/name）+ 文件段存储。
+        # 目录表由 TopicRouter.resolve 登记；存储层只在「未登记且盘上已有目录」时反查。
+        app.state.partition_directory = PartitionDirectory(root=data_root())
         # 消息存储包一层「写入即唤醒」：普通发布 / 延迟转投 / 重放三处写入自动唤醒长轮询与长驻流。
-        app.state.message_store = NotifyingMessageStore(InMemoryMessageStore(), waiter)
+        # **装配顺序硬约束**：通知包装必须是最外层（装反了不报错，只是长轮询退化为等到超时）。
+        app.state.message_store = NotifyingMessageStore(
+            FileMessageStore(directory=app.state.partition_directory), waiter
+        )
         app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
         app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
         app.state.offset_store = InMemoryOffsetStore()
