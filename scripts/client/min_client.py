@@ -25,6 +25,7 @@ import json
 import sys
 import time
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +35,9 @@ from bms_msg.broker.connection import next_backoff_ms
 from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, FrameFlags, FrameType, decode_frame, encode_frame
 
 __all__ = ["Attempt", "main", "run"]
+
+_POLL_SECONDS = 0.2
+"""轮询间隔（秒）：足够及时地发现 draining / 到期，又不空转。"""
 
 _DEFAULT_TOPIC = "audit.operation"
 """缺省订阅主题（与既有用例 / 基准同一主题，便于直接联调）。"""
@@ -165,6 +169,42 @@ def _subscribe_params(options: Options) -> dict[str, str | int]:
     }
 
 
+def _member_body(options: Options) -> dict[str, str]:
+    """成员请求体（`join` / `heartbeat` / `leave` 共用，01-4）。
+
+    Args:
+        options: 命令行参数。
+
+    Returns:
+        dict[str, str]: 成员请求体。
+    """
+    return {
+        "namespace": options.namespace,
+        "topic": options.topic,
+        "group": options.group,
+        "consumer_id": options.consumer_id,
+    }
+
+
+async def _join(client: httpx.AsyncClient, options: Options, stream: Any) -> None:
+    """加入消费组（同 `consumer_id` 重复加入视为重连，幂等）。
+
+    **为什么客户端要自己加入**：成员制是 01-4 的前提——不 join 就没有分区分配，长驻流会被 350014 拒绝；
+    只在排练脚本里由人工 join，会让「客户端能自愈」这件事不成立。
+
+    Args:
+        client: 客户端。
+        options: 命令行参数。
+        stream: 输出流。
+    """
+    response = await client.post("/api/v1/msg/join", json=_member_body(options))
+    if response.status_code == 200:
+        assignment = dict(response.json()["data"])
+        print(f"已加入消费组：分区={assignment.get('partitions')} 世代={assignment.get('generation')}", file=stream)
+        return
+    print(f"加入消费组失败（{response.status_code}）：{response.text}（请先建主题）", file=stream)
+
+
 async def _read_connection(client: httpx.AsyncClient) -> dict[str, Any]:
     """读连接自报（拿服务端的心跳间隔 / 超时 / 上限，绝不硬编码）。
 
@@ -185,16 +225,22 @@ async def _read_connection(client: httpx.AsyncClient) -> dict[str, Any]:
 
 
 async def _heartbeat_loop(
-    client: httpx.AsyncClient, *, interval_s: float, state: State, deadline: float
+    client: httpx.AsyncClient, *, options: Options, interval_s: float, state: State, deadline: float
 ) -> None:
-    """按间隔发心跳（帧形态），把 `draining` 与连接错误记进共享状态。
+    """按间隔发两类心跳，把 `draining` 与错误记进共享状态。
+
+    两类心跳各有归属，缺一不可：
+    - **连接心跳**（帧 17，03-4）：判连接存活、拿服务端参数与 drain 信号；
+    - **成员心跳**（JSON，01-4）：判成员存活，不发则 30s 后成员失效、长驻流被 350014 拒绝（演练实测）。
 
     Args:
         client: 客户端。
+        options: 命令行参数。
         interval_s: 心跳间隔（秒；取自服务端自报）。
         state: 共享状态。
         deadline: 本轮截止时刻（`loop.time()`）。
     """
+    member_body = _member_body(options)
     while asyncio.get_running_loop().time() < deadline:
         try:
             response = await client.post(
@@ -203,8 +249,11 @@ async def _heartbeat_loop(
                 headers={"Content-Type": FRAME_CONTENT_TYPE},
             )
             if response.status_code == 200:
-                state.draining = state.draining or bool(_heartbeat_draining(response.content))
+                state.draining = state.draining or _heartbeat_draining(response.content)
             else:
+                state.heartbeat_errors += 1
+            member = await client.post("/api/v1/msg/heartbeat", json=member_body)
+            if member.status_code != 200:
                 state.heartbeat_errors += 1
         except httpx.HTTPError:
             state.heartbeat_errors += 1
@@ -230,6 +279,10 @@ def _heartbeat_draining(body: bytes) -> bool:
 async def _consume_once(client: httpx.AsyncClient, options: Options, state: State, deadline: float) -> Attempt:
     """跑一轮订阅流，直到到期 / 摘流 / 断线 / 总时长用尽。
 
+    **为什么用「读任务 + 轮询」而不是在 SSE 循环里判到期**：空闲期服务端只发注释行，而注释行不进事件流
+    ——挂在事件循环里的到期判断会一直不被求值，一轮会拖到流自己的时长上限（演练实测 45s）。把「读」放进
+    独立任务，由外层按固定间隔看三个条件（完成 / draining / 到期），三种退出都及时。
+
     Args:
         client: 客户端。
         options: 命令行参数。
@@ -239,27 +292,59 @@ async def _consume_once(client: httpx.AsyncClient, options: Options, state: Stat
     Returns:
         Attempt: 本轮记录（`delay_ms` 由调用方填）。
     """
-    messages = 0
+    counter: dict[str, int] = {"messages": 0}
+    reader = asyncio.create_task(_drain_stream(client, options, counter))
     reason = "duration"
+    try:
+        while True:
+            done, _ = await asyncio.wait({reader}, timeout=_POLL_SECONDS)
+            if done:
+                messages, reason = reader.result()
+                return Attempt(index=0, reason=reason, delay_ms=0, messages=messages)
+            if state.draining:
+                reason = "drain"
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                reason = "duration"
+                break
+    finally:
+        if not reader.done():
+            reader.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await reader
+    return Attempt(index=0, reason=reason, delay_ms=0, messages=counter["messages"])
+
+
+async def _drain_stream(
+    client: httpx.AsyncClient, options: Options, counter: dict[str, int]
+) -> tuple[int, str]:
+    """读完一条长驻流，返回（消息条数, 结束原因）；被取消时把已收条数留在 `counter`。
+
+    Args:
+        client: 客户端。
+        options: 命令行参数。
+        counter: 共享计数字典（被取消后外层仍能取到已收条数）。
+
+    Returns:
+        tuple[int, str]: 消息条数与结束原因（`close:<reason>` / `disconnect` / `http:<code>` / `stream_end`）。
+    """
+    messages = 0
+    reason = "stream_end"
     try:
         async with client.stream("GET", "/msg/subscribe", params=_subscribe_params(options)) as stream:
             if stream.status_code != 200:
                 await stream.aread()
-                return Attempt(index=0, reason=f"http:{stream.status_code}", delay_ms=0)
+                return 0, f"http:{stream.status_code}"
             async for name, data in _sse_events(stream):
-                messages += 1 if name == "message" else 0
-                if name == "close":
+                if name == "message":
+                    messages += 1
+                    counter["messages"] = messages
+                elif name == "close":
                     reason = f"close:{data.get('reason', 'unknown')}"
-                    break
-                if state.draining:
-                    reason = "drain"
-                    break
-                if asyncio.get_running_loop().time() >= deadline:
-                    reason = "duration"
-                    break
+                    return messages, reason
     except httpx.HTTPError:
-        reason = "disconnect"
-    return Attempt(index=0, reason=reason, delay_ms=0, messages=messages)
+        return messages, "disconnect"
+    return messages, reason
 
 
 async def _sse_events(stream: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -304,6 +389,7 @@ async def run(options: Options, *, out: Any = None) -> int:
         except (httpx.HTTPError, KeyError) as exc:
             print(f"服务端不可达或响应异常：{exc}", file=stream)
             return 2
+        await _join(client, options, stream)
         interval = options.heartbeat_interval or float(info["heartbeat_interval_ms"]) / 1000
         print(
             f"连接参数：http={info['http_version']} 心跳={interval}s 超时={info['heartbeat_timeout_ms']}ms "
@@ -315,7 +401,7 @@ async def run(options: Options, *, out: Any = None) -> int:
             round_end = min(started + options.duration, asyncio.get_running_loop().time() + 60.0)
             state = State()
             heartbeat = asyncio.create_task(
-                _heartbeat_loop(client, interval_s=interval, state=state, deadline=round_end)
+                _heartbeat_loop(client, options=options, interval_s=interval, state=state, deadline=round_end)
             )
             attempt = await _consume_once(client, options, state, round_end)
             heartbeat.cancel()
