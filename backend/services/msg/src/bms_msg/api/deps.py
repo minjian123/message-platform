@@ -13,6 +13,7 @@ from typing import Annotated, cast
 from bms_core.core.config import get_settings
 from fastapi import Depends, Request
 
+from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, connection_tuning_from_settings
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
@@ -27,6 +28,8 @@ from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
 __all__ = [
     "AuditSinkDep",
+    "ConnectionRegistryDep",
+    "ConnectionTuningDep",
     "CurrentTenantDep",
     "DataPlaneTenantDep",
     "DeadLetterQueueDep",
@@ -41,6 +44,8 @@ __all__ = [
     "StreamTuningDep",
     "UowFactoryDep",
     "get_audit_sink",
+    "get_connection_registry",
+    "get_connection_tuning",
     "get_current_tenant_context",
     "get_data_plane_tenant",
     "get_dead_letter_queue",
@@ -275,6 +280,27 @@ def get_stream_tuning() -> StreamTuning:
     return default_stream_tuning()
 
 
+def get_connection_registry(request: Request) -> ConnectionRegistry:
+    """取连接登记表（进程级单例；连接条目 / 名额 / 半开清扫）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        ConnectionRegistry: 连接登记表。
+    """
+    return cast("ConnectionRegistry", request.app.state.connection_registry)
+
+
+def get_connection_tuning() -> ConnectionTuning:
+    """取连接参数（按基座 `[server]` 计算；用例经依赖覆盖注入毫秒级参数）。
+
+    Returns:
+        ConnectionTuning: 连接参数（心跳间隔 / 超时 / 空闲阈值 / 两个上限 / 清扫批量 / 重试间隔）。
+    """
+    return connection_tuning_from_settings(get_settings())
+
+
 StreamRegistryDep = Annotated[StreamRegistry, Depends(get_stream_registry)]
 """路由参数写法：`registry: StreamRegistryDep`。"""
 
@@ -283,3 +309,9 @@ UowFactoryDep = Annotated[UowFactory, Depends(get_uow_factory)]
 
 StreamTuningDep = Annotated[StreamTuning, Depends(get_stream_tuning)]
 """路由参数写法：`tuning: StreamTuningDep`。"""
+
+ConnectionRegistryDep = Annotated[ConnectionRegistry, Depends(get_connection_registry)]
+"""路由参数写法：`connections: ConnectionRegistryDep`。"""
+
+ConnectionTuningDep = Annotated[ConnectionTuning, Depends(get_connection_tuning)]
+"""路由参数写法：`tuning: ConnectionTuningDep`（连接参数，区别于 `StreamTuning`）。"""

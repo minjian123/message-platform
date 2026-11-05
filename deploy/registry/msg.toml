@@ -205,6 +205,23 @@ message_key = "msg.error.version_unsupported"
 severity = "warning"
 description = "协议主版本不支持（服务端只认同一主版本；返回后结束该 stream，由客户端断开连接）"
 
+[[errcodes]]
+code = 350020
+domain = "msg"
+http_status = 429
+message_key = "msg.error.connection_limit_exceeded"
+severity = "warning"
+description = "连接数超限（单副本有效连接数已达上限；客户端应换实例或退避重连）"
+
+[[errcodes]]
+code = 350021
+domain = "msg"
+http_status = 429
+message_key = "msg.error.stream_limit_exceeded"
+severity = "warning"
+description = "单连接长驻流超限（已达单连接长驻流上限；客户端应降并发或另开连接）"
+
+
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
 # `deploy/boundaries/domain_layout.json` 是**生成物**（由清单渲染），本仓 ops 渲染命令归 8B_01，

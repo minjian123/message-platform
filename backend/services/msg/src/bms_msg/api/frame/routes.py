@@ -25,7 +25,7 @@
 import asyncio
 import time
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
@@ -45,6 +45,8 @@ from bms_msg.api.data.messages import (
     mount_data_plane,
 )
 from bms_msg.api.deps import (
+    ConnectionRegistryDep,
+    ConnectionTuningDep,
     DataPlaneTenantDep,
     DeadLetterQueueDep,
     DeliveryStateDep,
@@ -56,6 +58,13 @@ from bms_msg.api.deps import (
     UowFactoryDep,
 )
 from bms_msg.api.frame.gate import build_frame_gate
+from bms_msg.api.frame.guard import (
+    CONNECTION_GUARD,
+    CONNECTION_INFO_GUARD,
+    ConnectionInfoRecordDep,
+    connection_info,
+)
+from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
@@ -65,13 +74,11 @@ from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.transport import (
     StreamRegistry,
     StreamTuning,
-    connection_meta,
     sse_comment,
     sse_event,
 )
 from bms_msg.core.config import ACKS_AT_LEAST_ONCE
-from bms_msg.errors import MsgError
-from bms_msg.protocol.frame import PROTOCOL_VERSION
+from bms_msg.errors import MsgError, MsgErrorCode
 from bms_msg.schemas.message import ConsumeRequest, MessageItem
 from bms_msg.schemas.transport import ConnectionInfo, SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
@@ -82,8 +89,22 @@ router = BaseRouter(
     key="msg_frame",
     prefix="/msg",
     tags=["msg-frame"],
+    dependencies=[Depends(CONNECTION_GUARD)],
 )
-"""根路径数据面聚合路由（挂载前缀为空 → 最终为 `/msg/*`）。"""
+"""根路径数据面聚合路由（挂载前缀为空 → 最终为 `/msg/*`）。
+
+连接守卫是**路由级依赖**：数据面四端点（复用规格挂上来的）与 `/msg/subscribe`
+全部先登记连接、判连接数上限、顺带清扫过期连接（03-4 详细设计 §5.2）。
+`GET /msg/connection` 不在此路由内——它是「打满时也要能查」的排障入口，见 `connection_router`。
+"""
+
+connection_router = BaseRouter(
+    key="msg_connection",
+    prefix="/msg",
+    tags=["msg-frame"],
+    dependencies=[Depends(CONNECTION_INFO_GUARD)],
+)
+"""连接自报路由（`GET /msg/connection`）：登记与清扫照旧，**不判**连接数上限（排障入口）。"""
 
 
 def _frame_gate(spec: DataPlaneRoute) -> params.Depends:
@@ -103,6 +124,9 @@ mount_data_plane(router, frame_gate=_frame_gate)
 
 _CONSUME = Depends(require_permission(CONSUME_PERMISSION))
 """长驻流权限依赖（与拉取 / 确认同码：消费即持有 `msg:consume`）。"""
+
+_SUBSCRIBE_ERROR_CODES = ConcurrentStableList([*CONSUME_ERROR_CODES, int(MsgErrorCode.STREAM_LIMIT_EXCEEDED)])
+"""长驻流错误码声明：与拉取同码 + 追加 `350021`（单连接长驻流超限；拉取端点不会抛它，故不共用清单）。"""
 
 _MEMBER_LOST_CODES = frozenset({350013, 350014})
 """流内「成员消失」类码（组不存在 / 成员失效或分区易主）：关闭原因记 `member_lost`。
@@ -178,6 +202,7 @@ async def stream_events(
     *,
     uow_factory: UowFactory,
     registry: StreamRegistry,
+    connections: ConnectionRegistry,
     store: MessageStore,
     offsets: OffsetStore,
     dead_letters: DeadLetterQueue,
@@ -186,8 +211,9 @@ async def stream_events(
     tenant: CurrentTenant,
     query: SubscribeQuery,
     tuning: StreamTuning,
+    connection_key: str,
 ) -> AsyncGenerator[bytes]:
-    """长驻流事件生成器（SSE 字节流；登记 / 注销在此收口）。
+    """长驻流事件生成器（SSE 字节流；流登记与连接名额在此收口）。
 
     生命周期见模块文档：`open` → 逐批 `message`（无消息发注释行保活）→ `close`；
     客户端断开时 `close(client_closed)` 后原样抛出 `CancelledError`（取消语义不能被吞）。
@@ -195,6 +221,7 @@ async def stream_events(
     Args:
         uow_factory: 工作单元工厂（每轮短会话）。
         registry: 流登记表（`finally` 里注销，用例据此断言「断开即释放」）。
+        connections: 连接登记表（`finally` 里归还长驻流名额）。
         store: 消息存储。
         offsets: 位点存储。
         dead_letters: 死信队列。
@@ -203,6 +230,7 @@ async def stream_events(
         tenant: 当前租户。
         query: 长驻流查询参数。
         tuning: 流参数。
+        connection_key: 所属连接的派生键（名额归还与此同键）。
 
     Yields:
         bytes: SSE 事件（`event: <名>\\ndata: <单行 JSON>\\n\\n`）或注释行。
@@ -218,6 +246,7 @@ async def stream_events(
         consumer_id=query.consumer_id,
         partition=query.partition,
         opened_at=started,
+        connection_key=connection_key,
     )
     reason = "error"
     try:
@@ -267,12 +296,13 @@ async def stream_events(
         raise
     finally:
         registry.close(stream_id, reason=reason)
+        connections.close_stream(connection_key)
 
 
 @router.get(
     "/subscribe",
     dependencies=[_CONSUME],
-    openapi_extra={"x-error-codes": list(CONSUME_ERROR_CODES)},
+    openapi_extra={"x-error-codes": list(_SUBSCRIBE_ERROR_CODES)},
     response_class=StreamingResponse,
     responses={
         200: {
@@ -282,11 +312,14 @@ async def stream_events(
     },
 )
 async def subscribe(
+    request: Request,
     query: Annotated[SubscribeQuery, Query()],
     tenant: DataPlaneTenantDep,
     uow_factory: UowFactoryDep,
     registry: StreamRegistryDep,
     tuning: StreamTuningDep,
+    connections: ConnectionRegistryDep,
+    connection_tuning: ConnectionTuningDep,
     store: MessageStoreDep,
     offsets: OffsetStoreDep,
     dead_letters: DeadLetterQueueDep,
@@ -298,32 +331,41 @@ async def subscribe(
     需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。
     预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；
     `max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。
+    单连接长驻流超上限返回 350021（普通 JSON 错误，尚未进流；名额随即归还）。
     进流之后：拉到消息逐条 `message`；无消息按轮询间隔重试（带注释行保活）；
     到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。
     客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。
     """
     consume_request = _consume_request(query)
-    # 预检在本请求的作用域内完成：失败即普通 JSON 错误（状态码与 /msg/consume 一致）
-    async with uow_factory() as preflight_uow:
-        await apply_retention(
-            tenant=tenant,
-            uow=preflight_uow,
-            store=store,
-            namespace=query.namespace,
-            topic=query.topic,
-            partition_no=query.partition,
-        )
-        await ensure_member(
-            tenant=tenant,
-            uow=preflight_uow,
-            groups=groups,
-            state=state,
-            request=consume_request,
-        )
+    connection_key = cast("str", request.state.connection_key)
+    # 先占名额：预检失败必须归还，否则一次失败会永久占一个长驻流名额（03-4 详细设计 §5.3）。
+    connections.open_stream(connection_key, limit=connection_tuning.max_streams_per_connection)
+    try:
+        # 预检在本请求的作用域内完成：失败即普通 JSON 错误（状态码与 /msg/consume 一致）
+        async with uow_factory() as preflight_uow:
+            await apply_retention(
+                tenant=tenant,
+                uow=preflight_uow,
+                store=store,
+                namespace=query.namespace,
+                topic=query.topic,
+                partition_no=query.partition,
+            )
+            await ensure_member(
+                tenant=tenant,
+                uow=preflight_uow,
+                groups=groups,
+                state=state,
+                request=consume_request,
+            )
+    except BaseException:
+        connections.close_stream(connection_key)
+        raise
     return StreamingResponse(
         stream_events(
             uow_factory=uow_factory,
             registry=registry,
+            connections=connections,
             store=store,
             offsets=offsets,
             dead_letters=dead_letters,
@@ -332,32 +374,27 @@ async def subscribe(
             tenant=tenant,
             query=query,
             tuning=tuning,
+            connection_key=connection_key,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@router.get("/connection")
-async def connection(request: Request) -> ApiResponse[ConnectionInfo]:
-    """回本连接元数据（协议版本 / 承载方式 / 客户端地址）。
+@connection_router.get("/connection")
+async def connection(
+    request: Request,
+    record: ConnectionInfoRecordDep,
+    tuning: ConnectionTuningDep,
+) -> ApiResponse[ConnectionInfo]:
+    """回本连接元数据（协议版本 / 承载方式 / 客户端地址 + 连接键 / 活跃流 / 阈值 / drain 标记）。
 
-    只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。
-    用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。
-    版本可见（03-2）：`supported_protocol_version` 恒有值（服务端当前帧版本），`protocol_version` 为本
-    请求所用帧版本——本端点是 JSON 请求，故恒为 null；帧形态的版本在响应帧 header 与日志里。
-    **不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，
-    装载校验只对它给软提示，不影响通过）。
+    只读自报，不含租户业务数据，故不加权限码（05 域认证落地后再评估收紧）。
+    用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、客户端取服务端口径（心跳间隔 / 上限 / drain）。
+    **兼作保活**：本端点每被调用一次就刷新连接 `last_seen`——无帧能力的客户端（curl / EventSource）
+    用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。
+    **不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。
+    版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。
+    **不声明 `x-error-codes`**：不触达业务判定，没有产品码可声明（与探针端点同性质）。
     """
-    meta = connection_meta(request.scope)
-    return ApiResponse.ok(
-        ConnectionInfo(
-            http_version=meta.http_version,
-            scheme=meta.scheme,
-            is_tls=meta.is_tls,
-            client_host=meta.client_host,
-            client_port=meta.client_port,
-            protocol_version=None,
-            supported_protocol_version=PROTOCOL_VERSION,
-        )
-    )
+    return ApiResponse.ok(connection_info(request, record, tuning))

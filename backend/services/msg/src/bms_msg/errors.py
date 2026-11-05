@@ -5,9 +5,11 @@
   主题已存在 `350008`、分区数 / 分区号非法 `350009`、命名空间非法 `350010`、
   租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`、
   延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
-  帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`
+  帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
+  连接数超限 `350020`、单连接长驻流超限 `350021`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
-  `350004` / `350005` 由架构 05 §5 预留为超时 / 背压；`350006` 由 03-2 按「上限 1 MiB」启用）。
+  `350004` / `350005` 由架构 05 §5 预留为超时 / 背压；`350006` 由 03-2 按「上限 1 MiB」启用；
+  `350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
@@ -15,7 +17,9 @@
   （`build_error_response`）把这两码改写为 msg 码，管理面与数据面口径一致（详细设计 §3.2、§3.4）。
 - **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）
   → 组（`350013`）→ 分区号（`350009`）→ 成员与分区归属（`350014`）→ 位点 / 消息（`350002` / `350003` / `350007`）
-  → 延迟区容量（`350015`，发布侧排在主题与档位判定之后）→ 重放任务（`350016` / `350017`，排在租户判定之后）。
+  → 延迟区容量（`350015`，发布侧排在主题与档位判定之后）→ 重放任务（`350016` / `350017`，排在租户判定之后）；
+  连接类判定（`350020` / `350021`）**先于**上述全部——连接打满时连解析租户都不必做。
+
 """
 
 from enum import IntEnum
@@ -28,6 +32,7 @@ from bms_core.error_mapper.base import BaseErrorMapper
 
 __all__ = [
     "MSG_ERROR_MAPPER",
+    "MsgConnectionLimitExceededError",
     "MsgDelayQuotaExceededError",
     "MsgDeliveryExhaustedError",
     "MsgError",
@@ -43,6 +48,7 @@ __all__ = [
     "MsgPayloadTooLargeError",
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
+    "MsgStreamLimitExceededError",
     "MsgTenantNotFoundError",
     "MsgTenantSuspendedError",
     "MsgTopicExistsError",
@@ -110,6 +116,12 @@ class MsgErrorCode(IntEnum):
 
     VERSION_UNSUPPORTED = 350019
     """协议主版本不支持（服务端只认同一主版本；返回后结束该 stream，由客户端断开连接）。"""
+
+    CONNECTION_LIMIT_EXCEEDED = 350020
+    """连接数超限（单副本有效连接数已达 `max_connections`；客户端应换实例或退避后重试）。"""
+
+    STREAM_LIMIT_EXCEEDED = 350021
+    """单连接长驻流超限（达 `max_streams_per_connection`；客户端应降并发或另开连接）。"""
 
 
 class MsgError(BizError):
@@ -248,6 +260,20 @@ class MsgVersionUnsupportedError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.VERSION_UNSUPPORTED
     http_status_: ClassVar[int] = 400
+
+
+class MsgConnectionLimitExceededError(MsgError):
+    """连接数超限（350020 / 429）：不静默丢弃，客户端据 `retry_after_ms` 换实例或退避重连。"""
+
+    code_: ClassVar[int] = MsgErrorCode.CONNECTION_LIMIT_EXCEEDED
+    http_status_: ClassVar[int] = 429
+
+
+class MsgStreamLimitExceededError(MsgError):
+    """单连接长驻流超限（350021 / 429）：客户端应降并发或另开连接。"""
+
+    code_: ClassVar[int] = MsgErrorCode.STREAM_LIMIT_EXCEEDED
+    http_status_: ClassVar[int] = 429
 
 
 class MsgErrorMapper(BaseErrorMapper):

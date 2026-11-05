@@ -482,8 +482,14 @@
       },
       "ConnectionInfo": {
         "additionalProperties": false,
-        "description": "连接元数据（`GET /msg/connection`；排障第一问的机器可读出口）。",
+        "description": "连接元数据（`GET /msg/connection`、`POST /msg/connection/heartbeat`、心跳帧三处共用）。\n\n一次把客户端自适应需要的参数给全（间隔 / 超时 / 两个上限 / drain），SDK 不必再查常量\n（03-4 详细设计 §6.2）。字段**只增不删**：新增仍走本模型，客户端按未知字段忽略处理。",
         "properties": {
+          "active_streams": {
+            "default": 0,
+            "description": "该连接上的长驻流数",
+            "title": "Active Streams",
+            "type": "integer"
+          },
           "client_host": {
             "description": "客户端地址（无地址场景为空串）",
             "title": "Client Host",
@@ -494,15 +500,76 @@
             "title": "Client Port",
             "type": "integer"
           },
+          "connection_key": {
+            "default": "",
+            "description": "派生连接键（tenant|host:port；与日志同值）",
+            "title": "Connection Key",
+            "type": "string"
+          },
+          "draining": {
+            "default": false,
+            "description": "本实例是否在摘流（true 时客户端应换实例重连）",
+            "title": "Draining",
+            "type": "boolean"
+          },
+          "heartbeat_interval_ms": {
+            "default": 0,
+            "description": "服务端建议心跳间隔（毫秒）",
+            "title": "Heartbeat Interval Ms",
+            "type": "integer"
+          },
+          "heartbeat_timeout_ms": {
+            "default": 0,
+            "description": "服务端判定半开的阈值（毫秒）",
+            "title": "Heartbeat Timeout Ms",
+            "type": "integer"
+          },
           "http_version": {
             "description": "协商到的 HTTP 版本（HTTP/2 / HTTP/1.1）",
             "title": "Http Version",
             "type": "string"
           },
+          "idle_ms": {
+            "default": 0,
+            "description": "距最近一次请求的时长（毫秒；判半开的可见值）",
+            "title": "Idle Ms",
+            "type": "integer"
+          },
+          "idle_timeout_ms": {
+            "default": 0,
+            "description": "连接名额回收阈值（毫秒）",
+            "title": "Idle Timeout Ms",
+            "type": "integer"
+          },
           "is_tls": {
             "description": "是否 TLS 承载（TLS 下由 ALPN 协商 h2）",
             "title": "Is Tls",
             "type": "boolean"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次心跳时刻；从未心跳为 null",
+            "title": "Last Heartbeat At"
+          },
+          "max_connections": {
+            "default": 0,
+            "description": "单副本连接数上限（超限 350020）",
+            "title": "Max Connections",
+            "type": "integer"
+          },
+          "max_streams_per_connection": {
+            "default": 0,
+            "description": "单连接长驻流上限（超限 350021）",
+            "title": "Max Streams Per Connection",
+            "type": "integer"
           },
           "protocol_version": {
             "anyOf": [
@@ -516,9 +583,27 @@
             "description": "本请求所用帧协议版本（帧形态非空；JSON 请求为 null）",
             "title": "Protocol Version"
           },
+          "requests": {
+            "default": 0,
+            "description": "该连接累计请求数",
+            "title": "Requests",
+            "type": "integer"
+          },
+          "retry_after_ms": {
+            "default": 0,
+            "description": "建议重试间隔（毫秒；drain / 限流时用）",
+            "title": "Retry After Ms",
+            "type": "integer"
+          },
           "scheme": {
             "description": "承载协议（http / https）",
             "title": "Scheme",
+            "type": "string"
+          },
+          "server_time": {
+            "description": "服务端当前时间",
+            "format": "date-time",
+            "title": "Server Time",
             "type": "string"
           },
           "supported_protocol_version": {
@@ -526,6 +611,18 @@
             "description": "服务端当前帧协议版本（恒有值）",
             "title": "Supported Protocol Version",
             "type": "string"
+          },
+          "tenant": {
+            "default": "anonymous",
+            "description": "租户编码；无租户上下文为 anonymous",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "uptime_ms": {
+            "default": 0,
+            "description": "连接存活时长（毫秒）",
+            "title": "Uptime Ms",
+            "type": "integer"
           }
         },
         "required": [
@@ -4347,7 +4444,7 @@
     },
     "/msg/connection": {
       "get": {
-        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址）。\n\n只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。\n版本可见（03-2）：`supported_protocol_version` 恒有值（服务端当前帧版本），`protocol_version` 为本\n请求所用帧版本——本端点是 JSON 请求，故恒为 null；帧形态的版本在响应帧 header 与日志里。\n**不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，\n装载校验只对它给软提示，不影响通过）。",
+        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址 + 连接键 / 活跃流 / 阈值 / drain 标记）。\n\n只读自报，不含租户业务数据，故不加权限码（05 域认证落地后再评估收紧）。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、客户端取服务端口径（心跳间隔 / 上限 / drain）。\n**兼作保活**：本端点每被调用一次就刷新连接 `last_seen`——无帧能力的客户端（curl / EventSource）\n用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。\n**不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。\n版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。\n**不声明 `x-error-codes`**：不触达业务判定，没有产品码可声明（与探针端点同性质）。",
         "operationId": "connection_msg_connection_get",
         "responses": {
           "200": {
@@ -4414,6 +4511,80 @@
         "summary": "Connection",
         "tags": [
           "msg-frame"
+        ]
+      }
+    },
+    "/msg/connection/heartbeat": {
+      "post": {
+        "description": "心跳：刷新连接保活并回服务端连接参数（帧 17 或 JSON，同一份 `ConnectionInfo`）。\n\n无权限码：连接探活先于身份（05 域认证落地后再评估收紧）。\n帧形态：类型必须是 17、payload 必须为空、`request_id` 必填（缺失 `350018`）；主版本不符 `350019`。\n两种失败都以 200 + error 帧返回（帧可解析即协议内失败）。\nJSON 形态：空体，返回 `ApiResponse[ConnectionInfo]`；连接数超限时回 429（`350020`）。",
+        "operationId": "heartbeat_msg_connection_heartbeat_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Heartbeat",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350018,
+          350020
         ]
       }
     },
@@ -4724,7 +4895,7 @@
     },
     "/msg/subscribe": {
       "get": {
-        "description": "订阅一条分区（SSE 长驻流，server streaming）。\n\n需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。\n预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；\n`max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。\n进流之后：拉到消息逐条 `message`；无消息按轮询间隔重试（带注释行保活）；\n到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。\n客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。",
+        "description": "订阅一条分区（SSE 长驻流，server streaming）。\n\n需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。\n预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；\n`max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。\n单连接长驻流超上限返回 350021（普通 JSON 错误，尚未进流；名额随即归还）。\n进流之后：拉到消息逐条 `message`；无消息按轮询间隔重试（带注释行保活）；\n到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。\n客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。",
         "operationId": "subscribe_msg_subscribe_get",
         "parameters": [
           {
@@ -4902,7 +5073,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350021
         ]
       }
     },
@@ -4933,6 +5105,37 @@
       "lz4",
       "snappy"
     ],
+    "connection": {
+      "close_reasons": [
+        "client_closed",
+        "deadline",
+        "member_lost",
+        "error"
+      ],
+      "drain": {
+        "goaway": "由 hypercorn 停机路径发送；空闲回收不发 GOAWAY，客户端按普通断线处理",
+        "signal_fields": [
+          "draining",
+          "retry_after_ms"
+        ]
+      },
+      "heartbeat": {
+        "also_refreshed_by": "GET /msg/connection（无帧能力客户端的保活入口）",
+        "endpoint": "POST /msg/connection/heartbeat",
+        "frame_type": 17,
+        "interval_ms": 10000,
+        "payload": "必须为空（心跳不带业务字段，避免成为第二个鉴权入口）",
+        "timeout_ms": 30000
+      },
+      "identity": "tenant|client_host:client_port（同一 HTTP/2 连接内恒定；服务器实现行为，非 ASGI 保证，换服务器须复验）",
+      "idle_timeout": "max(2 × keep_alive_timeout, heartbeat_timeout)（由 [server] 配置派生）",
+      "limits": {
+        "app_layer": "长驻流按连接键计数（350021）；连接数 350020",
+        "max_connections": 1024,
+        "max_streams_per_connection": 100,
+        "protocol_layer": "hypercorn h2_max_concurrent_streams（SETTINGS 下发，客户端自限）"
+      }
+    },
     "endpoint_fields": {
       "ack": {
         "optional": [],
@@ -5092,7 +5295,6 @@
       "5": "nack"
     },
     "known_unsupported": {
-      "heartbeat": "心跳端点与超时判定归 03-4（当前回 350018 并提示后续任务开放）",
       "subscribe": "帧式推送归 03-5（当前回 350018 并提示后续任务开放）"
     },
     "limits": {

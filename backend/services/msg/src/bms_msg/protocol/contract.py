@@ -15,6 +15,12 @@ from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
+from bms_msg.core.config import (
+    CONNECTION_HEARTBEAT_INTERVAL_MS,
+    CONNECTION_HEARTBEAT_TIMEOUT_MS,
+    MAX_CONNECTIONS,
+    MAX_STREAMS_PER_CONNECTION,
+)
 from bms_msg.protocol.frame import (
     FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
@@ -79,7 +85,40 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "known_unsupported": ConcurrentStableDict(
                 {
                     "subscribe": "帧式推送归 03-5（当前回 350018 并提示后续任务开放）",
-                    "heartbeat": "心跳端点与超时判定归 03-4（当前回 350018 并提示后续任务开放）",
+                }
+            ),
+            "connection": ConcurrentStableDict(
+                {
+                    "identity": (
+                        "tenant|client_host:client_port（同一 HTTP/2 连接内恒定；"
+                        "服务器实现行为，非 ASGI 保证，换服务器须复验）"
+                    ),
+                    "heartbeat": ConcurrentStableDict(
+                        {
+                            "frame_type": int(FrameType.HEARTBEAT),
+                            "endpoint": "POST /msg/connection/heartbeat",
+                            "interval_ms": CONNECTION_HEARTBEAT_INTERVAL_MS,
+                            "timeout_ms": CONNECTION_HEARTBEAT_TIMEOUT_MS,
+                            "payload": "必须为空（心跳不带业务字段，避免成为第二个鉴权入口）",
+                            "also_refreshed_by": "GET /msg/connection（无帧能力客户端的保活入口）",
+                        }
+                    ),
+                    "idle_timeout": "max(2 × keep_alive_timeout, heartbeat_timeout)（由 [server] 配置派生）",
+                    "limits": ConcurrentStableDict(
+                        {
+                            "max_connections": MAX_CONNECTIONS,
+                            "max_streams_per_connection": MAX_STREAMS_PER_CONNECTION,
+                            "protocol_layer": "hypercorn h2_max_concurrent_streams（SETTINGS 下发，客户端自限）",
+                            "app_layer": "长驻流按连接键计数（350021）；连接数 350020",
+                        }
+                    ),
+                    "drain": ConcurrentStableDict(
+                        {
+                            "signal_fields": ConcurrentStableList(["draining", "retry_after_ms"]),
+                            "goaway": "由 hypercorn 停机路径发送；空闲回收不发 GOAWAY，客户端按普通断线处理",
+                        }
+                    ),
+                    "close_reasons": ConcurrentStableList(["client_closed", "deadline", "member_lost", "error"]),
                 }
             ),
             "flags": flags,

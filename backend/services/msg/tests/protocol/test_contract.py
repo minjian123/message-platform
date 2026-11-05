@@ -108,8 +108,11 @@ def test_endpoint_required_fields_match_models(endpoint: str, model: type[BaseMo
 
 
 def test_known_unsupported_declares_owner() -> None:
-    """「登记但未服务」的两类必须说明归口（客户端据此判断该等后续任务）。"""
+    """「登记但未服务」的类型必须说明归口（客户端据此判断该等后续任务）。
+
+    `heartbeat` 已由 03-4 落地（移出本清单，语义见 `connection.heartbeat`）；当前只剩帧式订阅。
+    """
     unsupported = frame_contract()["known_unsupported"]
 
-    assert set(unsupported) == {"subscribe", "heartbeat"}
+    assert set(unsupported) == {"subscribe"}
     assert all("03-" in note for note in unsupported.values())

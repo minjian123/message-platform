@@ -18,11 +18,12 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
+from bms_msg.schemas.transport import ConnectionInfo
 
 __all__ = ["FRAME_MEDIA_TYPE", "classify", "error_frame", "result_frame"]
 
-_RETRYABLE_BUSINESS = frozenset({350005, 350015})
-"""业务层里「等一会儿再试有意义」的码：限流 / 背压、延迟区已满。"""
+_RETRYABLE_BUSINESS = frozenset({350005, 350015, 350020, 350021})
+"""业务层里「等一会儿再试有意义」的码：限流 / 背压、延迟区已满、连接数 / 单连接流数超限。"""
 
 _RETRYABLE_SYSTEM = frozenset({10006, 10007})
 """系统层里可退避重试的码：数据库繁忙、下游服务不可用。"""
@@ -45,6 +46,8 @@ _BUSINESS_CODES = frozenset(
         350015,
         350016,
         350017,
+        350020,
+        350021,
     }
 )
 """business 层的产品码（其余产品码兜底进 system，宁可少重试也不放大故障）。"""
@@ -160,6 +163,12 @@ def result_frame(*, frame_type: int, request_id: str | None, result: object) -> 
     elif frame_type in (int(FrameType.ACK), int(FrameType.NACK)) and isinstance(result, (AckResult, NackResult)):
         # 两种「确认类」结果同构（都只有一个 committed_offset），共用一支装配。
         header.set("committed_offset", result.committed_offset)
+    elif frame_type == int(FrameType.HEARTBEAT) and isinstance(result, ConnectionInfo):
+        # 心跳响应与 `GET /msg/connection` 同模型：整份自报按字段平铺进 header（时间已 JSON 化成 ISO）。
+        for name, value in result.model_dump(mode="json").items():
+            header.set(name, value)
+        header.set("request_id", request_id)
+        header.set("protocol_version", PROTOCOL_VERSION)
     else:
         raise TypeError(f"帧类型 {frame_type} 与结果类型 {type(result).__name__} 不匹配")
     return encode_frame(

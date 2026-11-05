@@ -41,6 +41,7 @@ from bms_msg.api.deps import (
     MessageStoreDep,
     OffsetStoreDep,
 )
+from bms_msg.api.frame.guard import CONNECTION_GUARD
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayService, DelayStore
@@ -158,7 +159,13 @@ router = BaseRouter(
     key="msg_data_messages",
     prefix="/msg",
     tags=["msg-data"],
+    dependencies=[Depends(CONNECTION_GUARD)],
 )
+"""数据面路由（`/api/v1` 挂载时带连接守卫：连接数上限与半开清扫对两处挂载同口径，网关路径不构成绕过口）。
+
+守卫是**路由级依赖**（而非逐路由追加）：`DATA_PLANE_ROUTES` 的两处挂载各自复制同一份依赖集合，
+新增端点不必记得补守卫。帧形态的超限拒绝由守卫自己编 error 帧（03-4 详细设计 §5.2）。
+"""
 
 PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 """平台库工作单元依赖（主题元数据归平台库）。"""

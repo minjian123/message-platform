@@ -121,6 +121,9 @@ class StreamSession:
     stream_id: str
     """进程内流标识（`s<n>`，自增；仅用于排障与用例断言，不对外承诺稳定）。"""
 
+    connection_key: str
+    """所属连接的派生键（03-4 补：连接名额与观测按连接聚合；空串表示未关联，测试直连构造时用）。"""
+
     namespace: str
     """命名空间。"""
 
@@ -164,6 +167,7 @@ class StreamRegistry(BaseFrameworkObject):
         consumer_id: str,
         partition: int,
         opened_at: float,
+        connection_key: str = "",
     ) -> str:
         """登记一条流。
 
@@ -174,6 +178,7 @@ class StreamRegistry(BaseFrameworkObject):
             consumer_id: 成员标识。
             partition: 分区号。
             opened_at: 建立时刻（`time.monotonic()` 秒）。
+            connection_key: 所属连接的派生键（03-4；缺省空串表示未关联）。
 
         Returns:
             str: 流标识（`s<n>`）。
@@ -184,6 +189,7 @@ class StreamRegistry(BaseFrameworkObject):
             stream_id,
             StreamSession(
                 stream_id=stream_id,
+                connection_key=connection_key,
                 namespace=namespace,
                 topic=topic,
                 group=group,

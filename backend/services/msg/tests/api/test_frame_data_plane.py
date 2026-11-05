@@ -308,12 +308,16 @@ async def test_frame_type_mismatch_rejected(client: AsyncClient) -> None:
 
 
 async def test_known_unsupported_type_has_hint(client: AsyncClient) -> None:
-    """已登记但未服务（subscribe / heartbeat）：`350018` 且提示归口任务。"""
-    response = await _post_frame(client, "/msg/publish", _frame(int(FrameType.HEARTBEAT), _header()))
-
-    frame = decode_frame(response.content)
+    """登记但未服务（subscribe）与走独立端点的（heartbeat）：都回 `350018` 并给出正确去处。"""
+    unsupported = await _post_frame(client, "/msg/publish", _frame(int(FrameType.SUBSCRIBE), _header()))
+    frame = decode_frame(unsupported.content)
     assert frame.header["code"] == 350018
     assert "03-" in frame.header["message"]
+
+    misplaced = await _post_frame(client, "/msg/publish", _frame(int(FrameType.HEARTBEAT), _header()))
+    hinted = decode_frame(misplaced.content)
+    assert hinted.header["code"] == 350018
+    assert "/msg/connection/heartbeat" in hinted.header["message"]
 
 
 async def test_consume_frame_with_payload_rejected(client: AsyncClient) -> None:

@@ -28,8 +28,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from bms_msg.api.admin import topics
 from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
+from bms_msg.api.frame import connection as frame_connection
 from bms_msg.api.frame import routes as frame_routes
 from bms_msg.api.frame.gate import register_frame_handlers
+from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
@@ -95,6 +97,7 @@ def build_frame_app(
     app.state.delivery_state = DeliveryState()
     app.state.group_store = InMemoryGroupStore()
     app.state.stream_registry = StreamRegistry()
+    app.state.connection_registry = ConnectionRegistry()
     app.state.delay_store = InMemoryDelayStore()
     app.state.delay_scheduler = DelayScheduler(
         store=app.state.delay_store,
@@ -127,7 +130,12 @@ def build_frame_app(
     routers = [topics.router, messages.router, data_groups.router]
     app.include_router(mount_service_routers(ConcurrentStableList(routers)))
     if mount_frame:
-        app.include_router(mount_service_routers(ConcurrentStableList([frame_routes.router]), prefix=""))
+        app.include_router(
+            mount_service_routers(
+                ConcurrentStableList([frame_routes.router, frame_routes.connection_router, frame_connection.router]),
+                prefix="",
+            )
+        )
 
     async def _platform_uow() -> AsyncGenerator[DbUnitOfWork]:
         """平台库工作单元替身（共用会话模式复用；引擎模式每次请求新开）。

@@ -107,7 +107,7 @@ class FrameType(IntEnum):
     """错误帧（响应帧，携带 `code` / `layer` / `retryable`）。"""
 
     HEARTBEAT = 17
-    """心跳（只登记编号：端点与超时判定归 03-4）。"""
+    """心跳（03-4 启用：端点 `POST /msg/connection/heartbeat`；响应沿用同类型 + response 位）。"""
 
 
 class FrameFlags(IntFlag):

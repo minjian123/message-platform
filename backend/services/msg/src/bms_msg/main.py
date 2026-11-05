@@ -6,7 +6,8 @@
 > 01-5 接入延迟区（延迟存储 + 时间轮推进器 + 只读待投视图）；
 > 01-6 接入保留期清理（端口 + 内存实现，请求驱动）与重放任务（任务表 + 执行器 + 审计出口）；
 > 03-1 接入 HTTP/2 帧入口（根路径 `/msg/*` 复用数据面 + SSE 长驻流 + 连接元数据），并把
-> 延迟推进器与重放执行器挂到基座 `startup_hooks()`（装配后启动、停机随资源管理器回收）。
+> 延迟推进器与重放执行器挂到基座 `startup_hooks()`（装配后启动、停机随资源管理器回收）；
+> 03-4 接入连接管理（连接登记表 + 连接数 / 长驻流上限 + 应用层心跳 + drain 协商）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -29,6 +30,7 @@ from fastapi import APIRouter, FastAPI
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
 from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.router import api_router, frame_router
+from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
@@ -84,7 +86,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
 
     def configure_service(self, app: FastAPI, settings: Settings) -> None:
         """数据面进程级状态注入：消息存储 / 位点 / 死信 / 投递状态 / 组存储 / 延迟区与推进器 /
-        审计出口 / 重放执行器 / 流登记表 / 工作单元工厂各一份。
+        审计出口 / 重放执行器 / 流登记表 / **连接登记表** / 工作单元工厂各一份。
 
         替换实现只改这里（8B_02 换文件段与 `.delay` 段、位点文件与 `msg_group` 两表，端口与端点不变）；
         首期内存态随进程重启清空，已登记为遗留（详细设计 §12 风险 1）。
@@ -102,6 +104,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.delivery_state = DeliveryState()
         app.state.group_store = InMemoryGroupStore()
         app.state.stream_registry = StreamRegistry()
+        app.state.connection_registry = ConnectionRegistry()
         delay_store = InMemoryDelayStore()
         app.state.delay_store = delay_store
         app.state.delay_scheduler = DelayScheduler(

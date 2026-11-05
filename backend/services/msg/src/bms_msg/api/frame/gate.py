@@ -43,6 +43,7 @@ from bms_msg.api.deps import (
     MessageStoreDep,
     OffsetStoreDep,
 )
+from bms_msg.api.frame.media import is_frame_request
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, error_frame, result_frame
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
@@ -59,7 +60,6 @@ from bms_msg.errors import (
     MsgVersionUnsupportedError,
 )
 from bms_msg.protocol.frame import (
-    FRAME_CONTENT_TYPE,
     PROTOCOL_VERSION,
     Frame,
     FrameFlags,
@@ -98,19 +98,6 @@ class FrameHandled(Exception):
         """
         super().__init__("frame request handled")
         self.response = response
-
-
-def is_frame_request(request: Request) -> bool:
-    """判断是否为帧形态请求（只看媒体类型；缺省 / JSON 一律不是）。
-
-    Args:
-        request: 当前请求。
-
-    Returns:
-        bool: `Content-Type` 主类型为 `application/x-msg-frame` 时 True。
-    """
-    raw = request.headers.get("content-type", "")
-    return raw.split(";")[0].strip().lower() == FRAME_CONTENT_TYPE
 
 
 def register_frame_handlers(app: FastAPI) -> None:
@@ -214,10 +201,10 @@ def _ensure_frame_type(frame: Frame, expected: int) -> None:
     """
     if frame.frame_type == expected:
         return
-    if frame.frame_type in (int(FrameType.SUBSCRIBE), int(FrameType.HEARTBEAT)):
-        raise MsgFrameInvalidError(
-            f"帧类型 {frame.frame_type} 暂未开放（帧式订阅归 03-5、心跳端点归 03-4）；{_FRAME_MISMATCH_HINT}"
-        )
+    if frame.frame_type == int(FrameType.SUBSCRIBE):
+        raise MsgFrameInvalidError(f"帧类型 {frame.frame_type} 暂未开放（帧式订阅推送归 03-5）；{_FRAME_MISMATCH_HINT}")
+    if frame.frame_type == int(FrameType.HEARTBEAT):
+        raise MsgFrameInvalidError(f"心跳帧请发到 /msg/connection/heartbeat；{_FRAME_MISMATCH_HINT}")
     if frame.frame_type == int(FrameType.NACK):
         raise MsgFrameInvalidError(f"nack 帧请发到 /msg/nack；{_FRAME_MISMATCH_HINT}")
     raise MsgFrameInvalidError(f"{_FRAME_MISMATCH_HINT}（收到 {frame.frame_type}，期望 {expected}）")

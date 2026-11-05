@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.api.deps import get_stream_tuning
 from bms_msg.api.frame.routes import stream_events
-from bms_msg.broker.transport import StreamTuning
+from bms_msg.broker.transport import StreamTuning, connection_meta
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.schemas.transport import SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
@@ -128,8 +128,15 @@ def _query(**overrides: object) -> SubscribeQuery:
     return SubscribeQuery.model_validate(payload)
 
 
+_TEST_CONNECTION_KEY = "demo|127.0.0.1:123"
+"""用例自造的连接键（直调生成器没有 HTTP 请求上下文，连接名额由用例手工登记）。"""
+
+
 def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: StreamTuning) -> AsyncGenerator[bytes]:
     """构造生成器（复用应用状态里的存储与登记表）。
+
+    03-4 起生成器还要归还连接名额，故先登记一条连接再开流——名额与流登记成对，才能在收尾断言里
+    看出「流结束即释放」。
 
     Args:
         app: 应用实例。
@@ -140,9 +147,18 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
     Returns:
         AsyncGenerator[bytes, None]: 事件字节流（需要 `aclose()`，故不用更宽的 `AsyncIterator`）。
     """
+    app.state.connection_registry.touch(
+        key=_TEST_CONNECTION_KEY,
+        meta=connection_meta({"http_version": "2", "scheme": "http", "client": ("127.0.0.1", 123)}),
+        tenant=tenant.code,
+        now=0.0,
+        wall=0.0,
+        heartbeat=False,
+    )
     return stream_events(
         uow_factory=app.state.uow_factory,
         registry=app.state.stream_registry,
+        connections=app.state.connection_registry,
         store=app.state.message_store,
         offsets=app.state.offset_store,
         dead_letters=app.state.dead_letter_queue,
@@ -151,6 +167,7 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
         tenant=tenant,
         query=query,
         tuning=tuning,
+        connection_key=_TEST_CONNECTION_KEY,
     )
 
 
