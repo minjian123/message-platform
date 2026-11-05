@@ -536,6 +536,9 @@ class FileDelayStore(DelayStore):
         started = time.monotonic()
         self._entries.clear()
         self._tenant_counts.clear()
+        # 重建会换掉全部段对象：先把旧写句柄关掉（否则第二次重建会留下孤儿 fd，Windows 上还会锁住文件）
+        for log in self._logs.values():
+            log.close()
         self._logs.clear()
         counters = _RebuildCounters()
         recoveries = self._load_segments(counters)
