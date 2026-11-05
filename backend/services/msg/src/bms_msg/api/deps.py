@@ -22,7 +22,7 @@ from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
-from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.offset import OffsetEnumerator, OffsetPurger, OffsetResetter, OffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayRunner, UowFactory
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler
@@ -46,6 +46,9 @@ __all__ = [
     "DeliveryStateDep",
     "GroupStoreDep",
     "MessageStoreDep",
+    "OffsetEnumeratorDep",
+    "OffsetPurgerDep",
+    "OffsetResetterDep",
     "OffsetStoreDep",
     "PartitionDirectoryDep",
     "RateLimiterDep",
@@ -69,6 +72,9 @@ __all__ = [
     "get_delivery_state",
     "get_group_store",
     "get_message_store",
+    "get_offset_enumerator",
+    "get_offset_purger",
+    "get_offset_resetter",
     "get_offset_store",
     "get_partition_directory",
     "get_rate_limiter",
@@ -150,6 +156,42 @@ def get_offset_store(request: Request) -> OffsetStore:
         OffsetStore: 位点存储实现。
     """
     return cast("OffsetStore", request.app.state.offset_store)
+
+
+def get_offset_resetter(request: Request) -> OffsetResetter:
+    """取位点重置端口（02-3；与 `OffsetStore` 同一个实例，端口按能力分开声明）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        OffsetResetter: 位点重置实现。
+    """
+    return cast("OffsetResetter", request.app.state.offset_store)
+
+
+def get_offset_enumerator(request: Request) -> OffsetEnumerator:
+    """取位点枚举端口（02-3；位点查询端点归 06-2）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        OffsetEnumerator: 位点枚举实现。
+    """
+    return cast("OffsetEnumerator", request.app.state.offset_store)
+
+
+def get_offset_purger(request: Request) -> OffsetPurger:
+    """取孤儿位点清理端口（02-3；触发端点归 06-2）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        OffsetPurger: 位点清理实现。
+    """
+    return cast("OffsetPurger", request.app.state.offset_store)
 
 
 def get_dead_letter_queue(request: Request) -> DeadLetterQueue:
@@ -241,6 +283,15 @@ MessageStoreDep = Annotated[MessageStore, Depends(get_message_store)]
 
 OffsetStoreDep = Annotated[OffsetStore, Depends(get_offset_store)]
 """路由参数写法：`offsets: OffsetStoreDep`。"""
+
+OffsetResetterDep = Annotated[OffsetResetter, Depends(get_offset_resetter)]
+"""路由参数写法：`resetter: OffsetResetterDep`（位点重置端点归 06-2）。"""
+
+OffsetEnumeratorDep = Annotated[OffsetEnumerator, Depends(get_offset_enumerator)]
+"""路由参数写法：`offsets: OffsetEnumeratorDep`（位点查询端点归 06-2）。"""
+
+OffsetPurgerDep = Annotated[OffsetPurger, Depends(get_offset_purger)]
+"""路由参数写法：`purger: OffsetPurgerDep`（孤儿位点清理触发归 06-2）。"""
 
 DeadLetterQueueDep = Annotated[DeadLetterQueue, Depends(get_dead_letter_queue)]
 """路由参数写法：`dead_letters: DeadLetterQueueDep`。"""

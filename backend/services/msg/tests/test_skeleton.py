@@ -16,7 +16,7 @@ from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import NotifyingMessageStore
@@ -126,7 +126,8 @@ def test_application_assembles_data_plane_state() -> None:
         assert isinstance(app.state.message_store, NotifyingMessageStore)
         assert isinstance(app.state.message_store.inner, FileMessageStore)
         assert isinstance(app.state.partition_directory, PartitionDirectory)
-        assert isinstance(app.state.offset_store, InMemoryOffsetStore)
+        # 02-3 起位点换成文件实现（单文件双槽 + 内存为准 + 后台刷盘），端口与注入点不变。
+        assert isinstance(app.state.offset_store, FileOffsetStore)
         assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)
         assert isinstance(app.state.group_store, InMemoryGroupStore)

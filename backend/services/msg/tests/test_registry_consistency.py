@@ -62,8 +62,16 @@ def test_service_record_matches_manifest() -> None:
 
 
 def test_application_assembles_with_manifest() -> None:
-    """真实装配：`create(None)` 能带着代码清单 + 产品声明起来（00-1 只验证到「可构造」）。"""
+    """真实装配：`create(None)` 能带着代码清单 + 产品声明起来（00-1 只验证到「可构造」）。
+
+    **先 `reset()`**：注册表构建后运行期只读，前置用例（`test_entrypoints` 跑 `run_service`、
+    `test_skeleton` 装配冒烟）跑过之后会停在「已构建」态，不重置就会抛
+    `PluginError: 插件注册表已构建`——那是用例顺序问题，不是装配问题（02-3 选测暴露）。
+    """
+    from bms_core.core.plugin import default_plugin_registry
+
     from bms_msg.main import ApplicationFactory
 
+    default_plugin_registry().reset()
     app = ApplicationFactory().create(None)
     assert app.title

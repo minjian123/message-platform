@@ -30,7 +30,7 @@ from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
 
-from bms_msg.broker.log import MessageStore, SegmentMeta, StoredMessage
+from bms_msg.broker.log import MessageStore, PartitionNotBoundError, SegmentMeta, StoredMessage
 from bms_msg.broker.offset import OffsetRealigner
 from bms_msg.broker.record import (
     ParsedRecord,
@@ -113,13 +113,6 @@ def _timestamp() -> str:
         str: `%Y%m%dT%H%M%S%f` 形态的 UTC 时刻（可字典序排序，便于按时间淘汰）。
     """
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-
-
-class PartitionNotBoundError(RuntimeError):
-    """分区目录未登记（`topic_id` 未经 `TopicRouter.resolve()` 解析过）。
-
-    程序性错误：属装配 / 接线缺陷，不是客户端可纠正的输入错误，按 500 暴露。
-    """
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,10 @@
 > 02-1 把消息存储换成**文件段实现**（目录登记表 + 记录格式 + 段与索引 + length 级尾部恢复），
 > `NotifyingMessageStore` 仍是最外层；
 > 02-2 补崩溃恢复（恢复点 + CRC 尾部扫描与截断取证 + 索引残条修复 + 非末段对账 + 位点对齐），
-> 并把存储登记进资源管理器（停机先停后台循环、再刷日志与恢复点）。
+> 并把存储登记进资源管理器（停机先停后台循环、再刷日志与恢复点）；
+> 02-3 把位点换成**文件实现**（单文件双槽 + 内存为准 + 后台定时刷 + 脏阈值提前刷 + 关闭强制刷），
+> 并按其偏序分两处登记：`OffsetFlusher` 早于 `StorageCloser`（先刷日志、后刷位点）、
+> `OffsetFlushLoop` 在启动钩子里先于 `BackgroundLoops`（停机先断上游、再停刷盘）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -43,9 +46,9 @@ from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.lifecycle import StorageCloser, start_background_tasks
+from bms_msg.broker.lifecycle import OffsetFlusher, StorageCloser, start_background_tasks
 from bms_msg.broker.metrics import BackpressureMetrics
-from bms_msg.broker.offset import InMemoryOffsetStore
+from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
@@ -112,21 +115,36 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         """
         waiter = DeliveryWaiter()
         app.state.waiter = waiter
-        # 02-2：位点存储先于消息存储创建——崩溃恢复截断后要把越界位点夹到新 LEO。
-        app.state.offset_store = InMemoryOffsetStore()
+        resources = cast("ResourceManager", app.state.resources)
+        # 02-3：审计出口提前构造——位点重置 / 清理必须留痕（fail-closed），位点存储要用同一个实例。
+        sink: AuditSink = AuditEventEmitter(
+            registry=cast("EngineRegistry", app.state.engine_registry),
+            session_factory=cast("SessionFactory", app.state.session_factory),
+            settings=settings,
+        )
+        app.state.audit_sink = sink
         # 02-1：主题目录登记表（topic_id → tenant/namespace/name）+ 文件段存储。
         # 目录表由 TopicRouter.resolve 登记；存储层只在「未登记且盘上已有目录」时反查。
-        app.state.partition_directory = PartitionDirectory(root=data_root())
+        root = data_root()
+        app.state.partition_directory = PartitionDirectory(root=root)
+        # 02-3：位点换成文件实现（单文件双槽 + 内存为准 + 后台刷盘），`OffsetStore` 端口签名不变。
+        offset_store = FileOffsetStore(directory=app.state.partition_directory, root=root, audit=sink)
+        app.state.offset_store = offset_store
+        # 02-3：位点刷盘句柄**必须早于 `StorageCloser` 注册**——`ResourceManager` 逆序释放，
+        # 早注册即晚释放，才得到「先刷日志、后刷位点」的正确偏序（反过来会让位点越过日志尾）。
+        resources.register(OffsetFlusher(store=offset_store))
         # 消息存储包一层「写入即唤醒」：普通发布 / 延迟转投 / 重放三处写入自动唤醒长轮询与长驻流。
         # **装配顺序硬约束**：通知包装必须是最外层（装反了不报错，只是长轮询退化为等到超时）。
         file_store = FileMessageStore(
             directory=app.state.partition_directory,
-            realigner=app.state.offset_store,
+            realigner=offset_store,
         )
+        # 02-3：双向依赖只能后绑——store 构造时要 realigner，位点判越界时要 store 的 LEO。
+        offset_store.bind_ceiling(file_store)
         app.state.file_store = file_store
         app.state.message_store = NotifyingMessageStore(file_store, waiter)
-        # 02-2：关闭钩子。此处注册早于 startup_hooks 里的后台循环，逆序释放即「先停循环、后刷日志」。
-        cast("ResourceManager", app.state.resources).register(StorageCloser(store=file_store))
+        # 02-2：日志关闭钩子。此处注册晚于位点刷盘句柄，逆序释放即「先刷日志、后刷位点」。
+        resources.register(StorageCloser(store=file_store))
         app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
         app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
         app.state.dead_letter_queue = InMemoryDeadLetterQueue()
@@ -144,12 +162,6 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             messages=app.state.message_store,
             wheel=DelayWheel(),
         )
-        sink: AuditSink = AuditEventEmitter(
-            registry=cast("EngineRegistry", app.state.engine_registry),
-            session_factory=cast("SessionFactory", app.state.session_factory),
-            settings=settings,
-        )
-        app.state.audit_sink = sink
         app.state.uow_factory = platform_uow_factory(app)
         app.state.replay_runner = ReplayRunner(
             messages=app.state.message_store,

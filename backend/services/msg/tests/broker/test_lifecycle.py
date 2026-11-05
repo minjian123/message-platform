@@ -17,6 +17,40 @@ from bms_msg.main import ApplicationFactory
 pytestmark = pytest.mark.kiwi_id(2420)
 
 
+class _OffsetFlushStub:
+    """位点刷盘替身（02-3 起启动钩子也会拉起位点刷盘循环并登记回收句柄）。
+
+    本文件只做**最小适配**：不断言 02-3 的偏序与刷盘行为（那是 Kiwi 2429 的用例），
+    只为「钩子能在只含后台任务的应用上跑通」提供一个可调用的存储。
+    """
+
+    def __init__(self) -> None:
+        """初始化（记录各钩子是否被调用）。"""
+        self.ensured = False
+        self.stopped = False
+        self.closed = False
+
+    def ensure_started(self) -> None:
+        """标记循环已启动。"""
+        self.ensured = True
+
+    async def stop(self) -> None:
+        """标记循环已停止。"""
+        self.stopped = True
+
+    async def run_once(self) -> int:
+        """不刷任何文件。
+
+        Returns:
+            int: 恒 0。
+        """
+        return 0
+
+    async def aclose(self) -> None:
+        """标记已刷盘关闭。"""
+        self.closed = True
+
+
 def _app(scheduler: DelayScheduler, runner: ReplayRunner) -> FastAPI:
     """构造只带后台任务与资源管理器的空应用。
 
@@ -30,6 +64,7 @@ def _app(scheduler: DelayScheduler, runner: ReplayRunner) -> FastAPI:
     app = FastAPI()
     app.state.delay_scheduler = scheduler
     app.state.replay_runner = runner
+    app.state.offset_store = _OffsetFlushStub()
     app.state.resources = ResourceManager()
     return app
 

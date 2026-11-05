@@ -385,3 +385,68 @@ CORRUPT_TAIL_KEEP = 8
 
 设上限的理由：持续损坏时每次重启都会产出一份接近全量的副本，不清理会把磁盘再吃满一遍。
 """
+
+# ---------------------------------------------------------------------------
+# 02-3 消费位点：目录 / 文件格式 / 刷盘
+# ---------------------------------------------------------------------------
+
+OFFSETS_SUBDIR = "offsets"
+"""数据根下的位点子目录名（`{root}/offsets/{tenant_id}/{group_dir}/{topic_id}-{partition}.offset`）。
+
+**与 `data/` 平级而非塞进 `data/{tenant}/`**：位点与日志的备份口径不同（位点每日快照、日志不备份），
+分目录让备份只搬 `offsets/`；且命名空间模式允许 `offsets` 作名字，塞进 `data/{tenant}/` 会撞名。
+"""
+
+OFFSET_FILE_SUFFIX = ".offset"
+"""位点文件后缀（`{topic_id}-{partition}.offset`）。"""
+
+OFFSET_FILE_TEMP_SUFFIX = ".tmp"
+"""位点写入的临时文件后缀（同目录同卷，`Path.replace` 才是原子替换）。"""
+
+OFFSET_FILE_MAGIC = b"MOFS"
+"""位点文件魔数（msg offset file store）：前 4 字节不符即判「不是位点文件」。"""
+
+OFFSET_FILE_FORMAT_VERSION = 1
+"""位点文件格式版本（读到更高版本即拒绝加载，与记录 / 恢复点同口径）。"""
+
+OFFSET_HEADER_FIXED_BYTES = 19
+"""文件头定长部分：magic 4 + version 2 + group_len 1 + topic_id 8 + partition_no 4（组名变长另计）。"""
+
+OFFSET_SLOT_BYTES = 24
+"""单槽字节数：`seq` 4 + `offset` 8 + `updated_at_us` 8 + `crc` 4。"""
+
+OFFSET_MAX_GROUP_BYTES = 128
+"""组名 UTF-8 字节上限（与 `GROUP_NAME_PATTERN` 的 128 字符上限同尺）。"""
+
+OFFSET_GROUP_DIR_MAX_CHARS = 64
+"""组目录名保留的可读字符数：超出截断，唯一性由哈希后缀保证。
+
+截断的理由是 Windows 路径长度上限（租户雪花 + 组名 128 + 文件名后接近 260），
+不影响正确性——组名以文件头 `group` 字段为准，不从目录名反推。
+"""
+
+OFFSET_GROUP_HASH_CHARS = 8
+"""组目录名哈希后缀位数（sha1 前 8 位十六进制）。
+
+存在的唯一理由：`GROUP_NAME_PATTERN` 允许大小写混用，而 Windows / macOS 大小写不敏感——
+直接用组名作目录名会让 `Audit` 与 `audit` 共享一个文件（前者位点丢失、后者跳消息）。
+"""
+
+OFFSET_FLUSH_INTERVAL_MS_ENV = "MSG_OFFSET_FLUSH_INTERVAL_MS"
+"""位点刷盘时间窗环境变量名（毫秒）。"""
+
+OFFSET_FLUSH_INTERVAL_MS = 1_000
+"""位点刷盘时间窗缺省值（毫秒）：崩溃最多重复 1 秒内的提交。
+
+取 1s 而非日志 fsync 的 200ms：位点丢失的后果是**重复消费**（业务侧幂等兜底），
+而日志丢失的后果是丢消息——两者代价不对称，位点可以更松。实测结论回填架构 04 §11 #5。
+"""
+
+OFFSET_DIRTY_LIMIT_ENV = "MSG_OFFSET_DIRTY_LIMIT"
+"""位点单次刷盘文件数上限的环境变量名。"""
+
+OFFSET_DIRTY_LIMIT = 256
+"""位点单次刷盘的文件数上限：既是「脏到多少就提前刷」的触发阈值，也是单轮 fsync 次数的上界。
+
+一个组订 100 分区就是 100 个位点文件；不设上界时一次刷盘可能卡住事件循环数百毫秒。
+"""

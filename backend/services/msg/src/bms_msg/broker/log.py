@@ -29,12 +29,23 @@ __all__ = [
     "InMemoryMessageStore",
     "MessageStore",
     "PartitionKey",
+    "PartitionNotBoundError",
     "SegmentMeta",
     "StoredMessage",
 ]
 
 PartitionKey = tuple[int, int]
 """分区键：`(topic_id, partition_no)`。"""
+
+
+class PartitionNotBoundError(RuntimeError):
+    """分区目录未登记（`topic_id` 未经 `TopicRouter.resolve()` 解析过）。
+
+    程序性错误：属装配 / 接线缺陷，不是客户端可纠正的输入错误，按 500 暴露。
+
+    **定义在端口模块而非 `file_store`**：位点存储（`broker/offset.py`）也要在「租户无从解析」时抛同一类错误，
+    而 `file_store` 已经依赖 `offset`（`OffsetRealigner`），反向依赖会成环；两者同源才有一致的排障口径。
+    """
 
 
 @dataclass(frozen=True)
