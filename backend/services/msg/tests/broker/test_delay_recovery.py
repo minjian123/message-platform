@@ -20,11 +20,18 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_msg.broker import delay_file as delay_file_module
 from bms_msg.broker.delay import DelayRecord, InMemoryDelayStore
 from bms_msg.broker.delay_file import FileDelayStore
-from bms_msg.broker.delay_segment import list_delay_segment_seqs
+from bms_msg.broker.delay_segment import DelaySegment, list_delay_segment_seqs
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.lifecycle import DelayCloser
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
-from bms_msg.broker.record import to_epoch_us
+from bms_msg.broker.record import (
+    DELAY_KIND_CLEAR,
+    RECORD_FORMAT_VERSION,
+    DelayStamp,
+    RecordHeader,
+    encode_record,
+    to_epoch_us,
+)
 from bms_msg.broker.recovery import RecoveryLedger
 from bms_msg.broker.scheduler import DELAY_LAYER_SECOND, DelayScheduler, DelayWheel
 from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
@@ -510,8 +517,10 @@ async def test_rebuild_dedupes_multiple_records_in_one_partition(tmp_path: Path,
     store = _store(tmp_path, now=clock)
     first = _record(clock, log_id="l-1", span_ms=1_000)
     second = _record(clock, log_id="l-2", span_ms=600_000)
+    third = _record(clock, log_id="l-3", span_ms=1_200_000)
     await store.enqueue(second)  # 先入长跨度，后入短跨度 → 遍历时下界会被替换（更早者胜出）
     await store.enqueue(first)
+    await store.enqueue(third)
     await messages.append(
         topic_id=TOPIC_ID,
         partition_no=0,
@@ -529,8 +538,8 @@ async def test_rebuild_dedupes_multiple_records_in_one_partition(tmp_path: Path,
 
     reopened = _store(tmp_path, now=clock, dedupe=messages)
     report = await reopened.rebuild()
-    assert (report.records, report.deduped) == (1, 1)
-    assert [item.log_id for item in await reopened.list_all()] == ["l-2"]
+    assert (report.records, report.deduped) == (2, 1)
+    assert [item.log_id for item in await reopened.list_all()] == ["l-2", "l-3"]
 
 
 async def test_rebuild_skips_unrelated_entries_under_data_root(tmp_path: Path, clock: Callable[[], datetime]) -> None:
@@ -546,6 +555,7 @@ async def test_rebuild_skips_unrelated_entries_under_data_root(tmp_path: Path, c
     topic.mkdir(parents=True)
     (topic / "notes.txt").write_text("x", encoding="utf-8")
     (topic / "0").mkdir()
+    (topic / "1").mkdir()  # 无 `.delay` 段的分区目录
 
     store = _store(tmp_path, now=clock)
     await store.enqueue(_record(clock))
@@ -613,3 +623,60 @@ def _fail_append(self: object, blob: bytes, *, record_bytes: int) -> object:
     """
     del self, blob, record_bytes
     raise OSError(28, "No space left on device")
+
+
+async def test_rebuild_tolerates_tombstone_without_put(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """重建遇到「只有 tombstone、没有对应 put」时按无操作处理（put 可能随隔离段一起丢失）。"""
+    directory = _partition_dir(tmp_path)
+    directory.mkdir(parents=True)
+    DelaySegment(partition_dir=directory, seq=0).append(_clear_only_blob())
+
+    store = _store(tmp_path, now=clock)
+    report = await store.rebuild()
+    assert (report.records, report.cleared) == (0, 0), "孤儿 tombstone 不计数、不报错"
+    assert list(await store.list_all()) == []
+
+
+async def test_dedupe_without_hits_is_noop(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """去重源可用但没有命中：不清任何记录（`cleared == 0` 分支）。"""
+    messages = FileMessageStore(directory=_directory(tmp_path), fsync_mode="each", clock=lambda: 0.0)
+    store = _store(tmp_path, now=clock)
+    await store.enqueue(_record(clock, log_id="l-1"))
+
+    reopened = _store(tmp_path, now=clock, dedupe=messages)
+    report = await reopened.rebuild()
+    assert (report.records, report.deduped) == (1, 0)
+
+
+async def test_aclose_after_failed_first_append(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """首个 append 就失败（分区尚无段）后优雅关闭：不报错、不刷不存在的段。"""
+    store = _store(tmp_path, now=clock)
+    log = store._partition(topic_id=TOPIC_ID, partition_no=0)  # pyright: ignore[reportPrivateUsage] - 造「有分区无段」状态
+    log.fsync_active()
+    await store.aclose()
+    assert list_delay_segment_seqs(_partition_dir(tmp_path)) == []
+
+
+def _clear_only_blob() -> bytes:
+    """构造一条只有 tombstone 的记录字节（无对应 put）。
+
+    Returns:
+        bytes: 完整记录字节。
+    """
+    header = RecordHeader(
+        format_version=RECORD_FORMAT_VERSION,
+        topic_id=TOPIC_ID,
+        partition_no=0,
+        tenant_id=TENANT_ID,
+        message_id="m-orphan",
+        log_id="l-orphan",
+        key=None,
+        trace_id=None,
+        published_at_us=1,
+        headers=(),
+        content_type="",
+        compression="",
+        uncompressed_len=None,
+        delay=DelayStamp(kind=DELAY_KIND_CLEAR),
+    )
+    return encode_record(header=header, payload=b"")
