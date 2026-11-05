@@ -10,7 +10,9 @@
 > 03-4 接入连接管理（连接登记表 + 连接数 / 长驻流上限 + 应用层心跳 + drain 协商）；
 > 03-5 接入背压与流控（分区唤醒器 + inflight 双阈值 + 两级限流 + 指标 collector，消息存储包一层通知）；
 > 02-1 把消息存储换成**文件段实现**（目录登记表 + 记录格式 + 段与索引 + length 级尾部恢复），
-> `NotifyingMessageStore` 仍是最外层。
+> `NotifyingMessageStore` 仍是最外层；
+> 02-2 补崩溃恢复（恢复点 + CRC 尾部扫描与截断取证 + 索引残条修复 + 非末段对账 + 位点对齐），
+> 并把存储登记进资源管理器（停机先停后台循环、再刷日志与恢复点）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -22,6 +24,7 @@ from bms_core.application import BaseServiceApplicationFactory, StartupHook
 from bms_core.audit.emit import AuditEventEmitter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.config import Settings
+from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import SessionFactory, session_scope
@@ -40,7 +43,7 @@ from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.lifecycle import start_background_tasks
+from bms_msg.broker.lifecycle import StorageCloser, start_background_tasks
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
@@ -109,17 +112,23 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         """
         waiter = DeliveryWaiter()
         app.state.waiter = waiter
+        # 02-2：位点存储先于消息存储创建——崩溃恢复截断后要把越界位点夹到新 LEO。
+        app.state.offset_store = InMemoryOffsetStore()
         # 02-1：主题目录登记表（topic_id → tenant/namespace/name）+ 文件段存储。
         # 目录表由 TopicRouter.resolve 登记；存储层只在「未登记且盘上已有目录」时反查。
         app.state.partition_directory = PartitionDirectory(root=data_root())
         # 消息存储包一层「写入即唤醒」：普通发布 / 延迟转投 / 重放三处写入自动唤醒长轮询与长驻流。
         # **装配顺序硬约束**：通知包装必须是最外层（装反了不报错，只是长轮询退化为等到超时）。
-        app.state.message_store = NotifyingMessageStore(
-            FileMessageStore(directory=app.state.partition_directory), waiter
+        file_store = FileMessageStore(
+            directory=app.state.partition_directory,
+            realigner=app.state.offset_store,
         )
+        app.state.file_store = file_store
+        app.state.message_store = NotifyingMessageStore(file_store, waiter)
+        # 02-2：关闭钩子。此处注册早于 startup_hooks 里的后台循环，逆序释放即「先停循环、后刷日志」。
+        cast("ResourceManager", app.state.resources).register(StorageCloser(store=file_store))
         app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
         app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
-        app.state.offset_store = InMemoryOffsetStore()
         app.state.dead_letter_queue = InMemoryDeadLetterQueue()
         app.state.delivery_state = DeliveryState()
         app.state.group_store = InMemoryGroupStore()

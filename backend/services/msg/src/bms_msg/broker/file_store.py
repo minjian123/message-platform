@@ -21,7 +21,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -31,6 +31,7 @@ from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
 
 from bms_msg.broker.log import MessageStore, SegmentMeta, StoredMessage
+from bms_msg.broker.offset import OffsetRealigner
 from bms_msg.broker.record import (
     ParsedRecord,
     RecordHeader,
@@ -38,8 +39,17 @@ from bms_msg.broker.record import (
     from_epoch_us,
     to_epoch_us,
 )
+from bms_msg.broker.recovery import (
+    RecoveryPoint,
+    RecoveryProbe,
+    RecoveryReport,
+    SegmentStamp,
+    read_recovery_point,
+    write_recovery_point,
+)
 from bms_msg.broker.segment import SegmentFile, list_segment_bases
 from bms_msg.core.config import (
+    CORRUPT_TAIL_KEEP,
     DATA_DIR_ENV,
     DATA_ROOT_SUBDIR,
     DEFAULT_DATA_DIR,
@@ -55,6 +65,7 @@ from bms_msg.core.config import (
     INDEX_INTERVAL_BYTES,
     LOG_ID_INDEX_LIMIT,
     RECORD_FORMAT_VERSION,
+    RECOVERY_POINT_NAME,
     SEGMENT_MAX_BYTES,
     SEGMENT_ROLL_MS,
     TIME_INDEX_INTERVAL_MS,
@@ -93,6 +104,15 @@ def data_root() -> Path:
         Path: 数据根目录（未创建）。
     """
     return Path(os.environ.get(DATA_DIR_ENV, DEFAULT_DATA_DIR))
+
+
+def _timestamp() -> str:
+    """截断取证文件名里的时间戳（UTC）。
+
+    Returns:
+        str: `%Y%m%dT%H%M%S%f` 形态的 UTC 时刻（可字典序排序，便于按时间淘汰）。
+    """
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
 
 
 class PartitionNotBoundError(RuntimeError):
@@ -276,6 +296,8 @@ class _PartitionLog:
         self,
         *,
         directory: Path,
+        topic_id: int,
+        partition_no: int,
         fsync_mode: str,
         fsync_interval_ms: int,
         fsync_batch_records: int,
@@ -284,11 +306,14 @@ class _PartitionLog:
         index_interval: int,
         time_index_interval_ms: int,
         clock: Callable[[], float],
+        probe: RecoveryProbe | None = None,
     ) -> None:
-        """初始化并加载已有段（不做任何写入）。
+        """初始化并加载已有段（加载即完成崩溃恢复，不做任何写入）。
 
         Args:
             directory: 分区目录。
+            topic_id: 主题主键（恢复点归属自检）。
+            partition_no: 分区号（恢复点归属自检）。
             fsync_mode: fsync 档位（已校验）。
             fsync_interval_ms: 刷盘时间窗（毫秒）。
             fsync_batch_records: 按批档的条数阈值。
@@ -297,8 +322,11 @@ class _PartitionLog:
             index_interval: 稀疏 offset 索引间隔（字节）。
             time_index_interval_ms: 时间索引间隔（毫秒）。
             clock: 单调毫秒时钟（用例注入以确定性驱动刷盘窗口）。
+            probe: 恢复读取量探针（缺省不统计）。
         """
         self._directory = directory
+        self._topic_id = topic_id
+        self._partition_no = partition_no
         self._fsync_mode = fsync_mode
         self._fsync_interval_ms = fsync_interval_ms
         self._fsync_batch_records = fsync_batch_records
@@ -307,12 +335,16 @@ class _PartitionLog:
         self._index_interval = index_interval
         self._time_index_interval_ms = time_index_interval_ms
         self._clock = clock
+        self._probe = probe
         self._segments: list[SegmentFile] = []
         self._ensured = False
         self._leo = 0
         self._start = 0
         self._unflushed = 0
         self._last_fsync_ms = clock()
+        self._report = RecoveryReport()
+        self._corrupted: dict[int, str] = {}
+        self._stamps: dict[int, SegmentStamp] = {}
         self.lock = asyncio.Lock()
         self._load()
 
@@ -333,6 +365,32 @@ class _PartitionLog:
             int: 起点。
         """
         return self._start
+
+    @property
+    def needs_alignment(self) -> bool:
+        """是否需要位点对齐（发生截断，或恢复点声明的 LEO 大于推导 LEO）。
+
+        Returns:
+            bool: True 表示该分区有待对齐的位点。
+        """
+        return self._report.needs_alignment
+
+    @property
+    def report(self) -> RecoveryReport:
+        """本次加载的恢复结果。
+
+        Returns:
+            RecoveryReport: 恢复报告。
+        """
+        return self._report
+
+    def corrupted_segments(self) -> tuple[int, ...]:
+        """非末段对账失败的段 base 列表（只读查询，供排障与指标出口）。
+
+        Returns:
+            tuple[int, ...]: 段 base 升序。
+        """
+        return tuple(sorted(self._corrupted))
 
     def segment_ends(self) -> list[int]:
         """每段的尾部 offset（末段为 LEO）。
@@ -519,11 +577,13 @@ class _PartitionLog:
         deleted_bytes = 0
         for segment in removed:
             deleted_bytes += segment.size_bytes
+            self._stamps.pop(segment.base_offset, None)
             segment.delete()
         self._segments = kept
         self._start = target
         if not kept:
             self._open_segment(base_offset=target)
+        self.persist_recovery_point()
         _LOGGER.info(
             "msg_segment_deleted",
             partition_path=str(self._directory),
@@ -623,39 +683,223 @@ class _PartitionLog:
             segment.close()
 
     def flush(self) -> None:
-        """把当前写段刷盘并重置刷盘窗口（段轮转 / 优雅关闭用）。"""
+        """把当前写段刷盘、重置刷盘窗口并写恢复点（段轮转 / 优雅关闭用）。"""
         if self._segments:
             self._segments[-1].fsync()
         self._unflushed = 0
         self._last_fsync_ms = self._clock()
+        if self._segments:
+            self.persist_recovery_point()
 
     def _load(self) -> None:
-        """枚举已有段并推导 LEO 与起点（结构级恢复只扫末段尾部）。"""
+        """枚举已有段并完成崩溃恢复（02-2 §6）：修残条 → 对账 → 扫描 → 截断取证 → 补索引。"""
+        started = time.monotonic()
         bases = list_segment_bases(self._directory)
         if not bases:
+            self._report = RecoveryReport()
             return
         self._segments = [self._make_segment(base) for base in bases]
         last = self._segments[-1]
-        scanned_bytes = last.size_bytes
-        scan = last.scan_tail()
-        if scan.complete_bytes < scanned_bytes:
-            complete_relative = scan.from_rel + scan.count - 1
-            last.truncate(size=scan.complete_bytes, max_relative_offset=max(complete_relative, -1))
-            _LOGGER.warning(
-                "msg_partition_recovered",
-                partition_path=str(self._directory),
-                scanned_bytes=scanned_bytes,
-                truncated_bytes=scan.complete_bytes,
-                leo=last.base_offset + scan.count + scan.from_rel,
+        repair_bytes = last.repair_index_tail()
+        readout = read_recovery_point(
+            self._directory / RECOVERY_POINT_NAME,
+            topic_id=self._topic_id,
+            partition_no=self._partition_no,
+        )
+        point = readout.point
+        corrupted = self._verify_stamps(point)
+        scanned_before = last.size_bytes
+        scan = last.scan_tail(verify_crc=True, anchor=self._choose_anchor(point, last))
+        truncated = scan.complete_bytes < scanned_before
+        isolated: Path | None = None
+        if truncated:
+            isolated = last.isolate_tail(keep_bytes=scan.complete_bytes, timestamp=_timestamp())
+            last.prune_corrupt_tails(limit=CORRUPT_TAIL_KEEP)
+            last.truncate(
+                size=scan.complete_bytes,
+                max_relative_offset=scan.from_rel + scan.count - 1,
             )
+            _LOGGER.warning(
+                "msg_tail_isolated",
+                partition_path=str(self._directory),
+                source=last.log_path.name,
+                isolated=isolated.name,
+                bytes=scanned_before - scan.complete_bytes,
+                trailing_records=scan.trailing_records,
+            )
+        rebuilt = last.backfill_index(scan.entries)
         self._start = bases[0]
         self._leo = last.base_offset + scan.from_rel + scan.count
-        _LOGGER.info(
-            "msg_partition_opened",
-            partition_path=str(self._directory),
+        point_leo = point.leo if point is not None else None
+        self._report = RecoveryReport(
             segments=len(self._segments),
-            leo=self._leo,
             start_offset=self._start,
+            leo=self._leo,
+            scanned_bytes=scanned_before,
+            truncated_from_bytes=scanned_before,
+            truncated_bytes=scan.complete_bytes,
+            trailing_records=scan.trailing_records,
+            index_rebuilt=rebuilt,
+            index_repair_bytes=repair_bytes,
+            corrupted_segments=corrupted,
+            recovery_point=readout.reason,
+            isolated=str(isolated) if isolated is not None else None,
+            elapsed_ms=int((time.monotonic() - started) * 1_000),
+            needs_alignment=truncated or (point_leo is not None and point_leo > self._leo),
+        )
+        fields = {
+            "partition_path": str(self._directory),
+            "segments": self._report.segments,
+            "scanned_bytes": self._report.scanned_bytes,
+            "truncated_bytes": self._report.truncated_bytes,
+            "leo": self._leo,
+            "trailing_records": self._report.trailing_records,
+            "index_rebuilt": self._report.index_rebuilt,
+            "index_repair_bytes": self._report.index_repair_bytes,
+            "corrupted_segments": list(corrupted),
+            "recovery_point": readout.reason,
+            "elapsed_ms": self._report.elapsed_ms,
+        }
+        if truncated or corrupted:
+            _LOGGER.warning("msg_partition_recovered", **fields)
+        else:
+            _LOGGER.info("msg_partition_recovered", **fields)
+
+    def _choose_anchor(self, point: RecoveryPoint | None, last: SegmentFile) -> tuple[int, int] | None:
+        """在「恢复点末段 size」与「最后索引项位置」之间取较大者作为扫描起点。
+
+        Args:
+            point: 恢复点（不可用为 None）。
+            last: 末段。
+
+        Returns:
+            tuple[int, int] | None: `(字节偏移, 相对 offset)`；两锚点皆缺返回 None。
+        """
+        candidates: list[tuple[int, int]] = []
+        index_anchor = last.index_anchor()
+        if index_anchor is not None:
+            candidates.append(index_anchor)
+        if point is not None:
+            stamp = next((item for item in point.segments if item.base == last.base_offset), None)
+            # `stamp.size > 文件大小` 说明恢复点超前（先 fsync 后写恢复点本不该出现），视为不可信
+            if stamp is not None and 0 < stamp.size <= last.size_bytes:
+                candidates.append((stamp.size, stamp.last_offset + 1 - last.base_offset))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])
+
+    def _verify_stamps(self, point: RecoveryPoint | None) -> tuple[int, ...]:
+        """按恢复点段清单对账非末段（O(段数)，每段读一条记录）。
+
+        Args:
+            point: 恢复点（不可用为 None）。
+
+        Returns:
+            tuple[int, ...]: 对账失败的段 base 列表。
+        """
+        if point is None:
+            return ()
+        last_base = self._segments[-1].base_offset
+        by_base = {segment.base_offset: segment for segment in self._segments}
+        corrupted: list[int] = []
+        for stamp in point.segments:
+            segment = by_base.get(stamp.base)
+            if segment is None or stamp.base == last_base:
+                # 段已被保留期删除（恢复点落后）不是损坏；末段交给扫描，比 stamp 更权威
+                continue
+            mismatch = self._check_stamp(segment, stamp)
+            if mismatch is None:
+                continue
+            reason, expected, actual = mismatch
+            self._corrupted[stamp.base] = reason
+            corrupted.append(stamp.base)
+            _LOGGER.warning(
+                "msg_segment_corrupted",
+                partition_path=str(self._directory),
+                base_offset=stamp.base,
+                reason=reason,
+                expected=expected,
+                actual=actual,
+            )
+        return tuple(corrupted)
+
+    def _check_stamp(self, segment: SegmentFile, stamp: SegmentStamp) -> tuple[str, int, int] | None:
+        """校验一个非末段（size 对账 + 段尾记录 CRC）。
+
+        Args:
+            segment: 段。
+            stamp: 恢复点里的快照。
+
+        Returns:
+            tuple[str, int, int] | None: `(原因, 期望值, 实际值)`；通过返回 None。
+        """
+        if segment.size_bytes != stamp.size:
+            return "size_mismatch", stamp.size, segment.size_bytes
+        if stamp.size == 0:
+            return None
+        matched, actual_crc = segment.verify_stamp(position=stamp.last_position, expected_crc=stamp.last_crc)
+        return None if matched else ("crc_mismatch", stamp.last_crc, actual_crc)
+
+    def recovery_point(self) -> RecoveryPoint:
+        """按当前段状态构造恢复点（非末段用段关闭时固化的 stamp，末段现算）。
+
+        Returns:
+            RecoveryPoint: 恢复点。
+        """
+        stamps: list[SegmentStamp] = []
+        last_index = len(self._segments) - 1
+        for index, segment in enumerate(self._segments):
+            cached = self._stamps.get(segment.base_offset)
+            if cached is not None and index != last_index:
+                stamps.append(cached)
+                continue
+            stamps.append(self._stamp_of(segment))
+        return RecoveryPoint(
+            topic_id=self._topic_id,
+            partition_no=self._partition_no,
+            leo=self._leo,
+            segments=tuple(stamps),
+            updated_at_us=int(time.time() * 1_000_000),
+        )
+
+    def persist_recovery_point(self) -> None:
+        """写恢复点（fail-open：失败只告警，不阻断写入路径）。"""
+        if not self._directory.is_dir():
+            return
+        try:
+            write_recovery_point(self._directory / RECOVERY_POINT_NAME, self.recovery_point())
+        except OSError as exc:
+            _LOGGER.warning(
+                "msg_recovery_point_failed",
+                partition_path=str(self._directory),
+                error=str(exc),
+            )
+
+    def _stamp_of(self, segment: SegmentFile) -> SegmentStamp:
+        """算一个段的当前快照。
+
+        Args:
+            segment: 段。
+
+        Returns:
+            SegmentStamp: 快照。
+        """
+        record = segment.last_record_stamp()
+        if record is None:
+            return SegmentStamp(
+                base=segment.base_offset,
+                size=segment.size_bytes,
+                last_offset=segment.base_offset - 1,
+                last_position=0,
+                last_crc=0,
+            )
+        position, relative, crc = record
+        return SegmentStamp(
+            base=segment.base_offset,
+            size=segment.size_bytes,
+            last_offset=segment.base_offset + relative,
+            last_position=position,
+            last_crc=crc,
         )
 
     def _ensure_directory(self) -> None:
@@ -679,6 +923,7 @@ class _PartitionLog:
             base_offset=base_offset,
             index_interval=self._index_interval,
             time_interval_ms=self._time_index_interval_ms,
+            probe=self._probe,
         )
 
     def _open_segment(self, *, base_offset: int) -> SegmentFile:
@@ -739,9 +984,12 @@ class _PartitionLog:
             new_base: 新段首 offset。
         """
         current = self._segments[-1]
+        # 固化关闭段的 stamp：它此后不再变化，写恢复点不必每次重算（O(段数) → O(1)）
+        self._stamps[current.base_offset] = self._stamp_of(current)
         current.fsync()
         current.close()
         self._open_segment(base_offset=new_base)
+        self.persist_recovery_point()
         _LOGGER.info(
             "msg_segment_roll",
             partition_path=str(self._directory),
@@ -758,6 +1006,7 @@ class _PartitionLog:
             segment.fsync()
             self._unflushed = 0
             self._last_fsync_ms = self._clock()
+            self.persist_recovery_point()
             return
         now = self._clock()
         reached_batch = self._fsync_mode == FSYNC_MODE_BATCH and self._unflushed >= self._fsync_batch_records
@@ -767,6 +1016,7 @@ class _PartitionLog:
         segment.fsync()
         self._unflushed = 0
         self._last_fsync_ms = now
+        self.persist_recovery_point()
         _LOGGER.info(
             "msg_fsync",
             partition_path=str(self._directory),
@@ -831,6 +1081,8 @@ class FileMessageStore(MessageStore):
         time_index_interval_ms: int = TIME_INDEX_INTERVAL_MS,
         log_id_limit: int = LOG_ID_INDEX_LIMIT,
         clock: Callable[[], float] = _monotonic_ms,
+        realigner: OffsetRealigner | None = None,
+        probe: RecoveryProbe | None = None,
     ) -> None:
         """初始化（不创建目录、不扫描已有分区——首个访问触发懒加载）。
 
@@ -844,6 +1096,8 @@ class FileMessageStore(MessageStore):
             time_index_interval_ms: 时间索引间隔（毫秒）。
             log_id_limit: `log_id` 索引的 LRU 上限。
             clock: 单调毫秒时钟（用例注入）。
+            realigner: 位点对齐端口（缺省不注入，恢复时只告警跳过）。
+            probe: 恢复读取量探针（缺省不统计）。
 
         Raises:
             ValueError: fsync 档位或时间窗取值非法（启动即失败，不静默降级）。
@@ -869,6 +1123,9 @@ class FileMessageStore(MessageStore):
         self._clock = clock
         self._partitions: dict[tuple[int, int], _PartitionLog] = {}
         self._log_ids: OrderedDict[str, tuple[int, int, int]] = OrderedDict()
+        self._realigner = realigner
+        self._probe = probe
+        self._pending_alignment: dict[tuple[int, int], int] = {}
 
     async def append(
         self,
@@ -909,7 +1166,7 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         location = self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         async with partition.lock:
             message = partition.append(
                 topic_id=int(topic_id),
@@ -950,7 +1207,7 @@ class FileMessageStore(MessageStore):
             CorruptedRecordError: 记录损坏。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read(from_offset=from_offset, max_messages=max_messages)
 
     async def leo(self, *, topic_id: int, partition_no: int) -> int:
@@ -967,7 +1224,8 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         self._require_location(topic_id)
-        return self._partition(topic_id=topic_id, partition_no=partition_no).leo
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        return partition.leo
 
     async def start_offset(self, *, topic_id: int, partition_no: int) -> int:
         """取分区日志起点（保留期清理后大于 0）。
@@ -983,7 +1241,8 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         self._require_location(topic_id)
-        return self._partition(topic_id=topic_id, partition_no=partition_no).start
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        return partition.start
 
     async def segments(self, *, topic_id: int, partition_no: int) -> ConcurrentStableList[SegmentMeta]:
         """按 offset 升序取段元数据（空段不暴露）。
@@ -999,7 +1258,7 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.segments()
 
     async def truncate_before(self, *, topic_id: int, partition_no: int, offset: int) -> int:
@@ -1018,7 +1277,7 @@ class FileMessageStore(MessageStore):
             ParamError: `offset > leo`（10001）。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         async with partition.lock:
             return partition.truncate_before(offset=offset)
 
@@ -1037,7 +1296,7 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.locate(offset=offset)
 
     async def read_range(
@@ -1058,7 +1317,7 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_range(from_offset=from_offset, max_messages=max_messages)
 
     async def read_bytes(self, *, topic_id: int, partition_no: int, offset: int) -> StoredMessage | None:
@@ -1077,7 +1336,7 @@ class FileMessageStore(MessageStore):
             CorruptedRecordError: 记录损坏。
         """
         self._require_location(topic_id)
-        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_bytes(offset=offset)
 
     async def locate_by_log_id(self, *, log_id: str) -> FileSlice | None:
@@ -1143,6 +1402,8 @@ class FileMessageStore(MessageStore):
         directory = self._directory.partition_path(topic_id=topic_id, partition_no=partition_no)
         partition = _PartitionLog(
             directory=directory,
+            topic_id=key[0],
+            partition_no=key[1],
             fsync_mode=self._fsync_mode,
             fsync_interval_ms=self._fsync_interval_ms,
             fsync_batch_records=FSYNC_BATCH_RECORDS,
@@ -1151,9 +1412,89 @@ class FileMessageStore(MessageStore):
             index_interval=self._index_interval,
             time_index_interval_ms=self._time_index_interval_ms,
             clock=self._clock,
+            probe=self._probe,
         )
         self._partitions[key] = partition
+        if partition.needs_alignment:
+            self._pending_alignment[key] = partition.leo
         return partition
+
+    async def _open(self, *, topic_id: int, partition_no: int) -> _PartitionLog:
+        """取分区日志并在首次访问时完成位点对齐。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            _PartitionLog: 分区日志。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+        """
+        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        await self._align(topic_id=topic_id, partition_no=partition_no)
+        return partition
+
+    async def _align(self, *, topic_id: int, partition_no: int) -> None:
+        """该分区首次访问前完成位点对齐（每分区只做一次）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+        """
+        key = (int(topic_id), int(partition_no))
+        ceiling = self._pending_alignment.pop(key, None)
+        if ceiling is None:
+            return
+        if self._realigner is None:
+            # 装配缺陷要可见，但不该让服务写不进去（fail-open）
+            _LOGGER.warning(
+                "msg_offset_alignment_skipped",
+                topic_id=key[0],
+                partition_no=key[1],
+                leo=ceiling,
+            )
+            return
+        adjustments = await self._realigner.realign_partition(topic_id=key[0], partition_no=key[1], ceiling=ceiling)
+        for item in adjustments:
+            _LOGGER.warning(
+                "msg_offset_rollback",
+                group=item.group,
+                topic_id=item.topic_id,
+                partition_no=item.partition_no,
+                previous=item.previous,
+                current=item.current,
+                leo=ceiling,
+            )
+
+    async def corrupted_segments(self, *, topic_id: int, partition_no: int) -> tuple[int, ...]:
+        """取该分区非末段对账失败的段 base（排障 / 指标出口；只读）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            tuple[int, ...]: 段 base 升序。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+        """
+        self._require_location(topic_id)
+        partition = self._partition(topic_id=topic_id, partition_no=partition_no)
+        return partition.corrupted_segments()
+
+    async def aclose(self) -> None:
+        """优雅关闭：逐分区刷盘、写恢复点、关句柄（幂等）。"""
+        closed = len(self._partitions)
+        for partition in list(self._partitions.values()):
+            async with partition.lock:
+                partition.flush()
+                partition.close()
+        self._partitions.clear()
+        self._pending_alignment.clear()
+        _LOGGER.info("msg_store_closed", partitions=closed)
 
     def _remember_log_id(self, *, log_id: str, topic_id: int, partition_no: int, offset: int) -> None:
         """登记 `log_id` → 位置的 LRU 条目（超上限淘汰最久未用）。

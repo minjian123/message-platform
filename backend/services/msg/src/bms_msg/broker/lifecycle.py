@@ -12,7 +12,7 @@
 **不做任务恢复**：重放任务「落表但不续跑」仍是 8B_06 的活，本模块只负责循环活着。
 """
 
-from typing import cast
+from typing import Protocol, cast
 
 from bms_core.core.capability import BaseAsyncResource
 from bms_core.core.logging import get_logger
@@ -22,9 +22,38 @@ from fastapi import FastAPI
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
 
-__all__ = ["BackgroundLoops", "start_background_tasks"]
+__all__ = ["BackgroundLoops", "CloseableStore", "StorageCloser", "start_background_tasks"]
 
 _LOGGER = get_logger("bms_msg.lifecycle")
+
+
+class CloseableStore(Protocol):
+    """可优雅关闭的存储（只要求一个 `aclose`，不依赖具体实现）。"""
+
+    async def aclose(self) -> None:
+        """刷盘、写恢复点并释放句柄。"""
+
+
+class StorageCloser(BaseAsyncResource):
+    """存储关闭句柄（02-2）：登记进 `ResourceManager`，停机时刷日志与恢复点。
+
+    **注册顺序即偏序**：本资源在 `configure_service()` 里注册、后台循环在 `startup_hooks()` 里注册，
+    而 `ResourceManager` 是逆序释放——所以「先停后台循环（延迟转投 / 重放）、再刷日志」由装配顺序
+    天然保证，不需要额外的协调代码。
+    """
+
+    def __init__(self, *, store: CloseableStore) -> None:
+        """初始化。
+
+        Args:
+            store: 消息存储（文件段实现）。
+        """
+        self._store = store
+
+    async def aclose(self) -> None:
+        """刷盘 + 写恢复点 + 关句柄（`aclose` 幂等，重复调用无副作用）。"""
+        await self._store.aclose()
+        _LOGGER.info("storage_closed")
 
 
 class BackgroundLoops(BaseAsyncResource):
