@@ -172,6 +172,7 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
         waiter=app.state.waiter,
         backpressure=default_backpressure_tuning(),
         metrics=app.state.backpressure_metrics,
+        cache=app.state.topic_cache,
     )
 
 

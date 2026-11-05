@@ -41,7 +41,9 @@ from bms_msg.broker.log import InMemoryMessageStore, MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import UowFactory
+from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import MSG_ERROR_MAPPER
@@ -50,7 +52,8 @@ __all__ = ["build_frame_app", "install_backpressure_state"]
 
 
 def install_backpressure_state(app: FastAPI) -> None:
-    """注入 03-5 的进程级状态（唤醒器 / 指标 / 限流器），并把消息存储包一层「写入即唤醒」。
+    """注入 03-5 的进程级状态（唤醒器 / 指标 / 限流器）与 01-7 的固定成本状态（缓存 / 节流），
+    并把消息存储包一层「写入即唤醒」。
 
     各用例文件自建的应用都要调一次（生产由 `configure_service()` 注入）。幂等：已注入则跳过。
     注意调用顺序——**先注入再构造延迟推进器**，否则推进器会捕获未包装的存储，延迟转投不会唤醒等待者；
@@ -59,6 +62,9 @@ def install_backpressure_state(app: FastAPI) -> None:
     Args:
         app: 应用实例（其 `message_store` 必须已就位）。
     """
+    # 01-7 的两项与唤醒器无关，先注入（即使下面因幂等提前返回也已就位）。
+    app.state.topic_cache = TopicCache()
+    app.state.retention_throttle = RetentionThrottle()
     if getattr(app.state, "waiter", None) is not None:
         return
     waiter = DeliveryWaiter()

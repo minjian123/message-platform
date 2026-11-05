@@ -47,6 +47,8 @@ from bms_msg.api.deps import (
     MessageStoreDep,
     OffsetStoreDep,
     RateLimiterDep,
+    RetentionThrottleDep,
+    TopicCacheDep,
     WaiterDep,
 )
 from bms_msg.api.frame.media import is_frame_request
@@ -59,7 +61,9 @@ from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import connection_meta
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.config import MS_PER_SECOND
@@ -359,6 +363,8 @@ async def _invoke(
     backpressure: BackpressureTuning,
     limiter: RateLimiter,
     metrics: BackpressureMetrics,
+    cache: TopicCache,
+    throttle: RetentionThrottle,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -378,6 +384,8 @@ async def _invoke(
         backpressure: inflight 双阈值。
         limiter: 生产限流器。
         metrics: 背压指标收集器。
+        cache: 进程内主题快照缓存（01-7）。
+        throttle: 保留清理节流窗口表（01-7）。
 
     Returns:
         object: 结果模型。
@@ -398,6 +406,8 @@ async def _invoke(
             delay_scheduler=delay_scheduler,
             limiter=limiter,
             metrics=metrics,
+            cache=cache,
+            throttle=throttle,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -412,6 +422,8 @@ async def _invoke(
             waiter=waiter,
             backpressure=backpressure,
             metrics=metrics,
+            cache=cache,
+            throttle=throttle,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -424,6 +436,7 @@ async def _invoke(
             state=state,
             groups=groups,
             waiter=waiter,
+            cache=cache,
         )
     elif frame_type == int(FrameType.NACK):
         response = await nack(
@@ -436,6 +449,7 @@ async def _invoke(
             state=state,
             groups=groups,
             waiter=waiter,
+            cache=cache,
         )
     else:  # pragma: no cover - 类型在挂载期已固定为三种之一
         raise TypeError(f"未支持的帧类型：{frame_type}")
@@ -462,6 +476,8 @@ async def _handle_frame(
     backpressure: BackpressureTuning,
     limiter: RateLimiter,
     metrics: BackpressureMetrics,
+    cache: TopicCache,
+    throttle: RetentionThrottle,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -484,6 +500,8 @@ async def _handle_frame(
         backpressure: inflight 双阈值。
         limiter: 生产限流器。
         metrics: 背压指标收集器。
+        cache: 进程内主题快照缓存（01-7）。
+        throttle: 保留清理节流窗口表（01-7）。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -553,6 +571,8 @@ async def _handle_frame(
             backpressure=backpressure,
             limiter=limiter,
             metrics=metrics,
+            cache=cache,
+            throttle=throttle,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -593,6 +613,8 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         backpressure: BackpressureTuningDep,
         limiter: RateLimiterDep,
         metrics: BackpressureMetricsDep,
+        cache: TopicCacheDep,
+        throttle: RetentionThrottleDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -611,6 +633,8 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             backpressure: inflight 双阈值。
             limiter: 生产限流器。
             metrics: 背压指标收集器。
+            cache: 进程内主题快照缓存（01-7）。
+            throttle: 保留清理节流窗口表（01-7）。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -637,6 +661,8 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             backpressure=backpressure,
             limiter=limiter,
             metrics=metrics,
+            cache=cache,
+            throttle=throttle,
         )
         raise FrameHandled(response)
 

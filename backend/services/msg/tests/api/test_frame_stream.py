@@ -356,6 +356,7 @@ async def test_direct_generator_resolves_ids_and_cancels_prefetch(
         waiter=msg_app.state.waiter,
         backpressure=default_backpressure_tuning(),
         metrics=msg_app.state.backpressure_metrics,
+        cache=msg_app.state.topic_cache,
     )
 
     first = await anext(agen)

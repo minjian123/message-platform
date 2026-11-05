@@ -36,9 +36,9 @@ from bms_msg.broker.group import (
     assign_range,
 )
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.core.config import SESSION_TIMEOUT_MS
 from bms_msg.errors import MsgGroupNotFoundError, MsgMemberInvalidError
-from bms_msg.models.topic import MsgTopic
 from bms_msg.schemas.group import MemberRequest
 from bms_msg.tenant.context import CurrentTenant
 
@@ -227,7 +227,7 @@ class GroupCoordinator:
         if member is None or self._expired(member) or partition not in member.partitions:
             raise MsgMemberInvalidError(f"分区不在该成员的有效分配内：{group}/{consumer_id} × 分区 {partition}")
 
-    async def _resolve(self, *, tenant: CurrentTenant, request: MemberRequest) -> MsgTopic:
+    async def _resolve(self, *, tenant: CurrentTenant, request: MemberRequest) -> TopicSnapshot:
         """校验命名空间并解析主题（判定顺序：租户 → 命名空间 → 主题）。
 
         Args:
@@ -235,7 +235,7 @@ class GroupCoordinator:
             request: 成员请求。
 
         Returns:
-            MsgTopic: 主题记录。
+            TopicSnapshot: 主题快照。
 
         Raises:
             MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。

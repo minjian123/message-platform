@@ -17,7 +17,8 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
-from bms_msg.api.deps import CurrentTenantDep
+from bms_msg.api.deps import CurrentTenantDep, TopicCacheDep
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
 from bms_msg.models.partition import MsgPartition
 from bms_msg.models.topic import MsgTopic
@@ -66,17 +67,19 @@ TopicIdPath = Annotated[int, Path(description="主题 ID（雪花）")]
 """主题 ID 路径参数。"""
 
 
-def _service(uow: UnitOfWork) -> TopicService:
+def _service(uow: UnitOfWork, *, cache: TopicCache | None = None) -> TopicService:
     """组装主题服务（请求级平台库会话注入）。
 
     Args:
         uow: 平台库工作单元。
+        cache: 进程内主题快照缓存（**只有写路径需要**：提交成功后按精确键失效；
+            读路径不经缓存，管理面永远读库最新）。
 
     Returns:
         TopicService: 主题服务。
     """
     session = cast("DbSession", uow.session)
-    return TopicService(TopicRepository(session), PartitionRepository(session), uow)
+    return TopicService(TopicRepository(session), PartitionRepository(session), uow, cache=cache)
 
 
 def _item(topic: MsgTopic) -> TopicItem:
@@ -124,13 +127,14 @@ async def create_topic(
     req: TopicCreateRequest,
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[TopicItem]:
     """创建主题（指定分区数，返回完整元数据）。
 
     需要 msg:manage 权限；`tenant_id` 取自基座解析链（请求体不接收）；同租户 / 命名空间下重名
     返回 350008，分区数或保留期越界返回 350009，命名空间非已启用 module_key 返回 350010。
     """
-    topic = await _service(uow).create_topic(tenant=tenant, request=req)
+    topic = await _service(uow, cache=cache).create_topic(tenant=tenant, request=req)
     return ApiResponse.ok(_item(topic))
 
 

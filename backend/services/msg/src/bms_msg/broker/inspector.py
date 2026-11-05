@@ -21,8 +21,8 @@ from bms_msg.broker.group import ConsumerGroup, GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.errors import MsgGroupNotFoundError
-from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.services.topic import MAX_LIST_SIZE
 from bms_msg.tenant.context import CurrentTenant
@@ -142,9 +142,10 @@ class GroupInspector:
         records = await self._groups.list_for_tenant(tenant_id=int(tenant.tenant_id))
         rows: ConcurrentStableList[GroupRow] = ConcurrentStableList()
         for record in records:
-            resolved = await self._topics.get(record.topic_id)
-            if resolved is None:
+            loaded = await self._topics.get(record.topic_id)
+            if loaded is None:
                 continue
+            resolved = TopicSnapshot.from_topic(loaded)
             if namespace is not None and resolved.namespace != namespace:
                 continue
             if topic is not None and resolved.name != topic:
@@ -195,7 +196,7 @@ class GroupInspector:
             partitions=partitions,
         )
 
-    def _row(self, *, record: ConsumerGroup, topic: MsgTopic) -> GroupRow:
+    def _row(self, *, record: ConsumerGroup, topic: TopicSnapshot) -> GroupRow:
         """由组记录 + 主题记录拼一行。
 
         Args:

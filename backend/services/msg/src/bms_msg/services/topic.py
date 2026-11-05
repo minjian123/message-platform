@@ -6,13 +6,18 @@
 - **主题**：不存在 `350001`、重名 `350008`、分区数 / 保留期非法 `350009`；
 - **事务**：主题行与 N 条分区行**同一事务**提交，避免「有主题无分区」的半成品（校验读也在事务内，
   SQLAlchemy 2.0 先读后 `begin` 会因自动开启事务失败）。
+- **失效收口（01-7）**：所有写方法在**提交成功之后**按精确键失效进程内主题快照缓存。
+  06 域将来的更新 / 停用 / 删除**必须**经本类写方法，禁止端点层直接改库——那是「改了配置仍按旧值投递」
+  的唯一来源（详细设计 §3.3）。
 """
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.config import get_settings
 from bms_core.core.exceptions import ParamError
+from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
 
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.core.config import (
     MAX_PARTITION_COUNT,
     MAX_RETENTION_BYTES,
@@ -38,21 +43,33 @@ __all__ = ["MAX_LIST_SIZE", "TopicService"]
 MAX_LIST_SIZE = 100
 """列表每页上限（与接口 `size` 上界一致）。"""
 
+_LOGGER = get_logger("bms_msg.topic")
+"""主题服务日志（只出结构化事件：`msg_topic_cache` 的失效记录）。"""
+
 
 class TopicService:
     """主题服务：创建 / 查询 / 列表 / 增分区（只增不减）。"""
 
-    def __init__(self, topics: TopicRepository, partitions: PartitionRepository, uow: UnitOfWork) -> None:
+    def __init__(
+        self,
+        topics: TopicRepository,
+        partitions: PartitionRepository,
+        uow: UnitOfWork,
+        *,
+        cache: TopicCache | None = None,
+    ) -> None:
         """初始化。
 
         Args:
             topics: 主题仓储（请求级会话）。
             partitions: 分区仓储（同会话）。
             uow: 工作单元（事务边界）。
+            cache: 进程内主题快照缓存（None = 不失效；数据面读最新值靠它）。
         """
         self._topics = topics
         self._partitions = partitions
         self._uow = uow
+        self._cache = cache
 
     async def create_topic(self, *, tenant: CurrentTenant, request: TopicCreateRequest) -> MsgTopic:
         """创建主题（同事务写主题行 + N 条分区行）。
@@ -92,6 +109,7 @@ class TopicService:
                 count=request.partition_count,
                 leader=_leader_id(),
             )
+        self._invalidate(tenant_id=int(tenant.tenant_id), namespace=request.namespace, name=request.name)
         return topic
 
     async def get_topic(
@@ -170,12 +188,13 @@ class TopicService:
             MsgTopicNotFoundError: 主题不存在（350001）。
             MsgPartitionCountInvalidError: 目标分区数越界或小于现状（350009）。
         """
-        del tenant
         self._ensure_partition_count(partition_count)
         async with self._uow.begin():
             topic = await self._topics.get(topic_id)
             if topic is None:
                 raise MsgTopicNotFoundError(f"主题不存在：{topic_id}")
+            # 事务内先取标识：提交后再读 ORM 属性会触发刷新（回滚分支更会直接失效）。
+            identity = (topic.namespace, topic.name)
             current = int(topic.partition_count)
             if partition_count < current:
                 raise MsgPartitionCountInvalidError(f"分区数只能增不能减：现 {current}，目标 {partition_count}")
@@ -188,7 +207,21 @@ class TopicService:
                 )
                 topic = await self._topics.update(topic_id, partition_count=partition_count) or topic
             partitions = await self._partitions.list_by_topic(topic_id)
+        self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
         return topic, partitions
+
+    def _invalidate(self, *, tenant_id: int, namespace: str, name: str) -> None:
+        """失效一条主题快照（**提交成功之后**调用；未装配缓存则空转）。
+
+        Args:
+            tenant_id: 租户主键。
+            namespace: 命名空间。
+            name: 主题名。
+        """
+        if self._cache is None:
+            return
+        self._cache.invalidate(tenant_id=tenant_id, namespace=namespace, name=name)
+        _LOGGER.info("msg_topic_cache", outcome="invalidate", tenant_id=tenant_id, namespace=namespace, topic=name)
 
     def _ensure_namespace(self, tenant: CurrentTenant, namespace: str) -> None:
         """校验命名空间形态与可用性（`350010`；单点复用 `CurrentTenant.ensure_namespace`）。

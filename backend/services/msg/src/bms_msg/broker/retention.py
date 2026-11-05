@@ -10,8 +10,10 @@
    01-2 契约原样成立（本模块不碰位点）。
 
 **触发归调用方**：请求驱动（`api/data/messages.py` 的 publish / consume 入口），本模块不做任何后台调度。
+**频率归 `RetentionThrottle`**（01-7）：同一（主题, 分区）每窗口最多扫一次；判定与副作用一行不改。
 """
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -20,8 +22,9 @@ from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.objects import BaseValueObject
 
 from bms_msg.broker.log import MessageStore, SegmentMeta
+from bms_msg.core.config import MS_PER_SECOND, RETENTION_SCAN_WINDOW_MS
 
-__all__ = ["RetentionOutcome", "RetentionService"]
+__all__ = ["RetentionOutcome", "RetentionService", "RetentionThrottle"]
 
 
 def _utcnow() -> datetime:
@@ -31,6 +34,15 @@ def _utcnow() -> datetime:
         datetime: 带时区的当前时间。
     """
     return datetime.now(UTC)
+
+
+def _monotonic_ms() -> float:
+    """当前单调时钟毫秒（窗口序号用；不受系统时钟回拨影响）。
+
+    Returns:
+        float: 单调时钟（毫秒）。
+    """
+    return time.monotonic() * MS_PER_SECOND
 
 
 @dataclass(frozen=True)
@@ -118,3 +130,47 @@ class RetentionService:
             remaining -= segments[keep_from].size_bytes
             keep_from += 1
         return keep_from
+
+
+class RetentionThrottle:
+    """请求驱动清理的窗口表（进程级单例；01-7 详细设计 §4）。
+
+    只存「每个（主题, 分区）当前窗口序号」，命中判定是一次整数比较：
+
+    - **无锁**：`admit` 全程无 `await`，在单事件循环内原子（不存在两次判定交错）；
+    - **首请求必扫**：新窗口第一个到达的请求登记窗口序号并返回 True；
+    - **跨片边界可紧邻两次扫描**（999ms 与 1001ms）：保留期以天计，这点偏差无业务意义，
+      换来的是「不需要存上次时刻表」；
+    - **不做淘汰**：条目是「小整数对 → 窗口序号」，量级 = 主题数 × 分区数（分区数只增不减），
+      键表生命周期随 8B_02 的后台清理一并处置。
+    """
+
+    def __init__(
+        self, *, window_ms: int = RETENTION_SCAN_WINDOW_MS, clock: Callable[[], float] = _monotonic_ms
+    ) -> None:
+        """初始化。
+
+        Args:
+            window_ms: 窗口宽度（毫秒；缺省取模块常量）。
+            clock: 时钟（缺省单调毫秒；用例注入假时钟以确定性控制窗口边界）。
+        """
+        self._window_ms = window_ms
+        self._clock = clock
+        self._windows: dict[tuple[int, int], int] = {}
+
+    def admit(self, *, topic_id: int, partition_no: int) -> bool:
+        """本窗口内该（主题, 分区）是否轮到扫描。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            bool: True = 本请求执行清理；False = 本窗口已扫过，跳过。
+        """
+        window = int(self._clock() // self._window_ms)
+        key = (topic_id, partition_no)
+        if self._windows.get(key) == window:
+            return False
+        self._windows[key] = window
+        return True

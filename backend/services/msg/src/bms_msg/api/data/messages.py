@@ -7,8 +7,12 @@
 - **延迟是发布的一个维度**（01-5）：`publish` 按 `delay_level` 分派——给值走 `DelayService`（入延迟区、
   无 offset、惰性启动推进器），缺省走原投递链路；两条分支共用同一份租户与主题校验口径。
 - **保留清理是请求驱动**（01-6）：`publish` 与 `consume` 入口各按主题 `retention_ms` / `retention_bytes`
-  幂等判定一次并前移可读区间起点。**放在 API 层而非 `DeliveryService` 内部**：01-2 / 01-3 的投递与停等
-  语义（尤其中 `_collect`）一行不改；代价是请求内主题解析多一次（与 01-4 同类遗留，8B_01 帧入口统一收敛）。
+  幂等判定一次并前移可读区间起点（**01-7 起每窗口每（主题, 分区）最多一次**，判定逻辑不变）。
+  **放在 API 层而非 `DeliveryService` 内部**：01-2 / 01-3 的投递与停等语义（尤其中 `_collect`）一行不改；
+  代价是请求内主题解析多一次（与 01-4 同类遗留）——**该项已由 01-7 的进程内主题快照缓存收敛**。
+- **固定成本**（01-7）：主题解析统一经 `topic_router()` 组装（可选接入 `TopicCache`），
+  一次请求内的 2~3 次解析收敛为「首次查库、其余命中」。缓存与节流都不改变响应结构与错误码，
+  冷热两态逐字段一致（详细设计 §6）。
 - **两处挂载、一份规格**（03-1）：端点实现只定义一次，由 `DATA_PLANE_ROUTES` + `mount_data_plane()` 挂到
   两条聚合路由——`/api/v1/msg/*`（既有 HTTP/1.1 数据面，保留作基准对照与回退）与根路径 `/msg/*`
   （HTTP/2 帧入口，03-2 只换 body 编解码）。路径 / 方法 / 权限依赖 / `x-error-codes` **各只写一处**，
@@ -25,6 +29,7 @@ from typing import Annotated, Any, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
@@ -44,6 +49,8 @@ from bms_msg.api.deps import (
     MessageStoreDep,
     OffsetStoreDep,
     RateLimiterDep,
+    RetentionThrottleDep,
+    TopicCacheDep,
     WaiterDep,
 )
 from bms_msg.api.frame.guard import CONNECTION_GUARD
@@ -55,9 +62,10 @@ from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
-from bms_msg.broker.retention import RetentionService
+from bms_msg.broker.retention import RetentionService, RetentionThrottle
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import MsgErrorCode, MsgRateLimitedError
@@ -92,6 +100,7 @@ __all__ = [
     "mount_data_plane",
     "nack",
     "router",
+    "topic_router",
 ]
 
 PUBLISH_PERMISSION = "msg:publish"
@@ -178,6 +187,26 @@ router = BaseRouter(
 PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 """平台库工作单元依赖（主题元数据归平台库）。"""
 
+_LOGGER = get_logger("bms_msg.data")
+"""数据面日志（只出结构化事件：`msg_retention`）。"""
+
+
+def topic_router(uow: UnitOfWork, *, cache: TopicCache | None, tenant_id: int | None) -> TopicRouter:
+    """组装主题路由（请求级仓储 + 可选进程内快照缓存）。
+
+    跨模块出口：数据面 / 帧入口 / 长驻流复用同一装配口径（缓存键含租户，两者必须同给或同不给）。
+
+    Args:
+        uow: 平台库工作单元（取主题仓储会话）。
+        cache: 进程内主题快照缓存（None = 不缓存、直接查库）。
+        tenant_id: 当前租户主键（缓存键的一部分）。
+
+    Returns:
+        TopicRouter: 主题路由。
+    """
+    session = cast("DbSession", uow.session)
+    return TopicRouter(TopicRepository(session), cache=cache, tenant_id=tenant_id)
+
 
 def delivery_service(
     uow: UnitOfWork,
@@ -186,6 +215,8 @@ def delivery_service(
     dead_letters: DeadLetterQueue,
     state: DeliveryState,
     *,
+    cache: TopicCache | None,
+    tenant_id: int | None,
     backpressure: BackpressureTuning | None = None,
     waiter: DeliveryWaiter | None = None,
 ) -> DeliveryService:
@@ -199,37 +230,50 @@ def delivery_service(
         offsets: 位点存储。
         dead_letters: 死信队列。
         state: 投递状态。
+        cache: 进程内主题快照缓存（None = 不缓存）。
+        tenant_id: 当前租户主键（缓存键的一部分）。
         backpressure: inflight 双阈值（None 表示不限）。
         waiter: 分区唤醒器（None 表示不唤醒，仅单测直连时出现）。
 
     Returns:
         DeliveryService: 投递服务。
     """
-    session = cast("DbSession", uow.session)
     return DeliveryService(
         store=store,
         offsets=offsets,
         dead_letters=dead_letters,
-        router=TopicRouter(TopicRepository(session)),
+        router=topic_router(uow, cache=cache, tenant_id=tenant_id),
         state=state,
         backpressure=backpressure,
         waiter=waiter,
     )
 
 
-def _delay_service(uow: UnitOfWork, store: DelayStore, scheduler: DelayScheduler) -> DelayService:
+def _delay_service(
+    uow: UnitOfWork,
+    store: DelayStore,
+    scheduler: DelayScheduler,
+    *,
+    cache: TopicCache | None,
+    tenant_id: int | None,
+) -> DelayService:
     """组装延迟发布服务（请求级主题仓储 + 进程级延迟区 / 时间轮）。
 
     Args:
         uow: 平台库工作单元（取主题仓储会话）。
         store: 延迟区存储。
         scheduler: 推进器（时间轮与其共用同一实例，发布侧装填后才能被推进）。
+        cache: 进程内主题快照缓存（None = 不缓存）。
+        tenant_id: 当前租户主键（缓存键的一部分）。
 
     Returns:
         DelayService: 延迟发布服务。
     """
-    session = cast("DbSession", uow.session)
-    return DelayService(store=store, router=TopicRouter(TopicRepository(session)), wheel=scheduler.wheel)
+    return DelayService(
+        store=store,
+        router=topic_router(uow, cache=cache, tenant_id=tenant_id),
+        wheel=scheduler.wheel,
+    )
 
 
 async def apply_retention(
@@ -239,6 +283,8 @@ async def apply_retention(
     store: MessageStore,
     namespace: str,
     topic: str,
+    cache: TopicCache,
+    throttle: RetentionThrottle,
     partition_no: int | None = None,
     key: str | None = None,
 ) -> tuple[int, int]:
@@ -250,6 +296,10 @@ async def apply_retention(
     分区号的两种给法（与两条链路对应）：`consume` 直接给 `partition_no`；`publish` 只给 `key`，
     由 `route()` 算出目标分区（同 key 恒同分区，与随后的 `append` 落点一致）。
 
+    **节流（01-7）**：`throttle.admit()` 判定本窗口是否轮到扫描——同一（主题, 分区）每窗口最多
+    执行一次 `RetentionService.apply`；判定与副作用不变，只改频率。节流在判定之后，
+    因此非法请求照旧先报错（不会被「本窗口跳过」掩盖）。
+
     **回传 `(topic_id, partition_no)`**（03-5）：长轮询与长驻流的等待键是 `(topic_id, partition_no)`，
     复用这次解析结果，避免为了拿主键再解析一遍主题。
 
@@ -259,6 +309,8 @@ async def apply_retention(
         store: 消息存储（段元数据与起点前移）。
         namespace: 命名空间。
         topic: 主题名。
+        cache: 进程内主题快照缓存（本次解析的唯一数据来源）。
+        throttle: 清理节流窗口表（进程级单例）。
         partition_no: 目标分区号（`consume` 用）；None 时按 `key` 路由。
         key: 分区键（`publish` 用；可空）。
 
@@ -271,17 +323,35 @@ async def apply_retention(
         MsgPartitionCountInvalidError: 分区号越界（350009）。
     """
     tenant.ensure_namespace(namespace)
-    session = cast("DbSession", uow.session)
-    router = TopicRouter(TopicRepository(session))
+    router = topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id))
     resolved = await router.resolve(namespace=namespace, name=topic)
     target = router.partition(resolved, partition_no) if partition_no is not None else router.route(resolved, key)
-    await RetentionService(store=store).apply(
-        topic_id=int(resolved.id),
-        partition_no=target,
-        retention_ms=int(resolved.retention_ms),
-        retention_bytes=int(resolved.retention_bytes),
-    )
-    return int(resolved.id), target
+    topic_id = int(resolved.id)
+    started = time.perf_counter()
+    if throttle.admit(topic_id=topic_id, partition_no=target):
+        outcome = await RetentionService(store=store).apply(
+            topic_id=topic_id,
+            partition_no=target,
+            retention_ms=int(resolved.retention_ms),
+            retention_bytes=int(resolved.retention_bytes),
+        )
+        _LOGGER.info(
+            "msg_retention",
+            outcome="applied",
+            topic_id=topic_id,
+            partition=target,
+            deleted_segments=outcome.deleted_segments,
+            elapsed_ms=round((time.perf_counter() - started) * 1_000, 3),
+        )
+    else:
+        _LOGGER.info(
+            "msg_retention",
+            outcome="throttled",
+            topic_id=topic_id,
+            partition=target,
+            elapsed_ms=round((time.perf_counter() - started) * 1_000, 3),
+        )
+    return topic_id, target
 
 
 async def ensure_member(
@@ -290,6 +360,7 @@ async def ensure_member(
     uow: UnitOfWork,
     groups: GroupStore,
     state: DeliveryState,
+    cache: TopicCache | None,
     request: ConsumeRequest | AckRequest | NackRequest,
 ) -> None:
     """成员制校验：组存在、成员活跃、分区在该成员分配内（01-4 详细设计 §6.1）。
@@ -302,6 +373,7 @@ async def ensure_member(
         uow: 平台库工作单元（取主题仓储会话）。
         groups: 组存储。
         state: 投递状态（协调器撤销易主分区时清在途）。
+        cache: 进程内主题快照缓存（None = 不缓存）。
         request: 拉取 / 确认请求（两者都带 `group` / `consumer_id` / `partition`）。
 
     Raises:
@@ -310,8 +382,11 @@ async def ensure_member(
         MsgGroupNotFoundError: 消费组不存在（350013）。
         MsgMemberInvalidError: 成员不在组内、已失效，或分区不在其分配内（350014）。
     """
-    session = cast("DbSession", uow.session)
-    coordinator = GroupCoordinator(groups=groups, router=TopicRouter(TopicRepository(session)), delivery=state)
+    coordinator = GroupCoordinator(
+        groups=groups,
+        router=topic_router(uow, cache=cache, tenant_id=int(tenant.tenant_id)),
+        delivery=state,
+    )
     await coordinator.ensure_owner(
         tenant=tenant,
         namespace=request.namespace,
@@ -368,6 +443,8 @@ async def publish(
     delay_scheduler: DelaySchedulerDep,
     limiter: RateLimiterDep,
     metrics: BackpressureMetricsDep,
+    cache: TopicCacheDep,
+    throttle: RetentionThrottleDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -387,7 +464,9 @@ async def publish(
             retry_after_ms=retry_after_ms(verdict),
         )
     if req.delay_level is not None:
-        order = await _delay_service(uow, delay_store, delay_scheduler).publish(tenant=tenant, request=req)
+        order = await _delay_service(
+            uow, delay_store, delay_scheduler, cache=cache, tenant_id=int(tenant.tenant_id)
+        ).publish(tenant=tenant, request=req)
         delay_scheduler.ensure_started()
         return ApiResponse.ok(
             PublishResult(
@@ -405,9 +484,19 @@ async def publish(
         store=store,
         namespace=req.namespace,
         topic=req.topic,
+        cache=cache,
+        throttle=throttle,
         key=req.key,
     )
-    message = await delivery_service(uow, store, offsets, dead_letters, state).publish(tenant=tenant, request=req)
+    message = await delivery_service(
+        uow,
+        store,
+        offsets,
+        dead_letters,
+        state,
+        cache=cache,
+        tenant_id=int(tenant.tenant_id),
+    ).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
             message_id=message.message_id,
@@ -462,6 +551,8 @@ async def consume(
     waiter: WaiterDep,
     backpressure: BackpressureTuningDep,
     metrics: BackpressureMetricsDep,
+    cache: TopicCacheDep,
+    throttle: RetentionThrottleDep,
 ) -> ApiResponse[ConsumeResult]:
     """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
@@ -483,6 +574,8 @@ async def consume(
         store=store,
         namespace=req.namespace,
         topic=req.topic,
+        cache=cache,
+        throttle=throttle,
         partition_no=req.partition,
     )
     state_key = (req.group, topic_id, partition_no)
@@ -496,9 +589,17 @@ async def consume(
     while True:
         # 版本号必须在拉取**之前**取：拉取期间到达的消息靠版本差判定，不必睡满超时。
         version = waiter.version(wait_key)
-        await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
+        await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
         delivered = await delivery_service(
-            uow, store, offsets, dead_letters, state, backpressure=backpressure, waiter=waiter
+            uow,
+            store,
+            offsets,
+            dead_letters,
+            state,
+            cache=cache,
+            tenant_id=int(tenant.tenant_id),
+            backpressure=backpressure,
+            waiter=waiter,
         ).consume(tenant=tenant, request=req)
         measured = state.usage(state_key)
         metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)
@@ -524,16 +625,17 @@ async def ack(
     state: DeliveryStateDep,
     groups: GroupStoreDep,
     waiter: WaiterDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[AckResult]:
     """确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。
 
     需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。
     位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
-    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    committed = await delivery_service(uow, store, offsets, dead_letters, state, waiter=waiter).ack(
-        tenant=tenant, request=req
-    )
+    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
+    committed = await delivery_service(
+        uow, store, offsets, dead_letters, state, cache=cache, tenant_id=int(tenant.tenant_id), waiter=waiter
+    ).ack(tenant=tenant, request=req)
     return ApiResponse.ok(AckResult(committed_offset=committed))
 
 
@@ -547,6 +649,7 @@ async def nack(
     state: DeliveryStateDep,
     groups: GroupStoreDep,
     waiter: WaiterDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[NackResult]:
     """拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。
 
@@ -554,10 +657,10 @@ async def nack(
     成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。
     已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。
     """
-    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    committed = await delivery_service(uow, store, offsets, dead_letters, state, waiter=waiter).nack(
-        tenant=tenant, request=req
-    )
+    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req)
+    committed = await delivery_service(
+        uow, store, offsets, dead_letters, state, cache=cache, tenant_id=int(tenant.tenant_id), waiter=waiter
+    ).nack(tenant=tenant, request=req)
     return ApiResponse.ok(NackResult(committed_offset=committed))
 
 

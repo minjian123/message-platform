@@ -11,6 +11,7 @@ from bms_core.db.session import DbSession
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.errors import MsgErrorCode, MsgPartitionCountInvalidError, MsgTopicNotFoundError
 from bms_msg.models.topic import STATUS_DISABLED, MsgTopic
 from bms_msg.repositories.topic import TopicRepository
@@ -61,21 +62,23 @@ async def test_resolve_disabled_topic_raises(topic: MsgTopic, db_session: AsyncS
 async def test_partition_accepts_in_range(topic: MsgTopic, db_session: AsyncSession) -> None:
     """分区号在 `0 ~ count-1` 内：原样返回。"""
     router = _router(db_session)
-    assert (router.partition(topic, 0), router.partition(topic, 1)) == (0, 1)
+    snapshot = TopicSnapshot.from_topic(topic)
+    assert (router.partition(snapshot, 0), router.partition(snapshot, 1)) == (0, 1)
 
 
 @pytest.mark.parametrize("partition_no", [-1, 2])
 async def test_partition_rejects_out_of_range(topic: MsgTopic, db_session: AsyncSession, partition_no: int) -> None:
     """分区号越界（负数 / 等于分区数）：`350009`。"""
     with pytest.raises(MsgPartitionCountInvalidError) as excinfo:
-        _router(db_session).partition(topic, partition_no)
+        _router(db_session).partition(TopicSnapshot.from_topic(topic), partition_no)
     assert excinfo.value.code == MsgErrorCode.PARTITION_COUNT_INVALID
 
 
 async def test_route_is_stable_for_same_key(topic: MsgTopic, db_session: AsyncSession) -> None:
     """同 key 恒落同分区，且落在合法范围内。"""
     router = _router(db_session)
-    selected = {router.route(topic, "order-1001") for _ in range(10)}
+    snapshot = TopicSnapshot.from_topic(topic)
+    selected = {router.route(snapshot, "order-1001") for _ in range(10)}
     assert len(selected) == 1
     assert 0 <= selected.pop() < int(topic.partition_count)
 
@@ -83,5 +86,6 @@ async def test_route_is_stable_for_same_key(topic: MsgTopic, db_session: AsyncSe
 async def test_route_distributes_distinct_keys(topic: MsgTopic, db_session: AsyncSession) -> None:
     """不同 key 可分布到两个分区（不是恒定返回 0）。"""
     router = _router(db_session)
-    selected = {router.route(topic, f"order-{index}") for index in range(20)}
+    snapshot = TopicSnapshot.from_topic(topic)
+    selected = {router.route(snapshot, f"order-{index}") for index in range(20)}
     assert selected == {0, 1}

@@ -30,6 +30,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.api.admin import topics
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
 
 pytestmark = pytest.mark.kiwi_id(2412)
@@ -118,6 +119,8 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
         ),
     )
     app.state.tenant_source = tenant_source
+    # 01-7：写端点要按精确键失效主题快照缓存（管理面读路径不经缓存）。
+    app.state.topic_cache = TopicCache()
     app.add_middleware(TenantMiddleware)
     register_exception_handlers(app)
     app.include_router(mount_service_routers(ConcurrentStableList([topics.router])))

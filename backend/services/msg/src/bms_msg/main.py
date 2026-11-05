@@ -42,7 +42,9 @@ from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
+from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import register_msg_error_mapper
@@ -115,6 +117,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.group_store = InMemoryGroupStore()
         app.state.stream_registry = StreamRegistry()
         app.state.connection_registry = ConnectionRegistry()
+        # 01-7：主题元数据快照缓存与保留清理节流窗口（进程级；跨实例一致性归 8B_05）。
+        app.state.topic_cache = TopicCache()
+        app.state.retention_throttle = RetentionThrottle()
         delay_store = InMemoryDelayStore()
         app.state.delay_store = delay_store
         app.state.delay_scheduler = DelayScheduler(

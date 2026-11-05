@@ -17,11 +17,12 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends
 
-from bms_msg.api.deps import DataPlaneTenantDep, DeliveryStateDep, GroupStoreDep
+from bms_msg.api.deps import DataPlaneTenantDep, DeliveryStateDep, GroupStoreDep, TopicCacheDep
 from bms_msg.broker.coordinator import GroupCoordinator, MemberState
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import ConsumerGroup, GroupStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.core.config import HEARTBEAT_INTERVAL_MS, SESSION_TIMEOUT_MS
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import TopicRepository
@@ -68,19 +69,32 @@ PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 """平台库工作单元依赖（主题元数据归平台库）。"""
 
 
-def _coordinator(uow: UnitOfWork, groups: GroupStore, delivery: DeliveryState) -> GroupCoordinator:
+def _coordinator(
+    uow: UnitOfWork,
+    groups: GroupStore,
+    delivery: DeliveryState,
+    *,
+    cache: TopicCache | None,
+    tenant_id: int | None,
+) -> GroupCoordinator:
     """组装协调器（请求级主题仓储 + 进程级组存储 / 投递状态）。
 
     Args:
         uow: 平台库工作单元（取主题仓储会话）。
         groups: 组存储。
         delivery: 投递状态（撤销易主分区时清在途）。
+        cache: 进程内主题快照缓存（None = 不缓存）。
+        tenant_id: 当前租户主键（缓存键的一部分）。
 
     Returns:
         GroupCoordinator: 消费组协调器。
     """
     session = cast("DbSession", uow.session)
-    return GroupCoordinator(groups=groups, router=TopicRouter(TopicRepository(session)), delivery=delivery)
+    return GroupCoordinator(
+        groups=groups,
+        router=TopicRouter(TopicRepository(session), cache=cache, tenant_id=tenant_id),
+        delivery=delivery,
+    )
 
 
 def _assignment(state: MemberState, request: MemberRequest) -> MemberAssignment:
@@ -113,6 +127,7 @@ async def join(
     uow: PlatformUowDep,
     groups: GroupStoreDep,
     delivery: DeliveryStateDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[MemberAssignment]:
     """加入消费组（服务端主导分配）。
 
@@ -120,7 +135,9 @@ async def join(
     （刷新存活、不递增世代、分配不变）。返回 `generation` 与 `partitions`，客户端按分配拉取。
     主题不存在 350001，命名空间非已启用 module_key 返回 350010。
     """
-    state = await _coordinator(uow, groups, delivery).join(tenant=tenant, request=req)
+    state = await _coordinator(uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id)).join(
+        tenant=tenant, request=req
+    )
     return ApiResponse.ok(_assignment(state, req))
 
 
@@ -131,13 +148,16 @@ async def heartbeat(
     uow: PlatformUowDep,
     groups: GroupStoreDep,
     delivery: DeliveryStateDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[MemberAssignment]:
     """成员心跳（独立于业务处理：处理慢不会因心跳断而被误判死亡）。
 
     需要 msg:consume 权限；顺带清理同组超时成员，必要时重算分配并返回新 `generation`。
     组不存在 350013，成员不在组内或已超时失效 350014。
     """
-    state = await _coordinator(uow, groups, delivery).heartbeat(tenant=tenant, request=req)
+    state = await _coordinator(uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id)).heartbeat(
+        tenant=tenant, request=req
+    )
     return ApiResponse.ok(_assignment(state, req))
 
 
@@ -148,13 +168,16 @@ async def leave(
     uow: PlatformUowDep,
     groups: GroupStoreDep,
     delivery: DeliveryStateDep,
+    cache: TopicCacheDep,
 ) -> ApiResponse[LeaveResult]:
     """主动离开消费组（幂等：未注册成员也返回成功）。
 
     需要 msg:consume 权限；离开后若组内仍有他人则立即重算分配，最后一名成员离开则组转 `empty`
     （组记录与位点保留）。组不存在 350013。
     """
-    record: ConsumerGroup = await _coordinator(uow, groups, delivery).leave(tenant=tenant, request=req)
+    record: ConsumerGroup = await _coordinator(
+        uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id)
+    ).leave(tenant=tenant, request=req)
     return ApiResponse.ok(
         LeaveResult(
             group=record.group,

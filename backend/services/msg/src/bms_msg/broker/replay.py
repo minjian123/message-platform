@@ -35,6 +35,7 @@ from bms_core.events.base import EventEnvelope
 
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.core.config import (
     MS_PER_SECOND,
     REPLAY_BURST_SECONDS,
@@ -54,7 +55,6 @@ from bms_msg.models.replay import (
     TASK_RUNNING,
     MsgReplayTask,
 )
-from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.schemas.replay import ReplayRequest
 from bms_msg.tenant.context import CurrentTenant
@@ -382,12 +382,12 @@ class ReplayService:
         return updated or task
 
     def _resolve_partitions(
-        self, *, topic: MsgTopic, requested: ConcurrentStableList[int] | None
+        self, *, topic: TopicSnapshot, requested: ConcurrentStableList[int] | None
     ) -> ConcurrentStableList[int]:
         """解析分区集合（缺省全部分区；给定时逐个校验越界并去重排序）。
 
         Args:
-            topic: 主题记录（`MsgTopic`）。
+            topic: 主题快照（`TopicSnapshot`）。
             requested: 请求给的分区号列表；None 表示全部分区。
 
         Returns:

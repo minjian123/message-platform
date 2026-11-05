@@ -23,7 +23,9 @@ from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayRunner, UowFactory
+from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.tenant.context import CurrentTenant
@@ -46,8 +48,10 @@ __all__ = [
     "OffsetStoreDep",
     "RateLimiterDep",
     "ReplayRunnerDep",
+    "RetentionThrottleDep",
     "StreamRegistryDep",
     "StreamTuningDep",
+    "TopicCacheDep",
     "UowFactoryDep",
     "WaiterDep",
     "get_audit_sink",
@@ -66,8 +70,10 @@ __all__ = [
     "get_offset_store",
     "get_rate_limiter",
     "get_replay_runner",
+    "get_retention_throttle",
     "get_stream_registry",
     "get_stream_tuning",
+    "get_topic_cache",
     "get_uow_factory",
     "get_waiter",
 ]
@@ -383,3 +389,34 @@ BackpressureMetricsDep = Annotated[BackpressureMetrics, Depends(get_backpressure
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
 """路由参数写法：`limiter: RateLimiterDep`（生产限流）。"""
+
+
+def get_topic_cache(request: Request) -> TopicCache:
+    """取主题元数据缓存（进程级单例；01-7）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        TopicCache: 主题快照缓存。
+    """
+    return cast("TopicCache", request.app.state.topic_cache)
+
+
+def get_retention_throttle(request: Request) -> RetentionThrottle:
+    """取保留清理节流窗口表（进程级单例；01-7）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        RetentionThrottle: 窗口表。
+    """
+    return cast("RetentionThrottle", request.app.state.retention_throttle)
+
+
+TopicCacheDep = Annotated[TopicCache, Depends(get_topic_cache)]
+"""路由参数写法：`cache: TopicCacheDep`（主题元数据缓存）。"""
+
+RetentionThrottleDep = Annotated[RetentionThrottle, Depends(get_retention_throttle)]
+"""路由参数写法：`throttle: RetentionThrottleDep`（保留清理节流）。"""
