@@ -221,6 +221,18 @@ message_key = "msg.error.stream_limit_exceeded"
 severity = "warning"
 description = "单连接长驻流超限（已达单连接长驻流上限；客户端应降并发或另开连接）"
 
+# ---- 背压与流控（任务 03-5：生产限流）----
+# 350005 与相邻码分工：350015 延迟区满（容量）、350020 连接数满、350021 单连接流满、350006 消息过大；
+# 本码只表示「生产速率超出配额」，JSON 形态回 429 + Retry-After，帧形态回 error 帧 + retry_after_ms。
+# 消费侧 inflight 暂停不是错误（返空批 + paused 字段），因此不占任何码位。
+[[errcodes]]
+code = 350005
+domain = "msg"
+http_status = 429
+message_key = "msg.error.rate_limited"
+severity = "warning"
+description = "生产限流（租户 / 主题速率超出配额）；客户端应按 Retry-After 或 retry_after_ms 退避"
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。

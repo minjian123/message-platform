@@ -98,10 +98,13 @@ class FrameType(IntEnum):
     """确认一条消息（无 payload）。"""
 
     SUBSCRIBE = 4
-    """订阅长驻流（只登记编号：帧式推送归 03-5）。"""
+    """订阅长驻流（03-5 起：请求帧 + `RESPONSE` 位的 open 帧；帧式推送见 `MESSAGE`）。"""
 
     NACK = 5
     """拒绝一条消息并给出原因（03-3：转死信 + 位点前移；payload 必须为空）。"""
+
+    MESSAGE = 6
+    """订阅推送的一条消息（03-5：帧流推送；header 带元数据、payload 为消息体原始字节）。"""
 
     ERROR = 16
     """错误帧（响应帧，携带 `code` / `layer` / `retryable`）。"""
@@ -123,7 +126,7 @@ class FrameFlags(IntFlag):
     """请求方等一个响应帧（未知帧类型据此决定是否回 `error`）。"""
 
     BATCH = 1 << 3
-    """payload 为多条消息的批（03-5）。"""
+    """payload 为多条消息的批（**只留位、未启用**：真实批压缩归 8B_03 SDK 与生产端批量发布）。"""
 
     RESPONSE = 1 << 4
     """本帧是响应帧（与请求同 `type`）。"""

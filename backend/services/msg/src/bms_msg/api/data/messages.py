@@ -18,6 +18,7 @@
 - **契约**：端点声明 `x-error-codes`，供跨仓 `check_modules` 的错误码反向对账。
 """
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
@@ -32,6 +33,8 @@ from fastapi import Depends, params
 from pydantic import BaseModel
 
 from bms_msg.api.deps import (
+    BackpressureMetricsDep,
+    BackpressureTuningDep,
     DataPlaneTenantDep,
     DeadLetterQueueDep,
     DelaySchedulerDep,
@@ -40,19 +43,24 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    RateLimiterDep,
+    WaiterDep,
 )
 from bms_msg.api.frame.guard import CONNECTION_GUARD
+from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage, retry_after_ms
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayService, DelayStore
-from bms_msg.broker.delivery import DeliveryService, DeliveryState
+from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.retention import RetentionService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
-from bms_msg.errors import MsgErrorCode
+from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
+from bms_msg.core.config import MS_PER_SECOND
+from bms_msg.errors import MsgErrorCode, MsgRateLimitedError
 from bms_msg.protocol.frame import FrameType
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
@@ -177,8 +185,11 @@ def delivery_service(
     offsets: OffsetStore,
     dead_letters: DeadLetterQueue,
     state: DeliveryState,
+    *,
+    backpressure: BackpressureTuning | None = None,
+    waiter: DeliveryWaiter | None = None,
 ) -> DeliveryService:
-    """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态）。
+    """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态 / 背压参数）。
 
     跨模块出口：帧入口与长驻流复用同一装配口径（不各自 new 一遍，避免语义分叉）。
 
@@ -188,6 +199,8 @@ def delivery_service(
         offsets: 位点存储。
         dead_letters: 死信队列。
         state: 投递状态。
+        backpressure: inflight 双阈值（None 表示不限）。
+        waiter: 分区唤醒器（None 表示不唤醒，仅单测直连时出现）。
 
     Returns:
         DeliveryService: 投递服务。
@@ -199,6 +212,8 @@ def delivery_service(
         dead_letters=dead_letters,
         router=TopicRouter(TopicRepository(session)),
         state=state,
+        backpressure=backpressure,
+        waiter=waiter,
     )
 
 
@@ -226,14 +241,17 @@ async def apply_retention(
     topic: str,
     partition_no: int | None = None,
     key: str | None = None,
-) -> None:
-    """按主题保留口径清理目标分区到期段（请求驱动，幂等）。
+) -> tuple[int, int]:
+    """按主题保留口径清理目标分区到期段（请求驱动，幂等），并回传解析结果。
 
     判定顺序与既有链路一致：命名空间（`350010`）→ 主题（`350001`）→ 分区号（`350009`）→ 清理；
     因此**非法请求不会触发清理**，且错误码与投递链路同源（排障时两侧结论一致）。
 
     分区号的两种给法（与两条链路对应）：`consume` 直接给 `partition_no`；`publish` 只给 `key`，
     由 `route()` 算出目标分区（同 key 恒同分区，与随后的 `append` 落点一致）。
+
+    **回传 `(topic_id, partition_no)`**（03-5）：长轮询与长驻流的等待键是 `(topic_id, partition_no)`，
+    复用这次解析结果，避免为了拿主键再解析一遍主题。
 
     Args:
         tenant: 当前租户。
@@ -243,6 +261,9 @@ async def apply_retention(
         topic: 主题名。
         partition_no: 目标分区号（`consume` 用）；None 时按 `key` 路由。
         key: 分区键（`publish` 用；可空）。
+
+    Returns:
+        tuple[int, int]: `(主题主键, 目标分区号)`。
 
     Raises:
         MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
@@ -260,6 +281,7 @@ async def apply_retention(
         retention_ms=int(resolved.retention_ms),
         retention_bytes=int(resolved.retention_bytes),
     )
+    return int(resolved.id), target
 
 
 async def ensure_member(
@@ -344,6 +366,8 @@ async def publish(
     state: DeliveryStateDep,
     delay_store: DelayStoreDep,
     delay_scheduler: DelaySchedulerDep,
+    limiter: RateLimiterDep,
+    metrics: BackpressureMetricsDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -352,7 +376,16 @@ async def publish(
     延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。
     首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。
     入口按主题保留口径清理本分区到期段（幂等；见 01-6）。
+    **限流在两条分支之前**（03-5）：延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；
+    超出租户 / 主题配额返回 350005（429 + `Retry-After`）。
     """
+    verdict = limiter.check(tenant=tenant.code, topic=(tenant.code, req.namespace, req.topic))
+    if not verdict.allowed:
+        metrics.record_rate_rejected(scope=verdict.scope, tenant=tenant.code, topic=req.topic)
+        raise MsgRateLimitedError(
+            f"生产速率超出配额（{verdict.scope}），请稍后重试",
+            retry_after_ms=retry_after_ms(verdict),
+        )
     if req.delay_level is not None:
         order = await _delay_service(uow, delay_store, delay_scheduler).publish(tenant=tenant, request=req)
         delay_scheduler.ensure_started()
@@ -387,6 +420,36 @@ async def publish(
     )
 
 
+def _consume_result(
+    delivered: ConcurrentStableList[Delivery],
+    req: ConsumeRequest,
+    *,
+    paused: bool,
+    usage: InflightUsage,
+) -> ApiResponse[ConsumeResult]:
+    """把投递结果装配成响应（拉取端点与长轮询共用一处，字段口径不分叉）。
+
+    Args:
+        delivered: 本次投递（按 offset 升序）。
+        req: 拉取请求（取主题名回显）。
+        paused: 是否因 inflight 达阈值而暂停。
+        usage: 当前在途用量。
+
+    Returns:
+        ApiResponse[ConsumeResult]: 拉取响应。
+    """
+    return ApiResponse.ok(
+        ConsumeResult(
+            messages=ConcurrentStableList(
+                message_item(delivery.message, req.topic, delivery.delivery_count) for delivery in delivered
+            ),
+            paused=paused,
+            inflight_messages=usage.messages,
+            inflight_bytes=usage.bytes,
+        )
+    )
+
+
 async def consume(
     req: ConsumeRequest,
     tenant: DataPlaneTenantDep,
@@ -396,8 +459,11 @@ async def consume(
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
     groups: GroupStoreDep,
+    waiter: WaiterDep,
+    backpressure: BackpressureTuningDep,
+    metrics: BackpressureMetricsDep,
 ) -> ApiResponse[ConsumeResult]:
-    """拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。
+    """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
     需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。
     `acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。
@@ -406,8 +472,12 @@ async def consume(
     主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，
     分区号越界 350009，位点已被保留期清理 350003。
     入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。
+
+    **长轮询（03-5）**：拉空后挂起到「有消息」或 `max_wait_ms` 到期；每轮都重跑成员校验
+    （成员可能在挂起期间超时）。挂起数到全局上限时立即返空（不报错）。
+    **inflight 阈值（03-5）**：已达阈值时不拉、直接返空 + `paused=true`；ack / nack / 死信归还后立即恢复。
     """
-    await apply_retention(
+    topic_id, partition_no = await apply_retention(
         tenant=tenant,
         uow=uow,
         store=store,
@@ -415,15 +485,33 @@ async def consume(
         topic=req.topic,
         partition_no=req.partition,
     )
-    await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    delivered = await delivery_service(uow, store, offsets, dead_letters, state).consume(tenant=tenant, request=req)
-    return ApiResponse.ok(
-        ConsumeResult(
-            messages=ConcurrentStableList(
-                message_item(delivery.message, req.topic, delivery.delivery_count) for delivery in delivered
-            )
-        )
-    )
+    state_key = (req.group, topic_id, partition_no)
+    wait_key = (topic_id, partition_no)
+    limit = backpressure.limit
+    measured = state.usage(state_key)
+    if backpressure.enabled and measured.exhausted(limit):
+        metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)
+        return _consume_result(ConcurrentStableList(), req, paused=True, usage=measured)
+    deadline = time.monotonic() + req.max_wait_ms / MS_PER_SECOND
+    while True:
+        # 版本号必须在拉取**之前**取：拉取期间到达的消息靠版本差判定，不必睡满超时。
+        version = waiter.version(wait_key)
+        await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
+        delivered = await delivery_service(
+            uow, store, offsets, dead_letters, state, backpressure=backpressure, waiter=waiter
+        ).consume(tenant=tenant, request=req)
+        measured = state.usage(state_key)
+        metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)
+        paused = backpressure.enabled and measured.exhausted(limit)
+        if delivered:
+            return _consume_result(delivered, req, paused=paused, usage=measured)
+        remaining_ms = int((deadline - time.monotonic()) * MS_PER_SECOND)
+        if req.max_wait_ms <= 0 or remaining_ms <= 0:
+            return _consume_result(ConcurrentStableList(), req, paused=paused, usage=measured)
+        outcome = await waiter.wait(wait_key, version=version, timeout_ms=remaining_ms)
+        metrics.record_wait(outcome)
+        if outcome is WaitOutcome.REJECTED:
+            return _consume_result(ConcurrentStableList(), req, paused=paused, usage=measured)
 
 
 async def ack(
@@ -435,6 +523,7 @@ async def ack(
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
     groups: GroupStoreDep,
+    waiter: WaiterDep,
 ) -> ApiResponse[AckResult]:
     """确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。
 
@@ -442,7 +531,9 @@ async def ack(
     位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
     await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    committed = await delivery_service(uow, store, offsets, dead_letters, state).ack(tenant=tenant, request=req)
+    committed = await delivery_service(uow, store, offsets, dead_letters, state, waiter=waiter).ack(
+        tenant=tenant, request=req
+    )
     return ApiResponse.ok(AckResult(committed_offset=committed))
 
 
@@ -455,6 +546,7 @@ async def nack(
     dead_letters: DeadLetterQueueDep,
     state: DeliveryStateDep,
     groups: GroupStoreDep,
+    waiter: WaiterDep,
 ) -> ApiResponse[NackResult]:
     """拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。
 
@@ -463,7 +555,9 @@ async def nack(
     已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。
     """
     await ensure_member(tenant=tenant, uow=uow, groups=groups, state=state, request=req)
-    committed = await delivery_service(uow, store, offsets, dead_letters, state).nack(tenant=tenant, request=req)
+    committed = await delivery_service(uow, store, offsets, dead_letters, state, waiter=waiter).nack(
+        tenant=tenant, request=req
+    )
     return ApiResponse.ok(NackResult(committed_offset=committed))
 
 

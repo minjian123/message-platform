@@ -16,9 +16,11 @@ FastAPI 的依赖先于请求体校验执行，因此「在依赖里判定帧形
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
+from bms_core.api.errors import build_error_response
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
@@ -34,6 +36,8 @@ from bms_msg.api.data.messages import (
     publish,
 )
 from bms_msg.api.deps import (
+    BackpressureMetricsDep,
+    BackpressureTuningDep,
     DataPlaneTenantDep,
     DeadLetterQueueDep,
     DelaySchedulerDep,
@@ -42,20 +46,27 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    RateLimiterDep,
+    WaiterDep,
 )
 from bms_msg.api.frame.media import is_frame_request
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, error_frame, result_frame
+from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
+from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import connection_meta
+from bms_msg.broker.waiter import DeliveryWaiter
+from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import (
     MsgError,
     MsgFrameInvalidError,
+    MsgRateLimitedError,
     MsgTenantNotFoundError,
     MsgVersionUnsupportedError,
 )
@@ -101,7 +112,13 @@ class FrameHandled(Exception):
 
 
 def register_frame_handlers(app: FastAPI) -> None:
-    """登记帧响应异常处理器（装配期调用；测试最小装配同样需要）。
+    """登记帧响应与限流异常处理器（装配期调用；测试最小装配同样需要）。
+
+    两个处理器：
+
+    - `FrameHandled`：直出闸门准备好的帧响应；
+    - `MsgRateLimitedError`：JSON 429 **带 `Retry-After` 头**（基座统一错误响应已支持该参数，
+      但全局 `BizError` 处理器不传；限流是这个头最需要的地方，故产品侧单独登记）。
 
     Args:
         app: 应用实例。
@@ -120,7 +137,22 @@ def register_frame_handlers(app: FastAPI) -> None:
         del request
         return cast("FrameHandled", exc).response
 
+    async def _rate_limited(request: Request, exc: Exception) -> Response:
+        """限流拒绝 → 统一错误体 + `Retry-After`（秒，向上取整到至少 1）。
+
+        Args:
+            request: 当前请求（取请求 id / 链路 id / 应用装配）。
+            exc: `MsgRateLimitedError`。
+
+        Returns:
+            Response: `429` 统一错误响应。
+        """
+        refuse = cast("MsgRateLimitedError", exc)
+        seconds = max(math.ceil(refuse.retry_after_ms / MS_PER_SECOND), 1)
+        return await build_error_response(request.scope, refuse, retry_after=seconds)
+
     app.add_exception_handler(FrameHandled, _render)
+    app.add_exception_handler(MsgRateLimitedError, _rate_limited)
 
 
 def _response(body: bytes) -> Response:
@@ -323,6 +355,10 @@ async def _invoke(
     groups: GroupStore,
     delay_store: DelayStore,
     delay_scheduler: DelayScheduler,
+    waiter: DeliveryWaiter,
+    backpressure: BackpressureTuning,
+    limiter: RateLimiter,
+    metrics: BackpressureMetrics,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -338,6 +374,10 @@ async def _invoke(
         groups: 组存储。
         delay_store: 延迟区。
         delay_scheduler: 到期推进器。
+        waiter: 分区唤醒器（长轮询 / 额度归还后的唤醒）。
+        backpressure: inflight 双阈值。
+        limiter: 生产限流器。
+        metrics: 背压指标收集器。
 
     Returns:
         object: 结果模型。
@@ -356,6 +396,8 @@ async def _invoke(
             state=state,
             delay_store=delay_store,
             delay_scheduler=delay_scheduler,
+            limiter=limiter,
+            metrics=metrics,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -367,6 +409,9 @@ async def _invoke(
             dead_letters=dead_letters,
             state=state,
             groups=groups,
+            waiter=waiter,
+            backpressure=backpressure,
+            metrics=metrics,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -378,6 +423,7 @@ async def _invoke(
             dead_letters=dead_letters,
             state=state,
             groups=groups,
+            waiter=waiter,
         )
     elif frame_type == int(FrameType.NACK):
         response = await nack(
@@ -389,6 +435,7 @@ async def _invoke(
             dead_letters=dead_letters,
             state=state,
             groups=groups,
+            waiter=waiter,
         )
     else:  # pragma: no cover - 类型在挂载期已固定为三种之一
         raise TypeError(f"未支持的帧类型：{frame_type}")
@@ -411,6 +458,10 @@ async def _handle_frame(
     groups: GroupStore,
     delay_store: DelayStore,
     delay_scheduler: DelayScheduler,
+    waiter: DeliveryWaiter,
+    backpressure: BackpressureTuning,
+    limiter: RateLimiter,
+    metrics: BackpressureMetrics,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -429,6 +480,10 @@ async def _handle_frame(
         groups: 组存储。
         delay_store: 延迟区。
         delay_scheduler: 到期推进器。
+        waiter: 分区唤醒器。
+        backpressure: inflight 双阈值。
+        limiter: 生产限流器。
+        metrics: 背压指标收集器。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -494,11 +549,18 @@ async def _handle_frame(
             groups=groups,
             delay_store=delay_store,
             delay_scheduler=delay_scheduler,
+            waiter=waiter,
+            backpressure=backpressure,
+            limiter=limiter,
+            metrics=metrics,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
         message = exc.message or str(exc)
-        raise FrameHandled(_response(error_frame(code=exc.code, message=message, request_id=request_id))) from exc
+        retry_ms = exc.retry_after_ms if isinstance(exc, MsgRateLimitedError) else None
+        raise FrameHandled(
+            _response(error_frame(code=exc.code, message=message, request_id=request_id, retry_after_ms=retry_ms))
+        ) from exc
     _log(frame_type=frame_type, request_id=request_id, request=request, outcome="ok")
     return _response(result_frame(frame_type=frame_type, request_id=request_id, result=result))
 
@@ -527,6 +589,10 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         groups: GroupStoreDep,
         delay_store: DelayStoreDep,
         delay_scheduler: DelaySchedulerDep,
+        waiter: WaiterDep,
+        backpressure: BackpressureTuningDep,
+        limiter: RateLimiterDep,
+        metrics: BackpressureMetricsDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -541,6 +607,10 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             groups: 组存储。
             delay_store: 延迟区。
             delay_scheduler: 到期推进器。
+            waiter: 分区唤醒器。
+            backpressure: inflight 双阈值。
+            limiter: 生产限流器。
+            metrics: 背压指标收集器。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -563,6 +633,10 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             groups=groups,
             delay_store=delay_store,
             delay_scheduler=delay_scheduler,
+            waiter=waiter,
+            backpressure=backpressure,
+            limiter=limiter,
+            metrics=metrics,
         )
         raise FrameHandled(response)
 

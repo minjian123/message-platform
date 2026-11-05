@@ -146,6 +146,7 @@ def _consume_header() -> dict[str, Any]:
             "group": GROUP,
             "consumer_id": CONSUMER,
             "partition": 0,
+            "max_wait_ms": 0,
         }
     )
 
@@ -341,6 +342,7 @@ async def test_json_path_carries_content_type(client: AsyncClient) -> None:
             "group": GROUP,
             "consumer_id": CONSUMER,
             "partition": 0,
+            "max_wait_ms": 0,
         },
         headers=DEMO_HEADERS,
     )

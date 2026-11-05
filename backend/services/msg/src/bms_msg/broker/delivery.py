@@ -30,6 +30,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList,
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
 
+from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage
 from bms_msg.broker.deadletter import (
     DEAD_LETTER_EXHAUSTED,
     DeadLetter,
@@ -39,6 +40,7 @@ from bms_msg.broker.deadletter import (
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import (
@@ -99,11 +101,12 @@ class Delivery(BaseValueObject):
 
 
 class DeliveryState:
-    """进程级投递状态：在途投递 + 乱序已确认 offset + 状态临界区锁。"""
+    """进程级投递状态：在途投递 + 字节账 + 乱序已确认 offset + 状态临界区锁。"""
 
     def __init__(self) -> None:
-        """初始化（无在途、无暂存确认）。"""
+        """初始化（无在途、无暂存确认、字节账为空）。"""
         self._inflight: dict[PartitionKey, dict[int, InflightDelivery]] = {}
+        self._sizes: dict[PartitionKey, dict[int, int]] = {}
         self._acked: dict[PartitionKey, ConcurrentStableSet[int]] = {}
         self._lock = asyncio.Lock()
 
@@ -128,24 +131,48 @@ class DeliveryState:
         """
         return self._inflight.get(key, {}).get(offset)
 
-    def track(self, key: PartitionKey, offset: int, delivery: InflightDelivery) -> None:
-        """登记一次在途投递（覆盖同 offset 的旧记录）。
+    def usage(self, key: PartitionKey) -> InflightUsage:
+        """取某分区的在途用量（条数 + 字节；03-5 双阈值的唯一读数）。
+
+        Args:
+            key: 投递状态键。
+
+        Returns:
+            InflightUsage: 当前用量。
+        """
+        return InflightUsage(
+            messages=len(self._inflight.get(key, {})),
+            bytes=sum(self._sizes.get(key, {}).values()),
+        )
+
+    def track(self, key: PartitionKey, offset: int, delivery: InflightDelivery, *, size: int = 0) -> None:
+        """登记一次在途投递（覆盖同 offset 的旧记录，并同步字节账）。
+
+        **重投覆盖时先减旧字节**：否则同一条消息每重投一次就多算一份，阈值会被虚增的字节提前打满，
+        表现为「消息还没几条就停止推送」。
 
         Args:
             key: 投递状态键。
             offset: 分区内序号。
             delivery: 在途投递记录。
+            size: 该消息的 payload 字节数（03-5；缺省 0 表示不记账，兼容既有调用）。
         """
-        self._inflight.setdefault(key, {})[offset] = delivery
+        bucket = self._inflight.setdefault(key, {})
+        sizes = self._sizes.setdefault(key, {})
+        sizes.pop(offset, None)
+        bucket[offset] = delivery
+        if size:
+            sizes[offset] = size
 
     def forget(self, key: PartitionKey, offset: int) -> None:
-        """移除在途记录（确认或转死信后）。
+        """移除在途记录与字节账（确认 / 死信 / 重投超限后）。
 
         Args:
             key: 投递状态键。
             offset: 分区内序号。
         """
         self._inflight.get(key, {}).pop(offset, None)
+        self._sizes.get(key, {}).pop(offset, None)
 
     def mark_acked(self, key: PartitionKey, offset: int) -> None:
         """记录一个已确认 offset（用于乱序确认的成段推进）。
@@ -180,17 +207,21 @@ class DeliveryState:
                 acked.discard(offset)
 
     def drop_partition(self, key: PartitionKey) -> None:
-        """清掉某分区全部在途登记（分区易主时用；位点与暂存确认**不动**）。
+        """清掉某分区全部在途登记与字节账（分区易主时用；位点与暂存确认**不动**）。
 
         01-4 再均衡撤销易主分区时调用：不清则新 owner 会被「他人未过期在途」挡住整批拉取
         （01-3 停等），最长空转一个可见性超时；清掉后新 owner 立即可从已提交位点重投，
         代价是未 ack 消息多投一次（至少一次语义允许）。`acked` 集合保留——已确认但受缺口阻塞的
         offset 仍应参与连续前缀推进，清掉只会多一次重复投递。
 
+        03-5 起**字节账一并清**：不清则新持有者一上来就被「前持有者的字节」判成超限，
+        恢复要等一个可见性超时（与在途账同一类问题）。
+
         Args:
             key: 投递状态键。
         """
         self._inflight.pop(key, None)
+        self._sizes.pop(key, None)
 
 
 class DeliveryService:
@@ -205,6 +236,8 @@ class DeliveryService:
         router: TopicRouter,
         state: DeliveryState,
         now: Callable[[], datetime] = _utcnow,
+        backpressure: BackpressureTuning | None = None,
+        waiter: DeliveryWaiter | None = None,
     ) -> None:
         """初始化。
 
@@ -215,6 +248,8 @@ class DeliveryService:
             router: 主题路由（请求级，绑定平台库主题仓储）。
             state: 投递状态（进程级）。
             now: 时钟（缺省 UTC 当前时间；用例注入固定时钟以模拟可见性超时）。
+            backpressure: inflight 双阈值（03-5；None 表示不限，保持 01-2 / 01-3 用例原行为）。
+            waiter: 分区唤醒器（03-5；确认 / 死信归还额度后唤醒被暂停的流）。
         """
         self._store = store
         self._offsets = offsets
@@ -222,6 +257,35 @@ class DeliveryService:
         self._router = router
         self._state = state
         self._now = now
+        self._backpressure = backpressure
+        self._waiter = waiter
+
+    def _notify(self, key: PartitionKey) -> None:
+        """唤醒该分区上的长轮询 / 长驻流（额度归还或消息写入后）。
+
+        Args:
+            key: 投递状态键（`(group, topic_id, partition_no)`；等待键省去 group）。
+        """
+        if self._waiter is not None:
+            self._waiter.notify((key[1], key[2]))
+
+    def _budget(self, key: PartitionKey, request: ConsumeRequest) -> InflightUsage | None:
+        """算本轮可用额度（None 表示不限）。
+
+        三条短路：未配置阈值 / 阈值为 0 / `acks=0`（该档位不登记在途，用量恒不增长）。
+
+        Args:
+            key: 投递状态键。
+            request: 拉取请求。
+
+        Returns:
+            InflightUsage | None: 剩余额度；None 表示不限。
+        """
+        if self._backpressure is None or not self._backpressure.enabled:
+            return None
+        if request.acks == ACKS_FIRE_AND_FORGET:
+            return None
+        return self._state.usage(key).remaining(self._backpressure.limit)
 
     async def publish(self, *, tenant: CurrentTenant, request: PublishRequest) -> StoredMessage:
         """发布一条消息（按分区键选分区、分配 offset、生成 `message_id` 与 `log_id`）。
@@ -284,7 +348,12 @@ class DeliveryService:
             if committed < start:
                 raise MsgMessageNotFoundError(f"位点已被保留期清理：{committed} < {start}")
             return await self._collect(
-                request=request, key=key, topic_id=topic_id, partition_no=partition_no, committed=committed
+                request=request,
+                key=key,
+                topic_id=topic_id,
+                partition_no=partition_no,
+                committed=committed,
+                budget=self._budget(key, request),
             )
 
     async def ack(self, *, tenant: CurrentTenant, request: AckRequest) -> int:
@@ -323,6 +392,7 @@ class DeliveryService:
                 raise MsgMessageNotFoundError(f"消息不在投递中：offset={request.offset}")
             advanced = await self._commit(key=key, offset=request.offset)
             self._state.forget(key, request.offset)
+            self._notify(key)
             return advanced
 
     async def nack(self, *, tenant: CurrentTenant, request: NackRequest) -> int:
@@ -382,6 +452,7 @@ class DeliveryService:
         topic_id: int,
         partition_no: int,
         committed: int,
+        budget: InflightUsage | None = None,
     ) -> ConcurrentStableList[Delivery]:
         """从已提交位点起按 offset 升序收集一批投递（分区内停等）。
 
@@ -393,12 +464,16 @@ class DeliveryService:
         4. 在途已过期且 `attempts + 1 > 上限` → 转死信 → 继续看下一条；
         5. 其余 → 投出（`acks=1` 登记在途；`acks=0` 不登记）。
 
+        **03-5 的字节额度只限制「投出前的条数」，不参与上述停等判定**：额度不足时停批，
+        但绝不越过队头、绝不改变「谁先谁后」——顺序性与背压是两件事。
+
         Args:
             request: 拉取请求。
             key: 投递状态键。
             topic_id: 主题主键。
             partition_no: 分区号。
             committed: 已提交位点。
+            budget: 剩余额度（None 表示不限；条数为 0 即一条不投）。
 
         Returns:
             ConcurrentStableList[Delivery]: 本次投递（可能为空；按 offset 升序）。
@@ -410,12 +485,14 @@ class DeliveryService:
         cursor = committed
         contiguous = committed
         retried = False
-        while len(delivered) < request.max_messages:
+        limit = request.max_messages if budget is None else min(request.max_messages, budget.messages)
+        bytes_left = None if budget is None else budget.bytes
+        while len(delivered) < limit:
             batch = await self._store.fetch(
                 topic_id=topic_id,
                 partition_no=partition_no,
                 from_offset=cursor,
-                max_messages=request.max_messages - len(delivered),
+                max_messages=limit - len(delivered),
             )
             if not batch:
                 break
@@ -440,15 +517,22 @@ class DeliveryService:
                     # 本批已含重投：新消息留到下一批，失败重试不与主链路同批下发。
                     stopped = True
                     break
+                size = len(message.payload)
+                if bytes_left is not None and size > bytes_left:
+                    # 字节额度不足：停批。与「队头未确认」是两种停法——这里不改变顺序判定。
+                    stopped = True
+                    break
                 delivery = await self._deliver(key=key, message=message, acks=request.acks, existing=existing)
                 if delivery is None:
                     # 本次刚转死信：与「已死信」同处置，继续看下一条。
                     continue
                 delivered.add(delivery)
+                if bytes_left is not None:
+                    bytes_left -= size
                 if existing is not None:
                     retried = True
                 contiguous = message.offset + 1
-                if len(delivered) == request.max_messages:
+                if len(delivered) == limit:
                     break
             if stopped:
                 break
@@ -485,6 +569,7 @@ class DeliveryService:
                 attempts=attempts,
                 deadline=self._now() + timedelta(milliseconds=DEFAULT_VISIBILITY_TIMEOUT_MS),
             ),
+            size=len(message.payload),
         )
         return Delivery(message=message, delivery_count=attempts)
 
@@ -523,7 +608,9 @@ class DeliveryService:
             )
         )
         self._state.forget(key, message.offset)
-        return await self._commit(key=key, offset=message.offset)
+        advanced = await self._commit(key=key, offset=message.offset)
+        self._notify(key)
+        return advanced
 
     async def _commit(self, *, key: PartitionKey, offset: int) -> int:
         """按「连续已确认前缀」推进位点（先落存储、成功后才改内存状态）。

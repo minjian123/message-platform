@@ -18,9 +18,16 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
-from bms_msg.schemas.transport import ConnectionInfo
+from bms_msg.schemas.transport import ConnectionInfo, StreamOpen
 
-__all__ = ["FRAME_MEDIA_TYPE", "classify", "error_frame", "result_frame"]
+__all__ = [
+    "FRAME_MEDIA_TYPE",
+    "classify",
+    "error_frame",
+    "message_frame",
+    "result_frame",
+    "stream_open_frame",
+]
 
 _RETRYABLE_BUSINESS = frozenset({350005, 350015, 350020, 350021})
 """业务层里「等一会儿再试有意义」的码：限流 / 背压、延迟区已满、连接数 / 单连接流数超限。"""
@@ -159,6 +166,9 @@ def result_frame(*, frame_type: int, request_id: str | None, result: object) -> 
     elif frame_type == int(FrameType.CONSUME) and isinstance(result, ConsumeResult):
         header.set("count", len(result.messages))
         header.set("messages", _consume_meta(result))
+        header.set("paused", result.paused)
+        header.set("inflight_messages", result.inflight_messages)
+        header.set("inflight_bytes", result.inflight_bytes)
         payload = _consume_payload(result)
     elif frame_type in (int(FrameType.ACK), int(FrameType.NACK)) and isinstance(result, (AckResult, NackResult)):
         # 两种「确认类」结果同构（都只有一个 committed_offset），共用一支装配。
@@ -197,6 +207,32 @@ def _item_bytes(item: MessageItem) -> bytes:
     return base64.b64decode(item.payload)
 
 
+def _message_meta(item: MessageItem) -> ConcurrentStableDict[str, Any]:
+    """构造单条消息的元数据（consume 响应头与 `message` 帧共用一处，字段不分叉）。
+
+    Args:
+        item: 投递明细。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 元数据（含 `length` 与内容类型三字段）。
+    """
+    meta: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    meta.set("message_id", item.message_id)
+    meta.set("topic", item.topic)
+    meta.set("partition", item.partition)
+    meta.set("offset", item.offset)
+    meta.set("key", item.key)
+    meta.set("trace_id", item.trace_id)
+    meta.set("delivery_count", item.delivery_count)
+    meta.set("published_at", _iso(item.published_at))
+    meta.set("headers", dict(item.headers.items()))
+    meta.set("content_type", item.content_type)
+    meta.set("compression", item.compression)
+    meta.set("uncompressed_len", item.uncompressed_len)
+    meta.set("length", len(_item_bytes(item)))
+    return meta
+
+
 def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
     """构造 consume 响应头的消息元数据（含切分用的 `length` 与内容类型标记）。
 
@@ -208,22 +244,7 @@ def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStabl
     """
     metas: ConcurrentStableList[ConcurrentStableDict[str, Any]] = ConcurrentStableList()
     for item in result.messages:
-        body = _item_bytes(item)
-        meta: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
-        meta.set("message_id", item.message_id)
-        meta.set("topic", item.topic)
-        meta.set("partition", item.partition)
-        meta.set("offset", item.offset)
-        meta.set("key", item.key)
-        meta.set("trace_id", item.trace_id)
-        meta.set("delivery_count", item.delivery_count)
-        meta.set("published_at", _iso(item.published_at))
-        meta.set("headers", dict(item.headers.items()))
-        meta.set("content_type", item.content_type)
-        meta.set("compression", item.compression)
-        meta.set("uncompressed_len", item.uncompressed_len)
-        meta.set("length", len(body))
-        metas.add(meta)
+        metas.add(_message_meta(item))
     return metas
 
 
@@ -237,6 +258,49 @@ def _consume_payload(result: ConsumeResult) -> bytes:
         bytes: 拼接后的消息体。
     """
     return b"".join(_item_bytes(item) for item in result.messages)
+
+
+def stream_open_frame(*, request_id: str, opened: StreamOpen) -> bytes:
+    """编码帧流的首帧（`SUBSCRIBE` + `RESPONSE`，等价 SSE 的 `open` 事件）。
+
+    Args:
+        request_id: 请求标识（回显）。
+        opened: 流参数回显。
+
+    Returns:
+        bytes: 完整帧字节。
+    """
+    header = _result_header(request_id)
+    header.set("stream_id", opened.stream_id)
+    header.set("max_seconds", opened.max_seconds)
+    header.set("max_wait_ms", opened.max_wait_ms)
+    header.set("poll_interval_ms", opened.poll_interval_ms)
+    header.set("prefetch", opened.prefetch)
+    header.set("inflight_messages", opened.inflight_messages)
+    header.set("inflight_bytes", opened.inflight_bytes)
+    return encode_frame(frame_type=int(FrameType.SUBSCRIBE), flags=FrameFlags.RESPONSE, header=header)
+
+
+def message_frame(*, request_id: str, item: MessageItem) -> bytes:
+    """编码一条推送消息帧（`MESSAGE`，payload 为消息体原始字节，不 base64）。
+
+    Args:
+        request_id: 请求标识（回显；客户端据此把多路流对齐）。
+        item: 投递明细。
+
+    Returns:
+        bytes: 完整帧字节。
+    """
+    header = _result_header(request_id)
+    for name, value in _message_meta(item).items():
+        header.set(name, value)
+    header.set("request_id", request_id)
+    header.set("protocol_version", PROTOCOL_VERSION)
+    return encode_frame(
+        frame_type=int(FrameType.MESSAGE),
+        header=header,
+        payload=_item_bytes(item),
+    )
 
 
 FRAME_MEDIA_TYPE = FRAME_CONTENT_TYPE

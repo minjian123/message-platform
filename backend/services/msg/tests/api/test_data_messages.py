@@ -43,6 +43,7 @@ from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
+from tests_support.frame_app import install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2414)
 
@@ -138,6 +139,7 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     )
     app.state.tenant_source = tenant_source
     app.state.message_store = InMemoryMessageStore(segment_records=2)
+    install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
@@ -280,6 +282,7 @@ async def _consume(
     partition: int = 0,
     tenant: str = "demo",
     consumer_id: str = CONSUMER,
+    max_wait_ms: int = 0,
 ) -> Response:
     """发一次拉取请求。
 
@@ -290,6 +293,7 @@ async def _consume(
         partition: 分区号。
         tenant: 租户编码。
         consumer_id: 成员标识（须已加入该组）。
+        max_wait_ms: 长轮询挂起上限（本文件验证投递语义，一律 0；长轮询见 `test_long_poll.py`）。
 
     Returns:
         Response: 响应。
@@ -304,6 +308,7 @@ async def _consume(
             "partition": partition,
             "max_messages": max_messages,
             "acks": acks,
+            "max_wait_ms": max_wait_ms,
         },
         headers={"X-Tenant-ID": tenant},
     )

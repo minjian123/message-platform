@@ -289,6 +289,7 @@ async def test_single_connection_multiplexes_stream_and_data_plane(api_app: Fast
                             "namespace": NAMESPACE,
                             "topic": TOPIC_NAME,
                             "partition": 0,
+                            "max_wait_ms": 0,
                         },
                         headers=DEMO_HEADERS,
                     ),

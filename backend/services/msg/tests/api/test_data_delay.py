@@ -48,6 +48,7 @@ from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
+from tests_support.frame_app import install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2417)
 
@@ -143,6 +144,7 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     )
     app.state.tenant_source = tenant_source
     app.state.message_store = InMemoryMessageStore()
+    install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
@@ -293,6 +295,7 @@ async def _consume(client: AsyncClient) -> Response:
             "topic": TOPIC_NAME,
             "partition": 0,
             "max_messages": 10,
+            "max_wait_ms": 0,
         },
         headers=DEMO_HEADERS,
     )

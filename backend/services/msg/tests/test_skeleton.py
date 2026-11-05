@@ -19,6 +19,7 @@ from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry
+from bms_msg.broker.waiter import NotifyingMessageStore
 from bms_msg.main import ApplicationFactory
 from services.table_registry import register as register_product_tables
 from services.table_registry import table_names
@@ -120,7 +121,9 @@ def test_application_assembles_data_plane_state() -> None:
             "/msg/subscribe",
             "/msg/connection",
         } <= paths
-        assert isinstance(app.state.message_store, InMemoryMessageStore)
+        # 03-5 起存储外面包了一层「写入即唤醒」：内层仍是内存实现，端口与行为不变。
+        assert isinstance(app.state.message_store, NotifyingMessageStore)
+        assert isinstance(app.state.message_store.inner, InMemoryMessageStore)
         assert isinstance(app.state.offset_store, InMemoryOffsetStore)
         assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)

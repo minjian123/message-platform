@@ -31,19 +31,41 @@ from bms_msg.api.data import messages
 from bms_msg.api.frame import connection as frame_connection
 from bms_msg.api.frame import routes as frame_routes
 from bms_msg.api.frame.gate import register_frame_handlers
+from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.log import InMemoryMessageStore
+from bms_msg.broker.log import InMemoryMessageStore, MessageStore
+from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.transport import StreamRegistry
+from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import MSG_ERROR_MAPPER
 
-__all__ = ["build_frame_app"]
+__all__ = ["build_frame_app", "install_backpressure_state"]
+
+
+def install_backpressure_state(app: FastAPI) -> None:
+    """注入 03-5 的进程级状态（唤醒器 / 指标 / 限流器），并把消息存储包一层「写入即唤醒」。
+
+    各用例文件自建的应用都要调一次（生产由 `configure_service()` 注入）。幂等：已注入则跳过。
+    注意调用顺序——**先注入再构造延迟推进器**，否则推进器会捕获未包装的存储，延迟转投不会唤醒等待者；
+    顺序不满足时功能仍可用（长轮询退化为「等到超时再拉」），只是少了即时唤醒。
+
+    Args:
+        app: 应用实例（其 `message_store` 必须已就位）。
+    """
+    if getattr(app.state, "waiter", None) is not None:
+        return
+    waiter = DeliveryWaiter()
+    app.state.waiter = waiter
+    app.state.message_store = NotifyingMessageStore(cast("MessageStore", app.state.message_store), waiter)
+    app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
+    app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
 
 
 def build_frame_app(
@@ -92,6 +114,7 @@ def build_frame_app(
     )
     app.state.tenant_source = tenant_source
     app.state.message_store = InMemoryMessageStore(segment_records=segment_records)
+    install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()

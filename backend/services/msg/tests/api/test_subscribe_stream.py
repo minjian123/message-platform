@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.api.deps import get_stream_tuning
 from bms_msg.api.frame.routes import stream_events
+from bms_msg.broker.backpressure import default_backpressure_tuning
 from bms_msg.broker.transport import StreamTuning, connection_meta
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.schemas.transport import SubscribeQuery
@@ -168,6 +169,9 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
         query=query,
         tuning=tuning,
         connection_key=_TEST_CONNECTION_KEY,
+        waiter=app.state.waiter,
+        backpressure=default_backpressure_tuning(),
+        metrics=app.state.backpressure_metrics,
     )
 
 

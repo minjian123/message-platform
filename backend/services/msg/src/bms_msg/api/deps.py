@@ -13,21 +13,26 @@ from typing import Annotated, cast
 from bms_core.core.config import get_settings
 from fastapi import Depends, Request
 
+from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter, default_backpressure_tuning
 from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, connection_tuning_from_settings
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
+from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayRunner, UowFactory
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
+from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
 __all__ = [
     "AuditSinkDep",
+    "BackpressureMetricsDep",
+    "BackpressureTuningDep",
     "ConnectionRegistryDep",
     "ConnectionTuningDep",
     "CurrentTenantDep",
@@ -39,11 +44,15 @@ __all__ = [
     "GroupStoreDep",
     "MessageStoreDep",
     "OffsetStoreDep",
+    "RateLimiterDep",
     "ReplayRunnerDep",
     "StreamRegistryDep",
     "StreamTuningDep",
     "UowFactoryDep",
+    "WaiterDep",
     "get_audit_sink",
+    "get_backpressure_metrics",
+    "get_backpressure_tuning",
     "get_connection_registry",
     "get_connection_tuning",
     "get_current_tenant_context",
@@ -55,10 +64,12 @@ __all__ = [
     "get_group_store",
     "get_message_store",
     "get_offset_store",
+    "get_rate_limiter",
     "get_replay_runner",
     "get_stream_registry",
     "get_stream_tuning",
     "get_uow_factory",
+    "get_waiter",
 ]
 
 
@@ -275,9 +286,54 @@ def get_stream_tuning() -> StreamTuning:
     """取长驻流参数（缺省取模块常量；用例经依赖覆盖注入毫秒级参数）。
 
     Returns:
-        StreamTuning: 流参数（轮询间隔 / 时长上限 / 节点心跳间隔）。
+        StreamTuning: 流参数（兜底轮询间隔 / 时长上限 / 心跳间隔 / 等待上限 / 预取）。
     """
     return default_stream_tuning()
+
+
+def get_backpressure_tuning() -> BackpressureTuning:
+    """取 inflight 双阈值（缺省取模块常量；用例经依赖覆盖注入小阈值）。
+
+    Returns:
+        BackpressureTuning: 条数与字节阈值。
+    """
+    return default_backpressure_tuning()
+
+
+def get_waiter(request: Request) -> DeliveryWaiter:
+    """取分区唤醒器（进程级单例；长轮询与长驻流共用同一份版本表）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        DeliveryWaiter: 唤醒器。
+    """
+    return cast("DeliveryWaiter", request.app.state.waiter)
+
+
+def get_backpressure_metrics(request: Request) -> BackpressureMetrics:
+    """取背压指标收集器（进程级单例；暴露归 06-3）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        BackpressureMetrics: 收集器。
+    """
+    return cast("BackpressureMetrics", request.app.state.backpressure_metrics)
+
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    """取生产限流器（进程级单例；令牌桶状态跨请求存续）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        RateLimiter: 两级令牌桶。
+    """
+    return cast("RateLimiter", request.app.state.rate_limiter)
 
 
 def get_connection_registry(request: Request) -> ConnectionRegistry:
@@ -315,3 +371,15 @@ ConnectionRegistryDep = Annotated[ConnectionRegistry, Depends(get_connection_reg
 
 ConnectionTuningDep = Annotated[ConnectionTuning, Depends(get_connection_tuning)]
 """路由参数写法：`tuning: ConnectionTuningDep`（连接参数，区别于 `StreamTuning`）。"""
+
+BackpressureTuningDep = Annotated[BackpressureTuning, Depends(get_backpressure_tuning)]
+"""路由参数写法：`budget: BackpressureTuningDep`（inflight 双阈值）。"""
+
+WaiterDep = Annotated[DeliveryWaiter, Depends(get_waiter)]
+"""路由参数写法：`waiter: WaiterDep`（长轮询 / 长驻流的唤醒器）。"""
+
+BackpressureMetricsDep = Annotated[BackpressureMetrics, Depends(get_backpressure_metrics)]
+"""路由参数写法：`metrics: BackpressureMetricsDep`（背压指标收集器）。"""
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+"""路由参数写法：`limiter: RateLimiterDep`（生产限流）。"""

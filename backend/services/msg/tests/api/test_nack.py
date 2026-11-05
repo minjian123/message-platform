@@ -123,6 +123,7 @@ async def _consume(client: AsyncClient, *, max_messages: int = 20) -> Any:
             "consumer_id": CONSUMER,
             "partition": 0,
             "max_messages": max_messages,
+            "max_wait_ms": 0,
         }
     )
     return await post_frame(client, "/msg/consume", frame_bytes(int(FrameType.CONSUME), request_header))

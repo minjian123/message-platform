@@ -26,7 +26,9 @@ from bms_core.core.roots import BaseFrameworkObject
 from bms_msg.core.config import (
     SUBSCRIBE_KEEPALIVE_MS,
     SUBSCRIBE_MAX_SECONDS,
+    SUBSCRIBE_MAX_WAIT_MS,
     SUBSCRIBE_POLL_INTERVAL_MS,
+    SUBSCRIBE_PREFETCH,
 )
 
 __all__ = [
@@ -239,7 +241,7 @@ class StreamTuning:
     """长驻流参数（值对象；用例经依赖覆盖注入毫秒级参数）。"""
 
     poll_interval_ms: int
-    """无消息时的重试拉取间隔（毫秒）。"""
+    """无消息时的**兜底**重试拉取间隔（毫秒；仅在 `max_wait_ms == 0` 时生效）。"""
 
     max_seconds: int
     """单条流时长上限（秒，缺省值；请求可覆盖到 `SUBSCRIBE_MAX_SECONDS_LIMIT`）。"""
@@ -247,17 +249,25 @@ class StreamTuning:
     keepalive_ms: int
     """空闲期 SSE 注释行心跳间隔（毫秒）。"""
 
+    max_wait_ms: int = SUBSCRIBE_MAX_WAIT_MS
+    """单次无消息等待上限（毫秒；03-5 起由事件唤醒，等待到期再拉一轮）。"""
+
+    prefetch: int = SUBSCRIBE_PREFETCH
+    """预取条数（0 = 拉到即发；>0 = 发当前批时先拉下一批，预取的条数计入 inflight）。"""
+
 
 def default_stream_tuning() -> StreamTuning:
     """按模块常量构造缺省流参数。
 
     Returns:
-        StreamTuning: 缺省参数（200ms / 60s / 15s）。
+        StreamTuning: 缺省参数（200ms 兜底 / 60s / 15s / 30s 等待 / 0 预取）。
     """
     return StreamTuning(
         poll_interval_ms=SUBSCRIBE_POLL_INTERVAL_MS,
         max_seconds=SUBSCRIBE_MAX_SECONDS,
         keepalive_ms=SUBSCRIBE_KEEPALIVE_MS,
+        max_wait_ms=SUBSCRIBE_MAX_WAIT_MS,
+        prefetch=SUBSCRIBE_PREFETCH,
     )
 
 

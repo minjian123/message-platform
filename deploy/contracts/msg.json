@@ -671,6 +671,14 @@
             "title": "Max Messages",
             "type": "integer"
           },
+          "max_wait_ms": {
+            "default": 30000,
+            "description": "长轮询挂起上限（毫秒；0 = 不挂起立即返回；越界 10001）",
+            "maximum": 60000.0,
+            "minimum": 0.0,
+            "title": "Max Wait Ms",
+            "type": "integer"
+          },
           "namespace": {
             "description": "命名空间（对齐 bms module_key；须为已登记且启用的模块）",
             "maxLength": 64,
@@ -704,8 +712,20 @@
       },
       "ConsumeResult": {
         "additionalProperties": false,
-        "description": "拉取结果（可能为空：位点已到 LEO，或剩余消息均在可见性窗口内）。",
+        "description": "拉取结果（可能为空：位点已到 LEO、剩余消息均在可见性窗口内，或 inflight 已达阈值）。\n\n`paused` / 两个用量字段是 03-5 的背压自报：**暂停不是错误**，客户端据此退避（或按 `max_wait_ms`\n继续等），而不是按错误码重试。",
         "properties": {
+          "inflight_bytes": {
+            "default": 0,
+            "description": "本分区当前在途字节合计（按 payload 线上字节）",
+            "title": "Inflight Bytes",
+            "type": "integer"
+          },
+          "inflight_messages": {
+            "default": 0,
+            "description": "本分区当前在途条数（已投出未确认）",
+            "title": "Inflight Messages",
+            "type": "integer"
+          },
           "messages": {
             "description": "本次投递的消息（按 offset 升序）",
             "items": {
@@ -713,6 +733,12 @@
             },
             "title": "Messages",
             "type": "array"
+          },
+          "paused": {
+            "default": false,
+            "description": "是否因 inflight 达阈值而暂停推送（不是错误）",
+            "title": "Paused",
+            "type": "boolean"
           }
         },
         "title": "ConsumeResult",
@@ -3717,7 +3743,7 @@
     },
     "/api/v1/msg/consume": {
       "post": {
-        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。",
+        "description": "拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。\n\n**长轮询（03-5）**：拉空后挂起到「有消息」或 `max_wait_ms` 到期；每轮都重跑成员校验\n（成员可能在挂起期间超时）。挂起数到全局上限时立即返空（不报错）。\n**inflight 阈值（03-5）**：已达阈值时不拉、直接返空 + `paused=true`；ack / nack / 死信归还后立即恢复。",
         "operationId": "consume_api_v1_msg_consume_post",
         "requestBody": {
           "content": {
@@ -4219,7 +4245,7 @@
     },
     "/api/v1/msg/publish": {
       "post": {
-        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
+        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。\n**限流在两条分支之前**（03-5）：延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；\n超出租户 / 主题配额返回 350005（429 + `Retry-After`）。",
         "operationId": "publish_api_v1_msg_publish_post",
         "requestBody": {
           "content": {
@@ -4590,7 +4616,7 @@
     },
     "/msg/consume": {
       "post": {
-        "description": "拉取一批消息（成员制 + 分区内停等：队头未 ack 时下一次拉取为空，ack 后继续）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。",
+        "description": "拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。\n\n需要 msg:consume 权限；须先 `join` 并只在分配到的分区上拉取（组内不重复分配）。\n`acks=0` 表示不等确认（返回前位点直接前移，可能丢），同样受成员制约束。\n返回消息在分区内按 offset 升序；超时未 ack 会重投同一条消息（`delivery_count` 递增）；\n死信消息不再投递，其后的消息可继续（顺序性唯一破例）。\n主题不存在 350001，组不存在 350013，成员失效或分区不在其分配内 350014，\n分区号越界 350009，位点已被保留期清理 350003。\n入口先按主题保留口径清理本分区到期段（幂等；见 01-6），因此「位点早于起点」会在同一次请求里显式报 350003。\n\n**长轮询（03-5）**：拉空后挂起到「有消息」或 `max_wait_ms` 到期；每轮都重跑成员校验\n（成员可能在挂起期间超时）。挂起数到全局上限时立即返空（不报错）。\n**inflight 阈值（03-5）**：已达阈值时不拉、直接返空 + `paused=true`；ack / nack / 死信归还后立即恢复。",
         "operationId": "consume_msg_consume_post",
         "requestBody": {
           "content": {
@@ -4795,7 +4821,7 @@
     },
     "/msg/publish": {
       "post": {
-        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。",
+        "description": "发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。\n\n需要 msg:publish 权限；`tenant` 取自数据面解析链；主题不存在或未启用返回 350001，\n命名空间非已启用 module_key 返回 350010，载荷非合法 base64 返回 10001。\n延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。\n首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。\n入口按主题保留口径清理本分区到期段（幂等；见 01-6）。\n**限流在两条分支之前**（03-5）：延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；\n超出租户 / 主题配额返回 350005（429 + `Retry-After`）。",
         "operationId": "publish_msg_publish_post",
         "requestBody": {
           "content": {
@@ -4895,7 +4921,7 @@
     },
     "/msg/subscribe": {
       "get": {
-        "description": "订阅一条分区（SSE 长驻流，server streaming）。\n\n需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。\n预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；\n`max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。\n单连接长驻流超上限返回 350021（普通 JSON 错误，尚未进流；名额随即归还）。\n进流之后：拉到消息逐条 `message`；无消息按轮询间隔重试（带注释行保活）；\n到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。\n客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。",
+        "description": "订阅一条分区（SSE 长驻流，server streaming）。\n\n需要 msg:consume 权限；须先 `join` 且分区在该成员分配内（组不存在 350013，成员失效 350014）。\n预检与 `/msg/consume` 同口径：命名空间 350010、主题 350001、分区号 350009；\n`max_seconds` 越界（> 600）与其它参数形态问题由契约层拒绝（`10001`）。\n单连接长驻流超上限返回 350021（普通 JSON 错误，尚未进流；名额随即归还）。\n进流之后：拉到消息逐条 `message`；无消息按事件唤醒等待（保活期发注释行）；\n到期 `close(deadline)`；成员被撤销 / 分区易主 → `error`（同码）+ `close(member_lost)`。\n客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。",
         "operationId": "subscribe_msg_subscribe_get",
         "parameters": [
           {
@@ -5076,6 +5102,83 @@
           350012,
           350021
         ]
+      },
+      "post": {
+        "description": "订阅一条分区（帧流形态，`application/x-msg-frame`）。\n\n与 `GET /msg/subscribe` **同一套语义**（权限码 / 预检 / 背压 / 结束条件全同），差别只在承载：\n参数在帧 header、响应是连续帧。帧不可解析 / 类型不符 / 缺必填头 → `200` + 单帧 `error`（协议内失败）；\n预检失败同理（尚未进流，用 error 帧而**不是** JSON，客户端只按帧解析）。\n单连接长驻流超上限仍返回 350021（由连接守卫按帧形态给出）。",
+        "operationId": "subscribe_frames_msg_subscribe_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-msg-frame": {}
+            },
+            "description": "帧流（open 帧 4+RESPONSE / message 帧 6 / error 帧 16；正文 EOF 即正常结束）"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Subscribe Frames",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350003,
+          350009,
+          350010,
+          350011,
+          350012,
+          350021
+        ]
       }
     },
     "/readyz": {
@@ -5097,6 +5200,52 @@
     }
   },
   "x-msg-frame": {
+    "backpressure": {
+      "inflight": {
+        "acks_zero": "acks=0 不登记在途，不受阈值约束",
+        "bytes_basis": "len(payload) 线上字节（broker 不解压）",
+        "max_bytes": 16777216,
+        "max_messages": 100,
+        "on_limit": "暂停推送：consume 返回空批 + paused=true；流只等不推；不返回错误码",
+        "scope": "(group, topic_id, partition_no)——01-4 成员制保证同分区单持有者"
+      },
+      "max_wait_ms": {
+        "default": 30000,
+        "limit": 60000,
+        "on_timeout": "返回空批次（200），不是错误；350004 留给 RPC deadline",
+        "zero": "不挂起（立即返回，等价 03-5 之前的行为）"
+      },
+      "metrics": [
+        "msg_inflight_messages",
+        "msg_inflight_bytes",
+        "msg_window_stall_total",
+        "msg_rate_limit_rejected_total",
+        "msg_long_poll_waiters",
+        "msg_long_poll_changed_total",
+        "msg_long_poll_timeout_total",
+        "msg_long_poll_rejected_total"
+      ],
+      "metrics_note": "本服务只提供 collector（snapshot），HTTP / Prometheus 出口归 06-3",
+      "prefetch": {
+        "counted_as_inflight": true,
+        "default": 0,
+        "limit": 100
+      },
+      "rate_limit": {
+        "algorithm": "token-bucket",
+        "burst_seconds": 1,
+        "covers_delayed_publish": true,
+        "default_note": "0 = 不限（缺省关闭，数值由 05-3 / 8B_12 给）",
+        "default_tenant_per_second": 0,
+        "default_topic_per_second": 0,
+        "http": "429 + Retry-After（秒，向上取整）；帧形态 error 帧带 retry_after_ms",
+        "reject_code": 350005,
+        "scopes": [
+          "tenant",
+          "namespace+topic"
+        ]
+      }
+    },
     "byte_order": "big-endian",
     "compressions": [
       "none",
@@ -5292,11 +5441,10 @@
       "2": "consume",
       "3": "ack",
       "4": "subscribe",
-      "5": "nack"
+      "5": "nack",
+      "6": "message"
     },
-    "known_unsupported": {
-      "subscribe": "帧式推送归 03-5（当前回 350018 并提示后续任务开放）"
-    },
+    "known_unsupported": {},
     "limits": {
       "header_bytes": 65536,
       "payload_bytes": 1048576
@@ -5336,7 +5484,7 @@
     "reserved_types": [
       {
         "name": "data-plane-reserved",
-        "range": "6-15"
+        "range": "7-15"
       },
       {
         "name": "control-plane-reserved",
@@ -5355,6 +5503,33 @@
         "range": "64-255"
       }
     ],
+    "stream": {
+      "connection_window": "h2 连接级窗口由同连接所有 stream 共享：一条流停读会占满连接窗口、连带其它 stream 暂停发送；应用层（协程 / CPU / inflight 配额）互不影响。这是协议语义，不是实现缺陷",
+      "end_of_stream": "正文 EOF 即正常结束（deadline / 客户端断开不发结束帧）；流内异常先发 error 帧再 EOF",
+      "endpoints": [
+        "GET /msg/subscribe（SSE：text/event-stream）",
+        "POST /msg/subscribe（帧流：application/x-msg-frame）"
+      ],
+      "message_frame_type": 6,
+      "message_header_fields": [
+        "request_id",
+        "message_id",
+        "topic",
+        "partition",
+        "offset",
+        "key",
+        "trace_id",
+        "delivery_count",
+        "published_at",
+        "headers",
+        "content_type",
+        "compression",
+        "uncompressed_len"
+      ],
+      "message_payload": "消息体原始字节（不 base64；三字段随 header 回显，与 SSE / JSON 同口径）",
+      "open_frame": "type=subscribe + flags.response；header 带 stream_id / max_seconds / max_wait_ms / poll_interval_ms / prefetch / inflight_messages / inflight_bytes（等价 SSE 的 open 事件）",
+      "subscribe_frame_type": 4
+    },
     "version_rule": {
       "accept_major": [
         1

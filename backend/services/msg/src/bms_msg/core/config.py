@@ -190,6 +190,69 @@ MAX_STREAMS_PER_CONNECTION = 100
 应用层只计长驻流（唯一有精确开 / 关时机的流类型）；短请求并发由协议层 SETTINGS 约束。
 """
 
+SUBSCRIBE_MAX_WAIT_MS = 30_000
+"""长轮询单次无消息等待上限（毫秒）：有消息立即返回，到期返空批。
+
+与 `SUBSCRIBE_MAX_SECONDS`（一条流的总时长）解耦：前者是「一次等待多长」，后者是「这条流活多久」。
+30s 小于常见网关的 60s 空闲超时，且挂起请求本身是活跃 stream（不会被连接空闲回收）。
+"""
+
+SUBSCRIBE_MAX_WAIT_LIMIT_MS = 60_000
+"""请求参数 `max_wait_ms` 的上界（毫秒）：越界由契约层拒绝（`10001`）。
+
+不设上界等于允许「挂起十分钟」，挂起数 × 时长会放大内存；`350004`（超时）仍留给 8B_03 RPC deadline。
+"""
+
+MAX_LONG_POLL_WAITERS = 1_024
+"""全局长轮询等待者上限：超限**立即返空批**（不排队、不报错）。
+
+挂起是延迟优化不是契约承诺；上限防慢客户端用挂起请求堆协程。按租户配额归 05 域。
+"""
+
+INFLIGHT_MAX_MESSAGES = 100
+"""单分区持有者在途条数上限（与 `MAX_FETCH_MESSAGES` 同值：一批最多 100 条，便于解释）。"""
+
+INFLIGHT_MAX_BYTES = 16 * 1024 * 1024
+"""单分区持有者在途字节上限（16 MiB）。
+
+按 `len(payload)` 计：broker 不解压，这是真实内存占用，也是 1 MiB 上限的同一把尺；
+`uncompressed_len` 是生产者可选声明（可谎报），用它等于把硬背压降成软约束。
+"""
+
+SUBSCRIBE_PREFETCH = 0
+"""长驻流预取条数（缺省 0 = 零缓冲）。
+
+`0` 表示「拉到即发、发完再拉」；`>0` 表示发当前批的同时先拉下一批（`min(prefetch, max_messages)` 条）。
+预取的消息**立即计入 inflight**（与已发出的消息同一本账），故 `prefetch <= INFLIGHT_MAX_MESSAGES`。
+"""
+
+SUBSCRIBE_PREFETCH_LIMIT = 100
+"""预取条数上界（与 `MAX_FETCH_MESSAGES` 同口径，防「预取自己把 inflight 阈值占满」）。"""
+
+RATE_LIMIT_TENANT_PER_SECOND = 0
+"""租户级生产速率（条/秒；0 = 不限）。缺省关闭：不改变既有行为，数值由 05-3 配额给。"""
+
+RATE_LIMIT_TOPIC_PER_SECOND = 0
+"""主题级生产速率（条/秒；0 = 不限）。与租户级同时判、同时扣，任一不足即拒（`350005`）。"""
+
+RATE_LIMIT_BURST_SECONDS = 1
+"""令牌桶容量折算秒数：容量 = 速率 × 本值。进程长停摆最多攒「1 秒的量」，不会一次性爆发。"""
+
+RATE_LIMIT_BUCKET_LIMIT = 4_096
+"""令牌桶数量上限：超限先清「已满且无负债」的桶，仍超则按插入序淘汰最旧（防高基数打爆内存）。"""
+
+RATE_LIMIT_RETRY_AFTER_MS = 1_000
+"""限流拒绝的缺省建议重试间隔（毫秒；桶给出的等待更有依据时取桶值）。"""
+
+METRICS_TOPIC_KEY_LIMIT = 500
+"""背压指标的分键上限（`(tenant, topic)`）：超出归 `__other__`，防高基数。"""
+
+WINDOW_STALL_THRESHOLD_MS = 50
+"""窗口暂停判定阈值（毫秒）：流两次推进间隔超过该值即记一次 `msg_window_stall_total`。
+
+应用侧看不到 h2 窗口数值，只能观测「写/推进等了多久」；阈值取 50ms 以避开正常调度抖动。
+"""
+
 CONNECTION_EVICT_SCAN_LIMIT = 64
 """单次惰性清扫最多检查的条目数（请求驱动，空载零唤醒）。"""
 

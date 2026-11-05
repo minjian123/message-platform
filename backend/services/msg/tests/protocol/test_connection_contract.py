@@ -35,10 +35,11 @@ def test_connection_contract_matches_constants() -> None:
 
 
 def test_heartbeat_no_longer_in_known_unsupported() -> None:
-    """心跳已落地：`known_unsupported` 只剩帧式订阅（03-5）。"""
+    """心跳与帧式订阅都已落地（03-4 / 03-5）：`known_unsupported` 现已清空。"""
     unsupported = frame_contract()["known_unsupported"]
     assert "heartbeat" not in unsupported
-    assert "subscribe" in unsupported
+    assert "subscribe" not in unsupported
+    assert set(unsupported) == set()
 
 
 def test_connection_contract_declares_drain_and_goaway_split() -> None:

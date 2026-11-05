@@ -7,7 +7,8 @@
 > 01-6 接入保留期清理（端口 + 内存实现，请求驱动）与重放任务（任务表 + 执行器 + 审计出口）；
 > 03-1 接入 HTTP/2 帧入口（根路径 `/msg/*` 复用数据面 + SSE 长驻流 + 连接元数据），并把
 > 延迟推进器与重放执行器挂到基座 `startup_hooks()`（装配后启动、停机随资源管理器回收）；
-> 03-4 接入连接管理（连接登记表 + 连接数 / 长驻流上限 + 应用层心跳 + drain 协商）。
+> 03-4 接入连接管理（连接登记表 + 连接数 / 长驻流上限 + 应用层心跳 + drain 协商）；
+> 03-5 接入背压与流控（分区唤醒器 + inflight 双阈值 + 两级限流 + 指标 collector，消息存储包一层通知）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -30,6 +31,7 @@ from fastapi import APIRouter, FastAPI
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
 from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.router import api_router, frame_router
+from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
@@ -37,10 +39,12 @@ from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.lifecycle import start_background_tasks
 from bms_msg.broker.log import InMemoryMessageStore
+from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.transport import StreamRegistry
+from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
@@ -85,8 +89,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         return ConcurrentStableList([start_background_tasks])
 
     def configure_service(self, app: FastAPI, settings: Settings) -> None:
-        """数据面进程级状态注入：消息存储 / 位点 / 死信 / 投递状态 / 组存储 / 延迟区与推进器 /
-        审计出口 / 重放执行器 / 流登记表 / **连接登记表** / 工作单元工厂各一份。
+        """数据面进程级状态注入：消息存储（含唤醒包装） / 位点 / 死信 / 投递状态 / 组存储 /
+        延迟区与推进器 / 审计出口 / 重放执行器 / 流登记表 / **连接登记表** / 工作单元工厂 /
+        **分区唤醒器 / 背压指标 / 生产限流器** 各一份。
 
         替换实现只改这里（8B_02 换文件段与 `.delay` 段、位点文件与 `msg_group` 两表，端口与端点不变）；
         首期内存态随进程重启清空，已登记为遗留（详细设计 §12 风险 1）。
@@ -98,7 +103,12 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             app: 应用实例（供 `api/deps.py` 读取）。
             settings: 应用配置（审计发件箱实现选择取自 `[outbox_store]`）。
         """
-        app.state.message_store = InMemoryMessageStore()
+        waiter = DeliveryWaiter()
+        app.state.waiter = waiter
+        # 消息存储包一层「写入即唤醒」：普通发布 / 延迟转投 / 重放三处写入自动唤醒长轮询与长驻流。
+        app.state.message_store = NotifyingMessageStore(InMemoryMessageStore(), waiter)
+        app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
+        app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
         app.state.offset_store = InMemoryOffsetStore()
         app.state.dead_letter_queue = InMemoryDeadLetterQueue()
         app.state.delivery_state = DeliveryState()

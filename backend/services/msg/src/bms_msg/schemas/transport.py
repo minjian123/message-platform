@@ -10,8 +10,11 @@
 业务判定，占产品码会让码表被参数校验污染。
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 
+from bms_core.core.objects import BaseValueObject
 from bms_core.schemas.base import BaseSchema
 from pydantic import Field
 
@@ -28,11 +31,146 @@ from bms_msg.schemas.fields import (
     PARTITION_FIELD,
     TOPIC_FIELD,
 )
+from bms_msg.schemas.message import MessageItem
 
 __all__ = [
     "ConnectionInfo",
+    "StreamEvent",
+    "StreamEventKind",
+    "StreamOpen",
     "SubscribeQuery",
+    "close_event",
+    "error_event",
+    "keepalive_event",
+    "message_event",
+    "open_event",
 ]
+
+
+class StreamEventKind(StrEnum):
+    """长驻流事件种类（SSE 与帧流共用同一套语义，只是编码不同）。"""
+
+    OPEN = "open"
+    """流已生效（SSE 的 `open` / 帧流的 `SUBSCRIBE`+RESPONSE）。"""
+
+    MESSAGE = "message"
+    """一条消息（SSE 的 `message` / 帧流的 `MESSAGE` 帧）。"""
+
+    ERROR = "error"
+    """流内错误（成员失效等）；随后结束。"""
+
+    CLOSE = "close"
+    """正常结束（SSE 需要显式事件；帧流用 EOF 表达，不发帧）。"""
+
+    KEEPALIVE = "keepalive"
+    """保活（SSE 发注释行；帧流不发——连接本身有 h2 PING / 应用层心跳）。"""
+
+
+@dataclass(frozen=True)
+class StreamOpen(BaseValueObject):
+    """流生效时的参数回显（客户端据此确认「流已生效、参数是多少」）。"""
+
+    stream_id: str
+    """进程内流标识（`s<n>`）。"""
+
+    max_seconds: int
+    """单条流时长上限（秒）。"""
+
+    max_wait_ms: int
+    """单次无消息等待上限（毫秒；03-5 起由事件唤醒）。"""
+
+    poll_interval_ms: int
+    """兜底轮询间隔（毫秒；仅 `max_wait_ms == 0` 时生效）。"""
+
+    prefetch: int
+    """预取条数（0 = 零缓冲）。"""
+
+    inflight_messages: int
+    """在途条数上限。"""
+
+    inflight_bytes: int
+    """在途字节上限。"""
+
+
+@dataclass(frozen=True)
+class StreamEvent(BaseValueObject):
+    """一次流事件（`kind` 决定哪个载荷字段有值）。"""
+
+    kind: StreamEventKind
+    """事件种类。"""
+
+    opened: StreamOpen | None = None
+    """`open` 事件的参数回显。"""
+
+    item: MessageItem | None = None
+    """`message` 事件的投递明细（与 `/msg/consume` 同一结构）。"""
+
+    error_code: int | None = None
+    """`error` 事件的业务码（与拉取端点同码）。"""
+
+    error_message: str = ""
+    """`error` 事件的提示。"""
+
+    reason: str = ""
+    """`close` 事件的原因（`deadline` / `member_lost` / `error` / `client_closed`）。"""
+
+
+def open_event(opened: StreamOpen) -> StreamEvent:
+    """构造 `open` 事件。
+
+    Args:
+        opened: 参数回显。
+
+    Returns:
+        StreamEvent: 事件。
+    """
+    return StreamEvent(kind=StreamEventKind.OPEN, opened=opened)
+
+
+def message_event(item: MessageItem) -> StreamEvent:
+    """构造 `message` 事件。
+
+    Args:
+        item: 投递明细。
+
+    Returns:
+        StreamEvent: 事件。
+    """
+    return StreamEvent(kind=StreamEventKind.MESSAGE, item=item)
+
+
+def error_event(code: int, message: str) -> StreamEvent:
+    """构造 `error` 事件。
+
+    Args:
+        code: 业务码。
+        message: 提示。
+
+    Returns:
+        StreamEvent: 事件。
+    """
+    return StreamEvent(kind=StreamEventKind.ERROR, error_code=code, error_message=message)
+
+
+def close_event(reason: str) -> StreamEvent:
+    """构造 `close` 事件。
+
+    Args:
+        reason: 关闭原因。
+
+    Returns:
+        StreamEvent: 事件。
+    """
+    return StreamEvent(kind=StreamEventKind.CLOSE, reason=reason)
+
+
+def keepalive_event() -> StreamEvent:
+    """构造 `keepalive` 事件（只有 SSE 编码器会输出为注释行）。
+
+    Returns:
+        StreamEvent: 事件。
+    """
+    return StreamEvent(kind=StreamEventKind.KEEPALIVE)
 
 
 class ConnectionInfo(BaseSchema):

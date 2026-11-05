@@ -47,8 +47,10 @@ def test_contract_lists_all_frame_types_and_reserved_ranges() -> None:
     assert {"admin", "rpc"} <= ranges
     # 03-3 新增 nack=5：数据面预留必须从 6 起，否则契约自相矛盾。
     assert contract["frame_types"]["5"] == "nack"
+    # 03-5 新增 message=6（帧式推送）：数据面预留顺延到 7 起，否则契约自相矛盾。
+    assert contract["frame_types"]["6"] == "message"
     data_plane = next(item for item in contract["reserved_types"] if item["name"] == "data-plane-reserved")
-    assert data_plane["range"] == "6-15"
+    assert data_plane["range"] == "7-15"
 
 
 def test_contract_declares_payload_rules() -> None:
@@ -110,9 +112,10 @@ def test_endpoint_required_fields_match_models(endpoint: str, model: type[BaseMo
 def test_known_unsupported_declares_owner() -> None:
     """「登记但未服务」的类型必须说明归口（客户端据此判断该等后续任务）。
 
-    `heartbeat` 已由 03-4 落地（移出本清单，语义见 `connection.heartbeat`）；当前只剩帧式订阅。
+    三个都已落地并移出本清单：`heartbeat`（03-4）、`subscribe`（03-5 帧式推送）。清单为空即
+    「已登记的类型全部可服务」，新增预留类型时必须在这里补归口说明。
     """
     unsupported = frame_contract()["known_unsupported"]
 
-    assert set(unsupported) == {"subscribe"}
+    assert set(unsupported) == set()
     assert all("03-" in note for note in unsupported.values())

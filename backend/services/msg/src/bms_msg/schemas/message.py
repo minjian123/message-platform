@@ -35,6 +35,8 @@ from bms_msg.core.config import (
     DEFAULT_FETCH_MESSAGES,
     MAX_FETCH_MESSAGES,
     MESSAGE_KEY_MAX_LENGTH,
+    SUBSCRIBE_MAX_WAIT_LIMIT_MS,
+    SUBSCRIBE_MAX_WAIT_MS,
 )
 from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, PARTITION_FIELD, TOPIC_FIELD
@@ -186,6 +188,12 @@ class ConsumeRequest(BaseSchema):
         le=ACKS_AT_LEAST_ONCE,
         description="投递档位：1 = 确认后才算成功（至少一次，缺省）；0 = 不等确认（可能丢）",
     )
+    max_wait_ms: int = Field(
+        default=SUBSCRIBE_MAX_WAIT_MS,
+        ge=0,
+        le=SUBSCRIBE_MAX_WAIT_LIMIT_MS,
+        description="长轮询挂起上限（毫秒；0 = 不挂起立即返回；越界 10001）",
+    )
 
 
 class MessageItem(BaseSchema):
@@ -245,11 +253,18 @@ class MessageItem(BaseSchema):
 
 
 class ConsumeResult(BaseSchema):
-    """拉取结果（可能为空：位点已到 LEO，或剩余消息均在可见性窗口内）。"""
+    """拉取结果（可能为空：位点已到 LEO、剩余消息均在可见性窗口内，或 inflight 已达阈值）。
+
+    `paused` / 两个用量字段是 03-5 的背压自报：**暂停不是错误**，客户端据此退避（或按 `max_wait_ms`
+    继续等），而不是按错误码重试。
+    """
 
     messages: Annotated[ConcurrentStableList[MessageItem], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_LIST, description="本次投递的消息（按 offset 升序）"
     )
+    paused: bool = Field(default=False, description="是否因 inflight 达阈值而暂停推送（不是错误）")
+    inflight_messages: int = Field(default=0, description="本分区当前在途条数（已投出未确认）")
+    inflight_bytes: int = Field(default=0, description="本分区当前在途字节合计（按 payload 线上字节）")
 
 
 class AckRequest(BaseSchema):

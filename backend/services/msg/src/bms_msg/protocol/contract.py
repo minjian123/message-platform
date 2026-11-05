@@ -18,9 +18,19 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_msg.core.config import (
     CONNECTION_HEARTBEAT_INTERVAL_MS,
     CONNECTION_HEARTBEAT_TIMEOUT_MS,
+    INFLIGHT_MAX_BYTES,
+    INFLIGHT_MAX_MESSAGES,
     MAX_CONNECTIONS,
     MAX_STREAMS_PER_CONNECTION,
+    RATE_LIMIT_BURST_SECONDS,
+    RATE_LIMIT_TENANT_PER_SECOND,
+    RATE_LIMIT_TOPIC_PER_SECOND,
+    SUBSCRIBE_MAX_WAIT_LIMIT_MS,
+    SUBSCRIBE_MAX_WAIT_MS,
+    SUBSCRIBE_PREFETCH,
+    SUBSCRIBE_PREFETCH_LIMIT,
 )
+from bms_msg.errors import MsgErrorCode
 from bms_msg.protocol.frame import (
     FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
@@ -75,18 +85,14 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "frame_types": ConcurrentStableDict({str(int(member)): member.name.lower() for member in FrameType}),
             "reserved_types": ConcurrentStableList(
                 [
-                    {"range": "6-15", "name": "data-plane-reserved"},
+                    {"range": "7-15", "name": "data-plane-reserved"},
                     {"range": "18-31", "name": "control-plane-reserved"},
                     {"range": "32-47", "name": "admin"},
                     {"range": "48-63", "name": "rpc"},
                     {"range": "64-255", "name": "reserved"},
                 ]
             ),
-            "known_unsupported": ConcurrentStableDict(
-                {
-                    "subscribe": "帧式推送归 03-5（当前回 350018 并提示后续任务开放）",
-                }
-            ),
+            "known_unsupported": ConcurrentStableDict(),
             "connection": ConcurrentStableDict(
                 {
                     "identity": (
@@ -183,6 +189,102 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                     "current_minor": PROTOCOL_MINOR,
                     "minor": "any（只增可选字段 / 新增帧类型都不升次版本；未知字段与未知类型一律忽略）",
                     "incompatible": "350019 + 结束该 stream，由客户端断开连接（GOAWAY 归 03-4）",
+                }
+            ),
+            "stream": ConcurrentStableDict(
+                {
+                    "endpoints": ConcurrentStableList(
+                        [
+                            "GET /msg/subscribe（SSE：text/event-stream）",
+                            "POST /msg/subscribe（帧流：application/x-msg-frame）",
+                        ]
+                    ),
+                    "subscribe_frame_type": int(FrameType.SUBSCRIBE),
+                    "open_frame": (
+                        "type=subscribe + flags.response；header 带 stream_id / max_seconds / max_wait_ms / "
+                        "poll_interval_ms / prefetch / inflight_messages / inflight_bytes（等价 SSE 的 open 事件）"
+                    ),
+                    "message_frame_type": int(FrameType.MESSAGE),
+                    "message_header_fields": ConcurrentStableList(
+                        [
+                            "request_id",
+                            "message_id",
+                            "topic",
+                            "partition",
+                            "offset",
+                            "key",
+                            "trace_id",
+                            "delivery_count",
+                            "published_at",
+                            "headers",
+                            "content_type",
+                            "compression",
+                            "uncompressed_len",
+                        ]
+                    ),
+                    "message_payload": "消息体原始字节（不 base64；三字段随 header 回显，与 SSE / JSON 同口径）",
+                    "end_of_stream": (
+                        "正文 EOF 即正常结束（deadline / 客户端断开不发结束帧）；流内异常先发 error 帧再 EOF"
+                    ),
+                    "connection_window": (
+                        "h2 连接级窗口由同连接所有 stream 共享：一条流停读会占满连接窗口、连带其它 stream 暂停发送；"
+                        "应用层（协程 / CPU / inflight 配额）互不影响。这是协议语义，不是实现缺陷"
+                    ),
+                }
+            ),
+            "backpressure": ConcurrentStableDict(
+                {
+                    "max_wait_ms": ConcurrentStableDict(
+                        {
+                            "default": SUBSCRIBE_MAX_WAIT_MS,
+                            "limit": SUBSCRIBE_MAX_WAIT_LIMIT_MS,
+                            "zero": "不挂起（立即返回，等价 03-5 之前的行为）",
+                            "on_timeout": "返回空批次（200），不是错误；350004 留给 RPC deadline",
+                        }
+                    ),
+                    "inflight": ConcurrentStableDict(
+                        {
+                            "scope": "(group, topic_id, partition_no)——01-4 成员制保证同分区单持有者",
+                            "max_messages": INFLIGHT_MAX_MESSAGES,
+                            "max_bytes": INFLIGHT_MAX_BYTES,
+                            "bytes_basis": "len(payload) 线上字节（broker 不解压）",
+                            "on_limit": "暂停推送：consume 返回空批 + paused=true；流只等不推；不返回错误码",
+                            "acks_zero": "acks=0 不登记在途，不受阈值约束",
+                        }
+                    ),
+                    "prefetch": ConcurrentStableDict(
+                        {
+                            "default": SUBSCRIBE_PREFETCH,
+                            "limit": SUBSCRIBE_PREFETCH_LIMIT,
+                            "counted_as_inflight": True,
+                        }
+                    ),
+                    "rate_limit": ConcurrentStableDict(
+                        {
+                            "algorithm": "token-bucket",
+                            "scopes": ConcurrentStableList(["tenant", "namespace+topic"]),
+                            "default_tenant_per_second": RATE_LIMIT_TENANT_PER_SECOND,
+                            "default_topic_per_second": RATE_LIMIT_TOPIC_PER_SECOND,
+                            "default_note": "0 = 不限（缺省关闭，数值由 05-3 / 8B_12 给）",
+                            "burst_seconds": RATE_LIMIT_BURST_SECONDS,
+                            "covers_delayed_publish": True,
+                            "reject_code": int(MsgErrorCode.RATE_LIMITED),
+                            "http": "429 + Retry-After（秒，向上取整）；帧形态 error 帧带 retry_after_ms",
+                        }
+                    ),
+                    "metrics": ConcurrentStableList(
+                        [
+                            "msg_inflight_messages",
+                            "msg_inflight_bytes",
+                            "msg_window_stall_total",
+                            "msg_rate_limit_rejected_total",
+                            "msg_long_poll_waiters",
+                            "msg_long_poll_changed_total",
+                            "msg_long_poll_timeout_total",
+                            "msg_long_poll_rejected_total",
+                        ]
+                    ),
+                    "metrics_note": "本服务只提供 collector（snapshot），HTTP / Prometheus 出口归 06-3",
                 }
             ),
             **payload_contract(),

@@ -6,10 +6,10 @@
   租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`、
   延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
-  连接数超限 `350020`、单连接长驻流超限 `350021`
+  连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
-  `350004` / `350005` 由架构 05 §5 预留为超时 / 背压；`350006` 由 03-2 按「上限 1 MiB」启用；
-  `350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用）。
+  `350004` 仍由架构 05 §5 预留为超时（归 8B_03 RPC deadline），`350005` 由 03-5 按「生产限流」启用；
+  `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
@@ -30,6 +30,8 @@ from bms_core.core.logging import get_logger
 from bms_core.core.plugin import register_plugin
 from bms_core.error_mapper.base import BaseErrorMapper
 
+from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS
+
 __all__ = [
     "MSG_ERROR_MAPPER",
     "MsgConnectionLimitExceededError",
@@ -46,6 +48,7 @@ __all__ = [
     "MsgOffsetInvalidError",
     "MsgPartitionCountInvalidError",
     "MsgPayloadTooLargeError",
+    "MsgRateLimitedError",
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
     "MsgStreamLimitExceededError",
@@ -74,6 +77,13 @@ class MsgErrorCode(IntEnum):
 
     MESSAGE_NOT_FOUND = 350003
     """消息不存在（未投递过，或位点已被保留期清理）。"""
+
+    RATE_LIMITED = 350005
+    """生产限流（租户 / 主题速率超出配额）：429 + `Retry-After`，帧形态带 `retry_after_ms`。
+
+    与相邻码分工：`350015` 延迟区满（容量）、`350020` 连接数满、`350021` 单连接流满、
+    `350006` 消息过大；本码只表示「生产速率超出配额」。
+    """
 
     DELIVERY_EXHAUSTED = 350007
     """消息重投超限、已转入死信（不可再确认）。"""
@@ -190,6 +200,30 @@ class MsgDeliveryExhaustedError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.DELIVERY_EXHAUSTED
     http_status_: ClassVar[int] = 409
+
+
+class MsgRateLimitedError(MsgError):
+    """生产限流（350005 / 429）：携带建议重试毫秒，JSON 形态由专属处理器写 `Retry-After`。"""
+
+    code_: ClassVar[int] = MsgErrorCode.RATE_LIMITED
+    http_status_: ClassVar[int] = 429
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        retry_after_ms: int = RATE_LIMIT_RETRY_AFTER_MS,
+        data: object | None = None,
+    ) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息（缺省由前端按 `msg.error.rate_limited` 映射）。
+            retry_after_ms: 建议重试间隔（毫秒；缺省取 `RATE_LIMIT_RETRY_AFTER_MS`，桶给出等待时以桶为准）。
+            data: 随附数据（可选）。
+        """
+        super().__init__(message, data=data)
+        self.retry_after_ms = retry_after_ms
 
 
 class MsgTenantSuspendedError(MsgError):
