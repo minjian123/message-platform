@@ -49,6 +49,7 @@ from bms_msg.api.deps import (
     PartitionDirectoryDep,
     RateLimiterDep,
     RetentionThrottleDep,
+    StorageGateDep,
     TopicCacheDep,
     WaiterDep,
 )
@@ -68,6 +69,7 @@ from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import connection_meta
 from bms_msg.broker.waiter import DeliveryWaiter
+from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import (
     MsgError,
@@ -368,6 +370,7 @@ async def _invoke(
     cache: TopicCache,
     throttle: RetentionThrottle,
     directory: PartitionDirectory,
+    gate: StorageGate | None,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -390,6 +393,7 @@ async def _invoke(
         cache: 进程内主题快照缓存（01-7）。
         throttle: 保留清理节流窗口表（01-7）。
         directory: 分区目录登记表（02-1）。
+        gate: 存储水位闸门（02-6；None 表示未装配，不判）。
 
     Returns:
         object: 结果模型。
@@ -413,6 +417,7 @@ async def _invoke(
             cache=cache,
             throttle=throttle,
             directory=directory,
+            gate=gate,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -487,6 +492,7 @@ async def _handle_frame(
     cache: TopicCache,
     throttle: RetentionThrottle,
     directory: PartitionDirectory,
+    gate: StorageGate | None,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -512,6 +518,7 @@ async def _handle_frame(
         cache: 进程内主题快照缓存（01-7）。
         throttle: 保留清理节流窗口表（01-7）。
         directory: 分区目录登记表（02-1）。
+        gate: 存储水位闸门（02-6；None 表示未装配，不判）。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -584,6 +591,7 @@ async def _handle_frame(
             cache=cache,
             throttle=throttle,
             directory=directory,
+            gate=gate,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -627,6 +635,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         cache: TopicCacheDep,
         throttle: RetentionThrottleDep,
         directory: PartitionDirectoryDep,
+        gate: StorageGateDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -648,6 +657,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             cache: 进程内主题快照缓存（01-7）。
             throttle: 保留清理节流窗口表（01-7）。
             directory: 分区目录登记表（02-1）。
+            gate: 存储水位闸门（02-6；None 表示未装配，不判）。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -677,6 +687,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             cache=cache,
             throttle=throttle,
             directory=directory,
+            gate=gate,
         )
         raise FrameHandled(response)
 

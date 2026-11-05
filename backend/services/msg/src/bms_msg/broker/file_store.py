@@ -40,6 +40,7 @@ from bms_msg.broker.record import (
     to_epoch_us,
 )
 from bms_msg.broker.recovery import (
+    RecoveryLedger,
     RecoveryPoint,
     RecoveryProbe,
     RecoveryReport,
@@ -1119,6 +1120,8 @@ class FileMessageStore(MessageStore):
         self._realigner = realigner
         self._probe = probe
         self._pending_alignment: dict[tuple[int, int], int] = {}
+        # 02-6：进程级恢复台账（就绪检查项的只读数据源；分区懒加载时逐条写入）。
+        self._ledger = RecoveryLedger()
 
     async def append(
         self,
@@ -1375,6 +1378,14 @@ class FileMessageStore(MessageStore):
             raise PartitionNotBoundError(f"主题目录未登记：topic_id={topic_id}（须先经 TopicRouter.resolve 解析）")
         return location
 
+    def recovery_ledger(self) -> RecoveryLedger:
+        """取恢复台账（02-6 就绪检查项；只覆盖**已打开过**的分区，启动期为空）。
+
+        Returns:
+            RecoveryLedger: 进程级台账（调用方只读）。
+        """
+        return self._ledger
+
     def _partition(self, *, topic_id: int, partition_no: int) -> _PartitionLog:
         """取分区日志（懒加载；目录不存在即视为空分区）。
 
@@ -1408,6 +1419,7 @@ class FileMessageStore(MessageStore):
             probe=self._probe,
         )
         self._partitions[key] = partition
+        self._ledger.record(topic_id=key[0], partition_no=key[1], report=partition.report)
         if partition.needs_alignment:
             self._pending_alignment[key] = partition.leo
         return partition

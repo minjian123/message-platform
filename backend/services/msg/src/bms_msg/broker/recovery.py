@@ -30,10 +30,12 @@ __all__ = [
     "REASON_MISMATCH",
     "REASON_OK",
     "REASON_UNPARSABLE",
+    "RecoveryLedger",
     "RecoveryPoint",
     "RecoveryPointReadout",
     "RecoveryProbe",
     "RecoveryReport",
+    "RecoverySummary",
     "SegmentStamp",
     "UnsupportedRecoveryPointVersionError",
     "read_recovery_point",
@@ -369,3 +371,87 @@ def _decode_stamps(value: object) -> tuple[SegmentStamp, ...] | None:
             )
         )
     return tuple(stamps)
+
+
+@dataclass(frozen=True)
+class RecoverySummary(BaseValueObject):
+    """一个分区的恢复结论摘要（台账条目；只留判据字段，不留字节细节）。"""
+
+    topic_id: int
+    """主题主键。"""
+
+    partition_no: int
+    """分区号。"""
+
+    truncated_bytes: int
+    """被截掉的字节数（`0` 表示未发生截断；只作判据，不记绝对值）。"""
+
+    trailing_records: int
+    """坏记录之后「疑似完整」的记录数（排障参考，不作判据）。"""
+
+    corrupted_segments: tuple[int, ...]
+    """非末段对账失败的段 base 列表（空表示各段与恢复点一致）。"""
+
+    @property
+    def degraded(self) -> bool:
+        """该分区是否发生过「数据有损」（截断或非末段损坏）。
+
+        Returns:
+            bool: True 表示恢复期发现过损坏。
+        """
+        return self.truncated_bytes > 0 or self.corrupted_segments != ()
+
+
+class RecoveryLedger:
+    """进程级恢复台账（02-6 就绪检查项的只读数据源）。
+
+    **为什么要台账**：`RecoveryReport` 是「单分区、最近一次」的结论且分区懒加载，
+    启动期根本不存在可查状态；`/readyz` 要判「有无数据损坏」只能靠一张按分区累积的表。
+
+    只记「最近一次恢复」的分区结论（同分区重复打开以最新一次为准）：覆盖写入，条数上界＝分区数。
+    """
+
+    def __init__(self) -> None:
+        """初始化（空台账）。"""
+        self._entries: dict[tuple[int, int], RecoverySummary] = {}
+
+    def record(self, *, topic_id: int, partition_no: int, report: RecoveryReport) -> None:
+        """登记一个分区的恢复结论（覆盖同分区旧值）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            report: 该分区的恢复报告。
+        """
+        truncated = report.truncated_from_bytes - report.truncated_bytes
+        self._entries[(topic_id, partition_no)] = RecoverySummary(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            truncated_bytes=truncated,
+            trailing_records=report.trailing_records,
+            corrupted_segments=report.corrupted_segments,
+        )
+
+    def entries(self) -> tuple[RecoverySummary, ...]:
+        """取全部条目（插入序，稳定）。
+
+        Returns:
+            tuple[RecoverySummary, ...]: 台账快照。
+        """
+        return tuple(self._entries.values())
+
+    def degraded(self) -> tuple[RecoverySummary, ...]:
+        """取发生过数据损坏的条目（空表示全部完好或尚未打开任何分区）。
+
+        Returns:
+            tuple[RecoverySummary, ...]: 损坏条目。
+        """
+        return tuple(item for item in self._entries.values() if item.degraded)
+
+    def __len__(self) -> int:
+        """当前条目数（排障与用例断言用）。
+
+        Returns:
+            int: 条目数。
+        """
+        return len(self._entries)

@@ -25,6 +25,7 @@ from bms_core.core.objects import BaseValueObject
 
 from bms_msg.broker.delivery import resolve_payload
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import DELAY_LEVEL_MS, DELAY_MAX_SPAN_MS, DELAY_QUOTA_PER_TENANT
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import MsgDelayQuotaExceededError
@@ -326,8 +327,9 @@ class DelayService:
     """延迟发布服务（请求级：主题仓储 + 进程级延迟区 / 时间轮）。
 
     判定顺序（详细设计 §8.3）：命名空间（`350010`）→ 主题（`350001`）→ 分区锁定（`350009`）→
-    档位映射（`10001`）→ **配额**（`350015`）→ 生成 ID → 入队 + 装填。
+    **存储水位**（`350022`，02-6）→ 档位映射（`10001`）→ **配额**（`350015`）→ 生成 ID → 入队 + 装填。
     配额排在「无效请求全部拒绝完之后」：否则「档位非法」会被「延迟区已满」盖住，排障方向就错了。
+    水位排在配额**之前**：盘满时配额已无意义（系统性故障优先），且延迟消息不得「先收进延迟区再丢」。
     """
 
     def __init__(
@@ -337,6 +339,7 @@ class DelayService:
         router: TopicRouter,
         wheel: DelayWheel,
         now: Callable[[], datetime] = _utcnow,
+        gate: StorageGate | None = None,
     ) -> None:
         """初始化。
 
@@ -345,11 +348,13 @@ class DelayService:
             router: 主题路由（请求级，绑定平台库主题仓储）。
             wheel: 时间轮（与推进器共用同一个实例：装填即入索引）。
             now: 时钟（缺省 UTC 当前时间；用例注入固定时钟）。
+            gate: 存储水位闸门（02-6；None 表示不判）。
         """
         self._store = store
         self._router = router
         self._wheel = wheel
         self._now = now
+        self._gate = gate
 
     async def publish(self, *, tenant: CurrentTenant, request: PublishRequest) -> DelayedOrder:
         """发布一条延迟消息（入延迟区 + 装填时间轮，**不分配 offset**）。
@@ -365,6 +370,7 @@ class DelayService:
             MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
             MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
             MsgPartitionCountInvalidError: 主题分区数非正（350009）。
+            MsgStorageWatermarkExceededError: 存储水位超拒绝阈值或数据卷不可用（350022 / 507，02-6）。
             ParamError: 档位非法 / 载荷非合法 base64（10001）。
             MsgDelayQuotaExceededError: 该租户延迟区已满（350015）。
         """
@@ -373,6 +379,11 @@ class DelayService:
         partition_no = self._router.route(topic, request.key)
         level = cast("str", request.delay_level)
         delay_ms = delay_level_ms(level)
+        if self._gate is not None:
+            # 02-6：延迟发布同样是「外部生产」，盘满时直接拒——不能先收进延迟区再丢（任务 §2.3）。
+            # 排在档位映射之后：非法档位属契约层（`10001`），不能被系统性故障码盖住；
+            # 排在配额之前：盘满时算配额已无意义。
+            self._gate.ensure_writable()
         if await self._store.count_for_tenant(tenant_id=int(tenant.tenant_id)) >= self._store.quota:
             raise MsgDelayQuotaExceededError(
                 f"延迟区已满（每租户上限 {self._store.quota} 条），请稍后重试或缩短延迟：{request.topic}"

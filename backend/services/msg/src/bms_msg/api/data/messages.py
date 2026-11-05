@@ -51,6 +51,7 @@ from bms_msg.api.deps import (
     PartitionDirectoryDep,
     RateLimiterDep,
     RetentionThrottleDep,
+    StorageGateDep,
     TopicCacheDep,
     WaiterDep,
 )
@@ -69,6 +70,7 @@ from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
+from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import MsgErrorCode, MsgRateLimitedError
 from bms_msg.protocol.frame import FrameType
@@ -125,9 +127,11 @@ PUBLISH_ERROR_CODES = ConcurrentStableList(
         int(MsgErrorCode.TENANT_NOT_FOUND),
         int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
         int(MsgErrorCode.PAYLOAD_TOO_LARGE),
+        int(MsgErrorCode.STORAGE_WATERMARK_EXCEEDED),
     ]
 )
-"""发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`，03-2 追加超限 `350006`）。"""
+"""发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`，03-2 追加超限 `350006`，
+02-6 追加存储水位拒绝 `350022`）。"""
 
 CONSUME_ERROR_CODES = ConcurrentStableList(
     [
@@ -229,6 +233,7 @@ def delivery_service(
     backpressure: BackpressureTuning | None = None,
     waiter: DeliveryWaiter | None = None,
     directory: PartitionDirectory | None = None,
+    gate: StorageGate | None = None,
 ) -> DeliveryService:
     """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态 / 背压参数）。
 
@@ -245,6 +250,7 @@ def delivery_service(
         backpressure: inflight 双阈值（None 表示不限）。
         waiter: 分区唤醒器（None 表示不唤醒，仅单测直连时出现）。
         directory: 分区目录登记表（02-1）。
+        gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
 
     Returns:
         DeliveryService: 投递服务。
@@ -257,6 +263,7 @@ def delivery_service(
         state=state,
         backpressure=backpressure,
         waiter=waiter,
+        gate=gate,
     )
 
 
@@ -268,6 +275,7 @@ def _delay_service(
     cache: TopicCache | None,
     tenant_id: int | None,
     directory: PartitionDirectory | None = None,
+    gate: StorageGate | None = None,
 ) -> DelayService:
     """组装延迟发布服务（请求级主题仓储 + 进程级延迟区 / 时间轮）。
 
@@ -278,6 +286,7 @@ def _delay_service(
         cache: 进程内主题快照缓存（None = 不缓存）。
         tenant_id: 当前租户主键（缓存键的一部分）。
         directory: 分区目录登记表（02-1）。
+        gate: 存储水位闸门（02-6；None 表示不判）。
 
     Returns:
         DelayService: 延迟发布服务。
@@ -286,6 +295,7 @@ def _delay_service(
         store=store,
         router=topic_router(uow, cache=cache, tenant_id=tenant_id, directory=directory),
         wheel=scheduler.wheel,
+        gate=gate,
     )
 
 
@@ -463,6 +473,7 @@ async def publish(
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
+    gate: StorageGateDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -473,6 +484,8 @@ async def publish(
     入口按主题保留口径清理本分区到期段（幂等；见 01-6）。
     **限流在两条分支之前**（03-5）：延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；
     超出租户 / 主题配额返回 350005（429 + `Retry-After`）。
+    **存储水位在两条分支里各判一次**（02-6）：盘满或数据卷不可用返回 350022（507），延迟发布同样拒绝
+    （不得先收进延迟区再丢）；`data` 带当前水位、阈值、数据卷与剩余字节。
     """
     verdict = limiter.check(tenant=tenant.code, topic=(tenant.code, req.namespace, req.topic))
     if not verdict.allowed:
@@ -489,6 +502,7 @@ async def publish(
             cache=cache,
             tenant_id=int(tenant.tenant_id),
             directory=directory,
+            gate=gate,
         ).publish(tenant=tenant, request=req)
         delay_scheduler.ensure_started()
         return ApiResponse.ok(
@@ -521,6 +535,7 @@ async def publish(
         cache=cache,
         tenant_id=int(tenant.tenant_id),
         directory=directory,
+        gate=gate,
     ).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(

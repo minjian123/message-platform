@@ -21,6 +21,7 @@
 """
 
 import asyncio
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from bms_msg.broker.delay import DelayRecord, DelayStore, with_attempt
 from bms_msg.broker.log import MessageStore
 from bms_msg.core.config import (
     DELAY_BATCH_LIMIT,
+    DELAY_FAILURE_LOG_WINDOW_MS,
     DELAY_MAX_CATCHUP_SECONDS,
     DELAY_TICK_MS,
     MS_PER_SECOND,
@@ -192,6 +194,8 @@ class DelayScheduler:
         now: Callable[[], datetime] = _utcnow,
         interval_ms: int = DELAY_TICK_MS,
         batch_limit: int = DELAY_BATCH_LIMIT,
+        failure_log_window_ms: int = DELAY_FAILURE_LOG_WINDOW_MS,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         """初始化（不启动任务：由 `ensure_started()` 决定）。
 
@@ -202,6 +206,8 @@ class DelayScheduler:
             now: 时钟（缺省 UTC 当前时间；用例注入可推进时钟）。
             interval_ms: 推进周期（毫秒；用例用 10ms 验证生命周期）。
             batch_limit: 单轮转投上限（条）。
+            failure_log_window_ms: 同分区同原因的失败日志抑制窗口（毫秒；缺省一个 tick）。
+            clock: 单调毫秒时钟（抑制窗口判据；用例注入以确定性控制窗口边界）。
         """
         self._store = store
         self._messages = messages
@@ -209,6 +215,9 @@ class DelayScheduler:
         self._now = now
         self._interval_ms = interval_ms
         self._batch_limit = batch_limit
+        self._failure_log_window_ms = failure_log_window_ms
+        self._clock = clock if clock is not None else _monotonic_ms
+        self._failure_logged: dict[tuple[int, int, str], float] = {}
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -301,28 +310,60 @@ class DelayScheduler:
                 uncompressed_len=record.uncompressed_len,
             )
             await self._store.remove(log_id=record.log_id)
-        except Exception:  # 主题停用 / 租户停用 / 存储故障：保留记录，下一轮重试
-            return await self._defer(record)
+        except Exception as exc:  # 主题停用 / 租户停用 / 存储故障：保留记录，下一轮重试
+            return await self._defer(record, exc)
         return True
 
-    async def _defer(self, record: DelayRecord) -> bool:
-        """转投失败处置：记录保留、`attempts + 1`、指标日志、下一轮重试（不丢弃）。
+    async def _defer(self, record: DelayRecord, exc: Exception) -> bool:
+        """转投失败处置：记录保留、`attempts + 1`、记日志、下一轮重试（不丢弃）。
+
+        **日志带原因并按窗口抑制**（02-6）：没有 `reason` 时「磁盘满」与「主题停用」只能靠猜；
+        而高水位期间每 tick 都会失败，不抑制会在几秒内刷出成千上万行同样的内容。
+        抑制键是 `(主题, 分区, 原因)`——不同原因各记一条，不会被别的失败掩住。
 
         Args:
             record: 失败记录。
+            exc: 失败原因（原样取其类名与 `errno`，不改抛）。
 
         Returns:
             bool: 恒 False（未投出）。
         """
         retried = with_attempt(record)
-        _LOGGER.warning(
-            "delay_deliver_failed",
-            log_id=retried.log_id,
-            namespace=retried.namespace,
-            topic=retried.topic,
-            partition=retried.partition_no,
-            attempts=retried.attempts,
-        )
+        self._log_failure(retried, exc)
         await self._store.enqueue(retried)
         self._wheel.place(retried)
         return False
+
+    def _log_failure(self, record: DelayRecord, exc: Exception) -> None:
+        """按窗口记一次转投失败日志（同分区同原因在窗口内只记一条）。
+
+        Args:
+            record: 失败记录（已 `attempts + 1`）。
+            exc: 失败原因。
+        """
+        reason = type(exc).__name__
+        key = (record.topic_id, record.partition_no, reason)
+        now_ms = self._clock()
+        last = self._failure_logged.get(key)
+        if last is not None and now_ms - last < self._failure_log_window_ms:
+            return
+        self._failure_logged[key] = now_ms
+        _LOGGER.warning(
+            "delay_deliver_failed",
+            log_id=record.log_id,
+            namespace=record.namespace,
+            topic=record.topic,
+            partition=record.partition_no,
+            attempts=record.attempts,
+            reason=reason,
+            errno=getattr(exc, "errno", None),
+        )
+
+
+def _monotonic_ms() -> float:
+    """当前单调时钟毫秒（日志抑制窗口判据，不受系统时钟回拨影响）。
+
+    Returns:
+        float: 单调时钟（毫秒）。
+    """
+    return time.monotonic() * 1_000

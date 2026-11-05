@@ -29,6 +29,7 @@ from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
+from bms_msg.broker.watermark import StorageGate
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
@@ -54,6 +55,7 @@ __all__ = [
     "RateLimiterDep",
     "ReplayRunnerDep",
     "RetentionThrottleDep",
+    "StorageGateDep",
     "StreamRegistryDep",
     "StreamTuningDep",
     "TopicCacheDep",
@@ -490,3 +492,22 @@ def get_partition_directory(request: Request) -> PartitionDirectory:
 
 PartitionDirectoryDep = Annotated[PartitionDirectory, Depends(get_partition_directory)]
 """路由参数写法：`directory: PartitionDirectoryDep`（分区目录登记表）。"""
+
+
+def get_storage_gate(request: Request) -> StorageGate | None:
+    """取存储水位闸门（进程级单例；02-6）。
+
+    **缺省 None 是设计**：最小测试应用与「内存实现直连」场景没有水位组件，此时发布不受水位约束
+    （与既有用例行为一致）；生产装配总会注入 `StorageWatermark`。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        StorageGate | None: 水位闸门；未装配返回 None。
+    """
+    return cast("StorageGate | None", getattr(request.app.state, "storage_watermark", None))
+
+
+StorageGateDep = Annotated[StorageGate | None, Depends(get_storage_gate)]
+"""路由参数写法：`gate: StorageGateDep`（存储水位闸门；None 表示不判）。"""

@@ -41,6 +41,7 @@ from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.waiter import DeliveryWaiter
+from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import (
@@ -238,6 +239,7 @@ class DeliveryService:
         now: Callable[[], datetime] = _utcnow,
         backpressure: BackpressureTuning | None = None,
         waiter: DeliveryWaiter | None = None,
+        gate: StorageGate | None = None,
     ) -> None:
         """初始化。
 
@@ -250,6 +252,7 @@ class DeliveryService:
             now: 时钟（缺省 UTC 当前时间；用例注入固定时钟以模拟可见性超时）。
             backpressure: inflight 双阈值（03-5；None 表示不限，保持 01-2 / 01-3 用例原行为）。
             waiter: 分区唤醒器（03-5；确认 / 死信归还额度后唤醒被暂停的流）。
+            gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
         """
         self._store = store
         self._offsets = offsets
@@ -259,6 +262,7 @@ class DeliveryService:
         self._now = now
         self._backpressure = backpressure
         self._waiter = waiter
+        self._gate = gate
 
     def _notify(self, key: PartitionKey) -> None:
         """唤醒该分区上的长轮询 / 长驻流（额度归还或消息写入后）。
@@ -301,11 +305,16 @@ class DeliveryService:
             MsgNamespaceInvalidError: 命名空间未登记 / 未启用（350010）。
             MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
             MsgPartitionCountInvalidError: 主题分区数非正（350009）。
+            MsgStorageWatermarkExceededError: 存储水位超拒绝阈值或数据卷不可用（350022 / 507，02-6）。
             ParamError: 载荷非合法 base64（10001）。
         """
         tenant.ensure_namespace(request.namespace)
         topic = await self._router.resolve(namespace=request.namespace, name=request.topic)
         partition_no = self._router.route(topic, request.key)
+        if self._gate is not None:
+            # 02-6：水位判在**主题与分区判定之后、写入之前**——非法请求的错误码优先级不变，
+            # 且只约束「外部生产」（延迟转投与重放直接走 store.append，不经本闸门）。
+            self._gate.ensure_writable()
         return await self._store.append(
             topic_id=int(topic.id),
             partition_no=partition_no,

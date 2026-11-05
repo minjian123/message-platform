@@ -17,3 +17,9 @@ allow_demo_fallback = false
 
 [cache]
 provider = "redis"
+
+# 健康检查注册表：msg 自持实现（02-6）。基座缺省 provider 为空 → NullHealthCheckRegistry（空检查项），
+# 即 /readyz 只判「启动完成 + 未摘流」；切到 msg 后由 msg_storage（必需：目录可写 + 水位）、
+# msg_recovery（非必需）与 database（必需）三项聚合。不能用基座 local：它无条件登记 redis 检查项。
+[health_check_registry]
+provider = "msg"

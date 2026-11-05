@@ -15,7 +15,9 @@
 > 并把存储登记进资源管理器（停机先停后台循环、再刷日志与恢复点）；
 > 02-3 把位点换成**文件实现**（单文件双槽 + 内存为准 + 后台定时刷 + 脏阈值提前刷 + 关闭强制刷），
 > 并按其偏序分两处登记：`OffsetFlusher` 早于 `StorageCloser`（先刷日志、后刷位点）、
-> `OffsetFlushLoop` 在启动钩子里先于 `BackgroundLoops`（停机先断上游、再停刷盘）。
+> `OffsetFlushLoop` 在启动钩子里先于 `BackgroundLoops`（停机先断上游、再停刷盘）；
+> 02-6 接入存储水位（`StorageWatermark` + `StorageMetrics`，惰性采样、无后台任务），并把
+> `health_check_registry` 切到 msg 自持实现（`msg_storage` / `msg_recovery` / `database` 三项）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -55,7 +57,9 @@ from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
+from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.errors import register_msg_error_mapper
+from bms_msg.health import register_msg_health_registry
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
@@ -146,6 +150,10 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 02-2：日志关闭钩子。此处注册晚于位点刷盘句柄，逆序释放即「先刷日志、后刷位点」。
         resources.register(StorageCloser(store=file_store))
         app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
+        # 02-6：存储水位（卷级采样 + 滞回闸门）与指标采集点。惰性采样，**无后台任务**，
+        # 因此不参与 02-2 / 02-3 的关闭偏序；发布侧经 `api/deps.py::StorageGateDep` 取用。
+        app.state.storage_metrics = StorageMetrics()
+        app.state.storage_watermark = StorageWatermark(root=root, metrics=app.state.storage_metrics)
         app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
         app.state.dead_letter_queue = InMemoryDeadLetterQueue()
         app.state.delivery_state = DeliveryState()
@@ -171,15 +179,17 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         register_frame_handlers(app)
 
     def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
-        """服务侧插件登记：租户守卫 `tenant_guard:msg` 与产品码覆盖 `error_mapper:msg`。
+        """服务侧插件登记：租户守卫 `tenant_guard:msg`、产品码覆盖 `error_mapper:msg`
+        与健康检查注册表 `health_check_registry:msg`。
 
         Args:
-            app: 应用实例（守卫工厂惰性读取 `app.state.tenant_source`）。
-            settings: 应用配置（`[tenant_guard].provider = "msg"` / `[error_mapper].provider = "msg"` 时生效）。
+            app: 应用实例（守卫工厂惰性读取 `app.state.tenant_source`；注册表工厂读 `app.state`）。
+            settings: 应用配置（三个 `provider = "msg"` 生效，且注册表工厂取 `[health]` 两档超时）。
         """
-        del settings
         register_msg_tenant_guard(app)
         register_msg_error_mapper()
+        # 02-6：`/readyz` 的检查项来自 msg 自持注册表（基座缺省 provider 为空 → 空注册表，探针空转）。
+        register_msg_health_registry(app, settings)
 
 
 def platform_uow_factory(app: FastAPI) -> UowFactory:

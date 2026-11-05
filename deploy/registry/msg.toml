@@ -233,6 +233,17 @@ message_key = "msg.error.rate_limited"
 severity = "warning"
 description = "生产限流（租户 / 主题速率超出配额）；客户端应按 Retry-After 或 retry_after_ms 退避"
 
+# 存储水位拒绝（02-6）：与 350005 限流、350015 延迟区满分立——盘满必须停止发布并介入清理，
+# 退避重试无用；故取 507（Insufficient Storage）而不是 429 / 503。
+# 帧形态按系统层返回（layer=system、retryable=true：清理后即可恢复）。
+[[errcodes]]
+code = 350022
+domain = "msg"
+http_status = 507
+message_key = "msg.error.storage_watermark_exceeded"
+severity = "error"
+description = "存储水位拒绝（卷使用率超拒绝阈值，或消息数据卷不可用）；须清理过期段或扩容后重试"
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
