@@ -112,6 +112,14 @@ class FrameType(IntEnum):
     HEARTBEAT = 17
     """心跳（03-4 启用：端点 `POST /msg/connection/heartbeat`；响应沿用同类型 + response 位）。"""
 
+    RPC = 48
+    """RPC 一元调用（04-1；请求帧，payload 为调用参数原始字节）。
+
+    取 `rpc` 分组区间（48-63）的首号，而不是数据面预留的 7-15：分组语义在 03-2 已随契约发布，
+    RPC 挤进数据面段会与「数据面后续扩展位」抢号。**响应沿用本 type + `flags.response`**——
+    与 `result_frame` / `open_frame` / 心跳响应同一套表达，客户端只维护一条响应判定。
+    """
+
 
 class FrameFlags(IntFlag):
     """标志位（16 位；未定义位一律忽略，为后续留位且不破坏兼容）。"""

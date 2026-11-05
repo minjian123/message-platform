@@ -30,6 +30,7 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
+from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 
@@ -55,6 +56,7 @@ __all__ = [
     "RateLimiterDep",
     "ReplayRunnerDep",
     "RetentionThrottleDep",
+    "RpcRegistryDep",
     "StorageGateDep",
     "StreamRegistryDep",
     "StreamTuningDep",
@@ -82,6 +84,7 @@ __all__ = [
     "get_rate_limiter",
     "get_replay_runner",
     "get_retention_throttle",
+    "get_rpc_registry",
     "get_stream_registry",
     "get_stream_tuning",
     "get_topic_cache",
@@ -511,3 +514,22 @@ def get_storage_gate(request: Request) -> StorageGate | None:
 
 StorageGateDep = Annotated[StorageGate | None, Depends(get_storage_gate)]
 """路由参数写法：`gate: StorageGateDep`（存储水位闸门；None 表示不判）。"""
+
+
+def get_rpc_registry(request: Request) -> RpcRegistry:
+    """取 RPC 方法注册表（进程级单例；装配期由 `default_rpc_registry()` 注入）。
+
+    **实例而非模块级全局**：与其它进程级状态（位点 / 组 / 限流器）同口径——用例各造一份、多 app
+    实例互不串扰；04-5 复用时由 bms 自己的装配决定注册表内容。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        RpcRegistry: 方法注册表。
+    """
+    return cast("RpcRegistry", request.app.state.rpc_registry)
+
+
+RpcRegistryDep = Annotated[RpcRegistry, Depends(get_rpc_registry)]
+"""路由参数写法：`registry: RpcRegistryDep`（RPC 方法注册表）。"""

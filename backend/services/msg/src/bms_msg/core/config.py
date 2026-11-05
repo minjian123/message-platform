@@ -551,3 +551,43 @@ DELAY_ATTEMPT_FLUSH_ATTEMPTS = 10
 
 DELAY_METRICS_KEY_LIMIT = 200
 """延迟区指标按租户分键的上限：越界归 `__other__`（与 02-6 的卷分键、03-5 的主题分键同口径）。"""
+
+# ---------------------------------------------------------------------------
+# 04-1 RPC 一元调用：路径形态 / 调用方标识 / 客户端兜底超时 / RPC 速率
+# ---------------------------------------------------------------------------
+
+RPC_SERVICE_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,64}$")
+"""RPC 服务标识形态（与主题名的字符集同尺：字母数字 + `.` `_` `-`）。"""
+
+RPC_METHOD_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
+"""RPC 方法名形态（比服务标识宽一档：方法名常带前缀，如 `user.get_by_id`）。"""
+
+RPC_SERVICE_MAX_LENGTH = 64
+"""服务标识长度上限（与 `RPC_SERVICE_PATTERN` 同宽；契约层 `10001`）。"""
+
+RPC_METHOD_MAX_LENGTH = 128
+"""方法名长度上限（与 `RPC_METHOD_PATTERN` 同宽；契约层 `10001`）。"""
+
+RPC_CALLER_MAX_LENGTH = 128
+"""调用方服务标识长度上限（与服务标识同尺；非鉴权字段，只做透传与记录）。"""
+
+RPC_DEFAULT_TIMEOUT_MS = 30_000
+"""客户端兜底超时（毫秒）：与 `SUBSCRIBE_MAX_WAIT_MS` 同尺度，运维只记一个时间量级。
+
+04-2 的 deadline 传播落地后，这个值退化为「调用方未给预算时的缺省预算」。
+"""
+
+RPC_TENANT_HEADER = "X-Tenant-ID"
+"""租户来源头（基座中间件的显式来源；与子域名 / 令牌租户位同一解析链，首个命中即止）。"""
+
+RPC_CALLER_HEADER = "X-Caller-Service"
+"""调用方服务标识头（优先级高于帧头 / JSON 体的 `caller`）。"""
+
+RPC_TRACE_HEADER = "X-Trace-Id"
+"""链路标识头（优先级高于帧头 / JSON 体的 `trace_id`）。"""
+
+RATE_LIMIT_RPC_PER_SECOND = 0
+"""RPC 速率（次/秒，按 `(tenant, service)` 计；0 = 不限）。缺省关闭，数值由 05-3 / 8B_12 给。
+
+与生产限流（tenant / namespace+topic 两级）**互不消耗**：大消息发布打满 topic 桶不连带拒 RPC。
+"""

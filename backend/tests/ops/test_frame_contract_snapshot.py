@@ -15,6 +15,7 @@ from bms_core.core.serialization import normalize_collections
 
 from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
 from bms_msg.protocol.frame import MAX_FRAME_HEADER_BYTES, MAX_FRAME_PAYLOAD_BYTES, PROTOCOL_VERSION
+from bms_msg.rpc.builtin import default_rpc_registry
 from ops import contract_snapshot
 
 pytestmark = pytest.mark.kiwi_id(2421)
@@ -39,7 +40,9 @@ def test_export_contains_frame_contract(tmp_path: Path) -> None:
     frame = payload[FRAME_CONTRACT_KEY]
     assert frame["protocol_version"] == PROTOCOL_VERSION
     assert frame["limits"] == {"header_bytes": MAX_FRAME_HEADER_BYTES, "payload_bytes": MAX_FRAME_PAYLOAD_BYTES}
-    assert frame["content_type"] == "application/x-msg-frame"
+    # 键名是 03-3 定的 `frame_media_type`（当初与「消息体内容类型」消歧时改的名；本断言原本
+    # 还写着旧名 `content_type`，属存量笔误——04-1 触及本文件时一并修正）。
+    assert frame["frame_media_type"] == "application/x-msg-frame"
 
 
 def test_exported_contract_equals_code_table(tmp_path: Path) -> None:
@@ -52,6 +55,29 @@ def test_exported_contract_equals_code_table(tmp_path: Path) -> None:
     payload = json.loads(contract_snapshot.snapshot_path(tmp_path, "msg").read_text(encoding="utf-8"))
 
     assert payload[FRAME_CONTRACT_KEY] == json.loads(json.dumps(normalize_collections(frame_contract())))
+
+
+def test_export_contains_rpc_contract(tmp_path: Path) -> None:
+    """`x-msg-frame.rpc` 段：帧类型 48、响应位约定、方法清单与注册表同源。
+
+    Args:
+        tmp_path: 临时仓库根。
+    """
+    assert contract_snapshot.export(tmp_path) == 0
+    payload = json.loads(contract_snapshot.snapshot_path(tmp_path, "msg").read_text(encoding="utf-8"))
+
+    rpc = payload[FRAME_CONTRACT_KEY]["rpc"]
+    assert rpc["frame_type"] == 48
+    assert rpc["request_required"] == ["request_id"]
+    assert rpc["errors"] == {"method_not_found": 350023}
+    assert rpc["methods"] == [
+        {"method": "echo", "service": "demo"},
+        {"method": "length", "service": "demo"},
+    ]
+    # 与代码里的注册表同源（不是手写清单）。
+    assert [{"service": service, "method": method} for service, method in default_rpc_registry().methods()] == [
+        {"service": item["service"], "method": item["method"]} for item in rpc["methods"]
+    ]
 
 
 def test_injection_only_happens_at_export() -> None:

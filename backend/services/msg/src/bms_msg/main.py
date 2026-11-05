@@ -21,7 +21,8 @@
 > 02-7 把延迟区换成**文件实现**（`.delay` 独立序号段 + tombstone 回收 + 启动全量重建），
 > 转投走 `durable=file_store`（append 后显式 fsync 再清），并按关闭偏序登记 `DelayCloser`
 > （`OffsetFlusher` → `DelayCloser` → `StorageCloser`，逆序释放即刷日志 → 刷 `.delay` → 刷位点）。
-> RPC / 其余控制面路由随对应任务追加。
+> 04-1 接入 RPC 一元调用（方法注册表 + `/rpc/{service}/{method}` 双形态端点 + 客户端 stub），
+> 其余控制面路由随对应任务追加。
 """
 
 from collections.abc import AsyncGenerator
@@ -64,6 +65,7 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.health import register_msg_health_registry
+from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
@@ -187,6 +189,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             durable=file_store,
         )
         app.state.uow_factory = platform_uow_factory(app)
+        # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
+        app.state.rpc_registry = default_rpc_registry()
         app.state.replay_runner = ReplayRunner(
             messages=app.state.message_store,
             uow_factory=app.state.uow_factory,

@@ -253,6 +253,60 @@ async def test_frame_publish_consume_ack_roundtrip(client: AsyncClient) -> None:
     assert decode_frame(acked.content).header["committed_offset"] == 1
 
 
+async def test_frame_nack_roundtrip(client: AsyncClient) -> None:
+    """帧形态 nack：拒绝一条消息并把位点前移（`_invoke` 的 NACK 分支）。"""
+    await _create_topic(client)
+    await _join(client)
+
+    await _post_frame(
+        client,
+        "/msg/publish",
+        _frame(
+            int(FrameType.PUBLISH),
+            _header(extra={"namespace": NAMESPACE, "topic": TOPIC_NAME}),
+            b"poison",
+        ),
+    )
+    await _post_frame(
+        client,
+        "/msg/consume",
+        _frame(
+            int(FrameType.CONSUME),
+            _header(
+                extra={
+                    "namespace": NAMESPACE,
+                    "topic": TOPIC_NAME,
+                    "group": GROUP,
+                    "consumer_id": CONSUMER,
+                    "partition": 0,
+                }
+            ),
+        ),
+    )
+
+    nacked = await _post_frame(
+        client,
+        "/msg/nack",
+        _frame(
+            int(FrameType.NACK),
+            _header(
+                extra={
+                    "namespace": NAMESPACE,
+                    "topic": TOPIC_NAME,
+                    "group": GROUP,
+                    "consumer_id": CONSUMER,
+                    "partition": 0,
+                    "offset": 0,
+                    "reason": "schema_invalid",
+                }
+            ),
+        ),
+    )
+
+    assert nacked.status_code == 200
+    assert decode_frame(nacked.content).header["committed_offset"] == 1
+
+
 async def test_frame_delay_publish(client: AsyncClient) -> None:
     """延迟发布经帧路径同样可用（`offset` 为 null、`deliver_at` 有值）。"""
     await _create_topic(client)

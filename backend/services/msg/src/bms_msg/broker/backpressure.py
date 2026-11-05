@@ -31,6 +31,7 @@ from bms_msg.core.config import (
     RATE_LIMIT_BUCKET_LIMIT,
     RATE_LIMIT_BURST_SECONDS,
     RATE_LIMIT_RETRY_AFTER_MS,
+    RATE_LIMIT_RPC_PER_SECOND,
     RATE_LIMIT_TENANT_PER_SECOND,
     RATE_LIMIT_TOPIC_PER_SECOND,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "RateLimitTuning",
     "RateLimiter",
     "RateVerdict",
+    "RpcKey",
     "TokenBucket",
     "TopicKey",
     "default_backpressure_tuning",
@@ -50,6 +52,13 @@ __all__ = [
 
 TopicKey = tuple[str, str, str]
 """主题限流键：`(tenant, namespace, topic)`——同租户不同命名空间的同名主题互不影响。"""
+
+RpcKey = tuple[str, str]
+"""RPC 限流键：`(tenant, service)`。
+
+基数 = 租户数 × 注册表服务数（有界，典型十几个）；不细分到 method——那会让基数随方法数线性膨胀，
+而「哪个方法在打爆」应该看指标而不是看桶。
+"""
 
 
 @dataclass(frozen=True)
@@ -128,7 +137,7 @@ def default_backpressure_tuning() -> BackpressureTuning:
 
 @dataclass(frozen=True)
 class RateLimitTuning(BaseValueObject):
-    """生产限速参数（0 表示该级不限）。"""
+    """限速参数（0 表示该级不限）。"""
 
     tenant_per_second: int
     """租户级速率（条/秒）。"""
@@ -139,25 +148,33 @@ class RateLimitTuning(BaseValueObject):
     burst_seconds: int
     """桶容量折算秒数（容量 = 速率 × 本值）。"""
 
+    rpc_per_second: int = 0
+    """RPC 级速率（次/秒，按 `(tenant, service)` 计；04-1）。
+
+    放在最后并给默认值：04-1 之前构造 `RateLimitTuning` 的地方（用例、配置推导）都用关键字参数，
+    加一个带默认的维度不会让它们失效。
+    """
+
     @property
     def enabled(self) -> bool:
-        """是否启用限速（两级都为 0 即关闭）。
+        """是否启用限速（任一级 > 0 即启用）。
 
         Returns:
             bool: 是否启用。
         """
-        return self.tenant_per_second > 0 or self.topic_per_second > 0
+        return self.tenant_per_second > 0 or self.topic_per_second > 0 or self.rpc_per_second > 0
 
 
 def default_rate_limit_tuning() -> RateLimitTuning:
     """按模块常量构造缺省限速参数（缺省关闭）。
 
     Returns:
-        RateLimitTuning: 两级均为 0。
+        RateLimitTuning: 三级均为 0。
     """
     return RateLimitTuning(
         tenant_per_second=RATE_LIMIT_TENANT_PER_SECOND,
         topic_per_second=RATE_LIMIT_TOPIC_PER_SECOND,
+        rpc_per_second=RATE_LIMIT_RPC_PER_SECOND,
         burst_seconds=RATE_LIMIT_BURST_SECONDS,
     )
 
@@ -253,23 +270,30 @@ class TokenBucket:
 
 
 class RateLimiter(BaseFrameworkObject):
-    """两级令牌桶限流（进程级单例；桶跨请求存续）。
+    """令牌桶限流（进程级单例；桶跨请求存续）。
 
-    「都判后都扣」而非「先扣再判」：主题桶拒绝时若已扣了租户桶，租户额度会被无效请求吃掉，
-    表现为「同样的负载，限流比预期更早触发」。
+    **生产两级 + RPC 一级，三组桶互不消耗**：
+
+    - `check()`：租户 + 主题两级，**都判后都扣**（不是「先扣再判」——主题桶拒绝时若已扣了租户桶，
+      租户额度会被无效请求吃掉，表现为「同样的负载，限流比预期更早触发」）；
+    - `check_rpc()`：只判 `(tenant, service)` 的 RPC 桶——大消息发布打满 topic 桶不会连带拒 RPC，
+      反之亦然（04-1 §8.2）。
+
+    「生产两级互不消耗 RPC」不是靠加锁隔开的，而是**三组独立字典**：任何一组的扣减都碰不到另外两组。
     """
 
     def __init__(self, tuning: RateLimitTuning, *, bucket_limit: int = RATE_LIMIT_BUCKET_LIMIT) -> None:
         """初始化。
 
         Args:
-            tuning: 两级速率（0 表示该级不限）。
+            tuning: 三级速率（0 表示该级不限）。
             bucket_limit: 桶数量上限（超出先清满桶，再按插入序淘汰最旧）。
         """
         self._tuning = tuning
         self._bucket_limit = bucket_limit
         self._tenant_buckets: dict[str, TokenBucket] = {}
         self._topic_buckets: dict[TopicKey, TokenBucket] = {}
+        self._rpc_buckets: dict[RpcKey, TokenBucket] = {}
 
     @property
     def tuning(self) -> RateLimitTuning:
@@ -281,12 +305,12 @@ class RateLimiter(BaseFrameworkObject):
         return self._tuning
 
     def buckets(self) -> int:
-        """当前桶总数（两级合计；用例断言清理生效）。
+        """当前桶总数（三级合计；用例断言清理生效）。
 
         Returns:
             int: 桶数量。
         """
-        return len(self._tenant_buckets) + len(self._topic_buckets)
+        return len(self._tenant_buckets) + len(self._topic_buckets) + len(self._rpc_buckets)
 
     def check(self, *, tenant: str, topic: TopicKey, now: float | None = None) -> RateVerdict:
         """判一次生产请求是否放行（放行时同时扣两级令牌）。
@@ -316,6 +340,30 @@ class RateLimiter(BaseFrameworkObject):
             self._tenant_buckets[tenant].consume(1, moment)
         if self._tuning.topic_per_second > 0:
             self._topic_buckets[topic].consume(1, moment)
+        return RateVerdict(allowed=True, retry_after_ms=0, scope="")
+
+    def check_rpc(self, *, tenant: str, service: str, now: float | None = None) -> RateVerdict:
+        """判一次 RPC 调用是否放行（放行时扣 RPC 桶；**不碰**生产两级桶）。
+
+        与 `check()` 分开而不是复用它：生产的「租户 / 主题」与 RPC 的「租户 / 服务」是两组无关维度，
+        混在一处判会让「大消息发布打满 topic 桶」连带拒掉 RPC，正是 04-1 §8.2 要避免的挤占。
+
+        Args:
+            tenant: 租户编码。
+            service: 服务标识。
+            now: 当前 `monotonic` 秒（缺省取当前时刻；用例注入固定值）。
+
+        Returns:
+            RateVerdict: 判定结果（`scope = "rpc"` 表示触发的是 RPC 维度）。
+        """
+        if self._tuning.rpc_per_second <= 0:
+            return RateVerdict(allowed=True, retry_after_ms=0, scope="")
+        moment = time.monotonic() if now is None else now
+        bucket = self._rpc_bucket((tenant, service), moment)
+        wait = bucket.can(1, moment)
+        if wait:
+            return RateVerdict(allowed=False, retry_after_ms=wait, scope="rpc")
+        bucket.consume(1, moment)
         return RateVerdict(allowed=True, retry_after_ms=0, scope="")
 
     def _tenant_bucket(self, tenant: str, now: float) -> TokenBucket:
@@ -354,6 +402,24 @@ class RateLimiter(BaseFrameworkObject):
         self._topic_buckets[topic] = created
         return created
 
+    def _rpc_bucket(self, key: RpcKey, now: float) -> TokenBucket:
+        """取或建 RPC 桶。
+
+        Args:
+            key: RPC 键 `(tenant, service)`。
+            now: 当前 `monotonic` 秒。
+
+        Returns:
+            TokenBucket: 桶实例。
+        """
+        bucket = self._rpc_buckets.get(key)
+        if bucket is not None:
+            return bucket
+        self._prune(now)
+        created = TokenBucket(rate_per_second=self._tuning.rpc_per_second, burst_seconds=self._tuning.burst_seconds)
+        self._rpc_buckets[key] = created
+        return created
+
     def _prune(self, now: float) -> None:
         """桶数达到上限时清理：先清满桶，再按插入序淘汰最旧。
 
@@ -366,9 +432,14 @@ class RateLimiter(BaseFrameworkObject):
             self._tenant_buckets.pop(tenant_name, None)
         for topic_name in [name for name, bucket in self._topic_buckets.items() if bucket.is_full(now)]:
             self._topic_buckets.pop(topic_name, None)
+        for rpc_name in [name for name, bucket in self._rpc_buckets.items() if bucket.is_full(now)]:
+            self._rpc_buckets.pop(rpc_name, None)
         while self.buckets() >= self._bucket_limit and self._topic_buckets:
             table_key = next(iter(self._topic_buckets))
             self._topic_buckets.pop(table_key, None)
+        while self.buckets() >= self._bucket_limit and self._rpc_buckets:
+            rpc_key = next(iter(self._rpc_buckets))
+            self._rpc_buckets.pop(rpc_key, None)
         while self.buckets() >= self._bucket_limit and self._tenant_buckets:
             tenant_key = next(iter(self._tenant_buckets))
             self._tenant_buckets.pop(tenant_key, None)

@@ -9,7 +9,7 @@
   连接自报 `/msg/connection` + 连接心跳 `/msg/connection/heartbeat`——HTTP/2 帧入口的固定位置。
 
 两条聚合各自建登记表（`mount_service_routers` 每次新建 `RouterRegistry`），路由 `key` 不同即可共存；
-RPC / 其余控制面路由随对应任务追加。
+RPC 已随 04-1 追加到根路径聚合（帧形态与 JSON 形态同一实现），其余控制面路由随对应任务追加。
 """
 
 from bms_core.api.base import BaseRouter, mount_service_routers
@@ -23,6 +23,7 @@ from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
 from bms_msg.api.frame import connection as frame_connection
 from bms_msg.api.frame import routes as frame_routes
+from bms_msg.api.rpc import routes as rpc_routes
 
 api_router = mount_service_routers(
     ConcurrentStableList[BaseRouter](
@@ -44,11 +45,13 @@ frame_router = mount_service_routers(
             frame_routes.router,
             frame_routes.connection_router,
             frame_connection.router,
+            rpc_routes.router,
         ]
     ),
     prefix="",
 )
-"""本服务根路径数据面聚合（`/msg/*`；HTTP/2 帧入口，不挂 `/api/v1`）。
+"""本服务根路径接入面聚合（`/msg/*` 与 `/rpc/{service}/{method}`；HTTP/2 入口，不挂 `/api/v1`）。
 
-三条路由各带各的连接守卫：数据面 + 长驻流（判上限）、连接自报（不判上限，排障入口）、心跳（判上限并刷新心跳时间）。
+四条路由各带各的守卫：数据面 + 长驻流（判上限）、连接自报（不判上限，排障入口）、心跳（判上限并刷新心跳时间）、
+RPC（连接守卫 + `msg:rpc` 权限 + 帧闸门；帧形态与 JSON 形态同一实现）。
 """

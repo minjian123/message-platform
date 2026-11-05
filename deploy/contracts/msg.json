@@ -399,6 +399,33 @@
         "title": "ApiResponse[ReplayTaskItem]",
         "type": "object"
       },
+      "ApiResponse_RpcResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RpcResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[RpcResult]",
+        "type": "object"
+      },
       "ApiResponse_TopicDetail_": {
         "additionalProperties": false,
         "properties": {
@@ -1984,6 +2011,78 @@
           "error_msg"
         ],
         "title": "ReplayTaskItem",
+        "type": "object"
+      },
+      "RpcRequest": {
+        "additionalProperties": false,
+        "description": "RPC 调用请求（JSON 形态）。",
+        "properties": {
+          "caller": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "调用方服务标识（非鉴权字段，只透传与记录；与 HTTP 头冲突时以 HTTP 头为准）",
+            "title": "Caller"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结构化头（透传给处理器并随结果回显）",
+            "title": "Headers",
+            "type": "object"
+          },
+          "payload": {
+            "default": "",
+            "description": "调用参数（base64 编码；空串表示无参数）",
+            "title": "Payload",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识（写入日志与响应头；与 PublishRequest 同尺）",
+            "title": "Trace Id"
+          }
+        },
+        "title": "RpcRequest",
+        "type": "object"
+      },
+      "RpcResult": {
+        "additionalProperties": false,
+        "description": "RPC 调用结果（JSON 形态）。",
+        "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结果结构化头",
+            "title": "Headers",
+            "type": "object"
+          },
+          "payload": {
+            "description": "结果（base64 编码；空串表示无结果体）",
+            "title": "Payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "RpcResult",
         "type": "object"
       },
       "TopicCreateRequest": {
@@ -5199,6 +5298,135 @@
         },
         "summary": "Readyz"
       }
+    },
+    "/rpc/{service}/{method}": {
+      "post": {
+        "description": "一元调用（JSON 形态）。\n\n需要 `msg:rpc` 权限（当前无 provider 时恒放行）。`service` / `method` 形态非法由契约层拒绝\n（`10001`）；`payload` 非合法 base64 同码。未注册方法返回 `350023`（404，`layer=business`、\n`retryable=false`），不是 500。参数 / 结果超过 1 MiB 返回 `350006`。\n调用方标识与链路标识走「HTTP 头优先」，两者都会回写进响应头。",
+        "operationId": "invoke_rpc__service___method__post",
+        "parameters": [
+          {
+            "description": "服务标识（与注册表登记的 service 同值）",
+            "in": "path",
+            "name": "service",
+            "required": true,
+            "schema": {
+              "description": "服务标识（与注册表登记的 service 同值）",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+              "title": "Service",
+              "type": "string"
+            }
+          },
+          {
+            "description": "方法名（与注册表登记的 method 同值）",
+            "in": "path",
+            "name": "method",
+            "required": true,
+            "schema": {
+              "description": "方法名（与注册表登记的 method 同值）",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9._-]{1,128}$",
+              "title": "Method",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RpcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_RpcResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Invoke",
+        "tags": [
+          "msg-rpc"
+        ],
+        "x-error-codes": [
+          350005,
+          350006,
+          350011,
+          350012,
+          350023
+        ]
+      }
     }
   },
   "x-msg-frame": {
@@ -5244,7 +5472,8 @@
         "reject_code": 350005,
         "scopes": [
           "tenant",
-          "namespace+topic"
+          "namespace+topic",
+          "rpc"
         ]
       }
     },
@@ -5443,6 +5672,7 @@
       "2": "consume",
       "3": "ack",
       "4": "subscribe",
+      "48": "rpc",
       "5": "nack",
       "6": "message"
     },
@@ -5505,6 +5735,37 @@
         "range": "64-255"
       }
     ],
+    "rpc": {
+      "compression": "不支持：flags.compressed 置位或 header.compression 非 none 即 350018",
+      "errors": {
+        "method_not_found": 350023
+      },
+      "frame_type": 48,
+      "methods": [
+        {
+          "method": "echo",
+          "service": "demo"
+        },
+        {
+          "method": "length",
+          "service": "demo"
+        }
+      ],
+      "payload": "调用参数原始字节（broker 不解析；上限 1 MiB；结果同限）",
+      "request_optional": [
+        "service",
+        "method",
+        "caller",
+        "trace_id",
+        "tenant",
+        "content_type",
+        "protocol_version"
+      ],
+      "request_required": [
+        "request_id"
+      ],
+      "response": "same type + flags.response（与 result_frame / open_frame 同构）"
+    },
     "stream": {
       "connection_window": "h2 连接级窗口由同连接所有 stream 共享：一条流停读会占满连接窗口、连带其它 stream 暂停发送；应用层（协程 / CPU / inflight 配额）互不影响。这是协议语义，不是实现缺陷",
       "end_of_stream": "正文 EOF 即正常结束（deadline / 客户端断开不发结束帧）；流内异常先发 error 帧再 EOF",

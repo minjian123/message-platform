@@ -6,7 +6,8 @@
   租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`、
   延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
-  连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`
+  连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
+  RPC 方法未注册 `350023`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 仍由架构 05 §5 预留为超时（归 8B_03 RPC deadline），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
@@ -53,6 +54,7 @@ __all__ = [
     "MsgRateLimitedError",
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
+    "MsgRpcMethodNotFoundError",
     "MsgStorageWatermarkExceededError",
     "MsgStreamLimitExceededError",
     "MsgTenantNotFoundError",
@@ -141,6 +143,14 @@ class MsgErrorCode(IntEnum):
 
     与相邻码分工（2026-11-05 定）：`350005` 生产限流（退避重试即可）、`350015` 延迟区满（延迟档位的问题）、
     `350022` 存储水位（**必须停止发布并介入清理**，退避无用）；帧形态按系统层返回、`retryable=true`。
+    """
+
+    RPC_METHOD_NOT_FOUND = 350023
+    """RPC 方法未注册（`service + method` 不在进程内注册表）。
+
+    与 `10001` 分工：`10001` 是「参数形态非法」（改参可解、协议层）；本码是「对端没有这个方法」
+    （改参无用、business 层、`retryable=false`），客户端应去查对端能力而不是重试。
+    `350004` 仍预留为 RPC deadline（04-2），本码不复用也不占用它。
     """
 
 
@@ -329,6 +339,18 @@ class MsgStorageWatermarkExceededError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.STORAGE_WATERMARK_EXCEEDED
     http_status_: ClassVar[int] = 507
+
+
+class MsgRpcMethodNotFoundError(MsgError):
+    """RPC 方法未注册（350023 / 404）：`service + method` 不在进程内注册表。
+
+    `data` 带 `service` / `method` 两个字段（普通 dict，不用自定义 Mapping——pydantic 序列化
+    自定义 Mapping 会 500，02-7 在 `350015` 上交过学费）：调用方据此确认「自己拼的名字」还是
+    「对端没实现」。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.RPC_METHOD_NOT_FOUND
+    http_status_: ClassVar[int] = 404
 
 
 class MsgErrorMapper(BaseErrorMapper):

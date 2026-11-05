@@ -7,6 +7,8 @@ dependencies = [
     "bms-core",
     "fastapi>=0.115",
     "msgpack>=1.1",
+    # RPC 客户端（04-1）走 HTTP/2，需要 `h2` 传输实现；只在 dev 组装会让生产镜像缺依赖。
+    "httpx[http2]>=0.27",
 ]
 
 [build-system]

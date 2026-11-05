@@ -244,6 +244,17 @@ message_key = "msg.error.storage_watermark_exceeded"
 severity = "error"
 description = "存储水位拒绝（卷使用率超拒绝阈值，或消息数据卷不可用）；须清理过期段或扩容后重试"
 
+# ---- RPC（任务 04-1）----
+# 未注册方法与「方法名形态非法」分工：前者 business / 不重试（改参无用，应查对端能力），
+# 后者仍走契约层 10001（protocol / 改参可解）。350004 保持为空，留给 04-2 的 RPC deadline。
+[[errcodes]]
+code = 350023
+domain = "msg"
+http_status = 404
+message_key = "msg.error.rpc_method_not_found"
+severity = "warning"
+description = "RPC 方法未注册（service + method 不在进程内注册表）"
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
@@ -265,5 +276,7 @@ paths = [
   "backend/services/msg/src/bms_msg/core/**/*.py",
   "backend/services/msg/src/bms_msg/tenant/**/*.py",
   "backend/services/msg/src/bms_msg/protocol/**/*.py",
+  "backend/services/msg/src/bms_msg/rpc/**/*.py",
+  "backend/services/msg/src/bms_msg/client/**/*.py",
 ]
 public_api = []

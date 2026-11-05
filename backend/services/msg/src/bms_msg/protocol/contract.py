@@ -6,7 +6,8 @@
 注入快照顶层——代码与快照只有一处事实源，零漂移由 `check` 自动保证。
 
 口径来源：03-2 详细设计 §4（帧布局 / 类型 / 标志位 / 上限 / 版本规则）、03-3 详细设计 §4 与 §7
-（内容类型取值 / 压缩白名单 / 消息体规则；`content_type` 键改名 `frame_media_type` 与消息体消歧）。
+（内容类型取值 / 压缩白名单 / 消息体规则；`content_type` 键改名 `frame_media_type` 与消息体消歧）、
+04-1 详细设计 §12（RPC 帧类型 48、响应位约定、请求头字段、方法清单——由 `rpc/contract.py` 摊平）。
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from bms_msg.protocol.frame import (
     FrameType,
 )
 from bms_msg.protocol.payload import payload_contract
+from bms_msg.rpc.contract import rpc_contract
 
 __all__ = ["FRAME_CONTRACT_KEY", "frame_contract"]
 
@@ -262,7 +264,7 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                     "rate_limit": ConcurrentStableDict(
                         {
                             "algorithm": "token-bucket",
-                            "scopes": ConcurrentStableList(["tenant", "namespace+topic"]),
+                            "scopes": ConcurrentStableList(["tenant", "namespace+topic", "rpc"]),
                             "default_tenant_per_second": RATE_LIMIT_TENANT_PER_SECOND,
                             "default_topic_per_second": RATE_LIMIT_TOPIC_PER_SECOND,
                             "default_note": "0 = 不限（缺省关闭，数值由 05-3 / 8B_12 给）",
@@ -288,5 +290,6 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                 }
             ),
             **payload_contract(),
+            **rpc_contract(),
         }
     )

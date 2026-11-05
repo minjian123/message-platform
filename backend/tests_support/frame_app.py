@@ -33,6 +33,7 @@ from bms_msg.api.data import messages
 from bms_msg.api.frame import connection as frame_connection
 from bms_msg.api.frame import routes as frame_routes
 from bms_msg.api.frame.gate import register_frame_handlers
+from bms_msg.api.rpc import routes as rpc_routes
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
@@ -50,6 +51,7 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.errors import MSG_ERROR_MAPPER
+from bms_msg.rpc.builtin import default_rpc_registry
 
 __all__ = ["build_frame_app", "install_backpressure_state"]
 
@@ -142,6 +144,8 @@ def build_frame_app(
         messages=app.state.message_store,
         wheel=DelayWheel(),
     )
+    # 04-1：RPC 方法注册表（生产由 `configure_service()` 注入同一份 `default_rpc_registry()`）。
+    app.state.rpc_registry = default_rpc_registry()
 
     @asynccontextmanager
     async def _uow() -> AsyncGenerator[UnitOfWork]:
@@ -170,7 +174,14 @@ def build_frame_app(
     if mount_frame:
         app.include_router(
             mount_service_routers(
-                ConcurrentStableList([frame_routes.router, frame_routes.connection_router, frame_connection.router]),
+                ConcurrentStableList(
+                    [
+                        frame_routes.router,
+                        frame_routes.connection_router,
+                        frame_connection.router,
+                        rpc_routes.router,
+                    ]
+                ),
                 prefix="",
             )
         )

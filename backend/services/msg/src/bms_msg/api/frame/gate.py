@@ -94,7 +94,13 @@ from bms_msg.protocol.payload import (
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 
-__all__ = ["FrameHandled", "build_frame_gate", "is_frame_request", "register_frame_handlers"]
+__all__ = [
+    "FrameHandled",
+    "build_frame_gate",
+    "ensure_frame_tenant",
+    "is_frame_request",
+    "register_frame_handlers",
+]
 
 _LOGGER = get_logger("bms_msg.frame")
 
@@ -265,7 +271,7 @@ def _ensure_required(header: Mapping[str, Any], required: tuple[str, ...]) -> No
         raise MsgFrameInvalidError(f"缺少必填 frame header 字段：{', '.join(missing)}")
 
 
-def _ensure_tenant(header: Mapping[str, Any], tenant: CurrentTenant) -> None:
+def ensure_frame_tenant(header: Mapping[str, Any], tenant: CurrentTenant) -> None:
     """校验帧头 `tenant` 与中间件解析结果一致（帧不作为鉴权第二入口）。
 
     Args:
@@ -540,7 +546,7 @@ async def _handle_frame(
     try:
         _ensure_frame_type(frame, frame_type)
         _ensure_required(frame.header, required)
-        _ensure_tenant(frame.header, tenant)
+        ensure_frame_tenant(frame.header, tenant)
         payload = _payload_of(frame)
         model = request_model.model_validate(_model_input(frame.header, allowed, payload))
         if isinstance(model, PublishRequest):
