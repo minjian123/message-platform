@@ -392,14 +392,28 @@ class RecoverySummary(BaseValueObject):
     corrupted_segments: tuple[int, ...]
     """非末段对账失败的段 base 列表（空表示各段与恢复点一致）。"""
 
+    delay_truncated_bytes: int = 0
+    """`.delay` 末段被截掉的字节数（02-7；崩溃遗留半条记录）。"""
+
+    delay_isolated_segments: tuple[int, ...] = ()
+    """`.delay` 被整段隔离的段序号（02-7；非末段损坏）。"""
+
+    delay_lost_records: int = 0
+    """随 `.delay` 隔离段一起不可用的记录数（02-7）。"""
+
     @property
     def degraded(self) -> bool:
-        """该分区是否发生过「数据有损」（截断或非末段损坏）。
+        """该分区是否发生过「数据有损」（截断、非末段损坏、或延迟段有损）。
 
         Returns:
             bool: True 表示恢复期发现过损坏。
         """
-        return self.truncated_bytes > 0 or self.corrupted_segments != ()
+        return (
+            self.truncated_bytes > 0
+            or self.corrupted_segments != ()
+            or self.delay_truncated_bytes > 0
+            or self.delay_isolated_segments != ()
+        )
 
 
 class RecoveryLedger:
@@ -416,20 +430,59 @@ class RecoveryLedger:
         self._entries: dict[tuple[int, int], RecoverySummary] = {}
 
     def record(self, *, topic_id: int, partition_no: int, report: RecoveryReport) -> None:
-        """登记一个分区的恢复结论（覆盖同分区旧值）。
+        """登记一个分区的 `.log` 恢复结论（覆盖日志侧字段，保留延迟侧字段）。
+
+        **为什么是「合并」而不是「覆盖整条」**：同一分区的 `.log` 恢复（02-2，懒加载时）与
+        `.delay` 重建（02-7，启动钩子）是两个时机、两张报告，谁后写都不该抹掉对方的结论。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
             report: 该分区的恢复报告。
         """
+        key = (topic_id, partition_no)
+        existing = self._entries.get(key)
         truncated = report.truncated_from_bytes - report.truncated_bytes
-        self._entries[(topic_id, partition_no)] = RecoverySummary(
+        self._entries[key] = RecoverySummary(
             topic_id=topic_id,
             partition_no=partition_no,
             truncated_bytes=truncated,
             trailing_records=report.trailing_records,
             corrupted_segments=report.corrupted_segments,
+            delay_truncated_bytes=existing.delay_truncated_bytes if existing is not None else 0,
+            delay_isolated_segments=existing.delay_isolated_segments if existing is not None else (),
+            delay_lost_records=existing.delay_lost_records if existing is not None else 0,
+        )
+
+    def record_delay(
+        self,
+        *,
+        topic_id: int,
+        partition_no: int,
+        truncated_bytes: int,
+        isolated_segments: tuple[int, ...],
+        lost_records: int,
+    ) -> None:
+        """登记一个分区的 `.delay` 重建结论（覆盖延迟侧字段，保留日志侧字段）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            truncated_bytes: 末段被截掉的字节数。
+            isolated_segments: 被整段隔离的段序号。
+            lost_records: 随隔离段一起不可用的记录数。
+        """
+        key = (topic_id, partition_no)
+        existing = self._entries.get(key)
+        self._entries[key] = RecoverySummary(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            truncated_bytes=existing.truncated_bytes if existing is not None else 0,
+            trailing_records=existing.trailing_records if existing is not None else 0,
+            corrupted_segments=existing.corrupted_segments if existing is not None else (),
+            delay_truncated_bytes=truncated_bytes,
+            delay_isolated_segments=isolated_segments,
+            delay_lost_records=lost_records,
         )
 
     def entries(self) -> tuple[RecoverySummary, ...]:

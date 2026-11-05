@@ -17,7 +17,10 @@
 > 并按其偏序分两处登记：`OffsetFlusher` 早于 `StorageCloser`（先刷日志、后刷位点）、
 > `OffsetFlushLoop` 在启动钩子里先于 `BackgroundLoops`（停机先断上游、再停刷盘）；
 > 02-6 接入存储水位（`StorageWatermark` + `StorageMetrics`，惰性采样、无后台任务），并把
-> `health_check_registry` 切到 msg 自持实现（`msg_storage` / `msg_recovery` / `database` 三项）。
+> `health_check_registry` 切到 msg 自持实现（`msg_storage` / `msg_recovery` / `database` 三项）；
+> 02-7 把延迟区换成**文件实现**（`.delay` 独立序号段 + tombstone 回收 + 启动全量重建），
+> 转投走 `durable=file_store`（append 后显式 fsync 再清），并按关闭偏序登记 `DelayCloser`
+> （`OffsetFlusher` → `DelayCloser` → `StorageCloser`，逆序释放即刷日志 → 刷 `.delay` → 刷位点）。
 > RPC / 其余控制面路由随对应任务追加。
 """
 
@@ -44,11 +47,12 @@ from bms_msg.api.router import api_router, frame_router
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
-from bms_msg.broker.delay import InMemoryDelayStore
+from bms_msg.broker.delay import DelayMetrics
+from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
-from bms_msg.broker.lifecycle import OffsetFlusher, StorageCloser, start_background_tasks
+from bms_msg.broker.lifecycle import DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
@@ -147,6 +151,19 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         offset_store.bind_ceiling(file_store)
         app.state.file_store = file_store
         app.state.message_store = NotifyingMessageStore(file_store, waiter)
+        # 02-7：延迟区换成**文件实现**（`.delay` 独立序号段），端口签名不变；
+        # 去重源与耐久点都指向同一个 `file_store`（不另建实例，避免读到两份段状态）。
+        app.state.delay_metrics = DelayMetrics()
+        delay_store = FileDelayStore(
+            directory=app.state.partition_directory,
+            dedupe=file_store,
+            ledger=file_store.recovery_ledger(),
+            metrics=app.state.delay_metrics,
+        )
+        app.state.delay_store = delay_store
+        # 02-7：延迟区刷盘句柄**必须晚于 `StorageCloser` 释放**（先刷日志、再刷 `.delay`），
+        # 逆序释放要求它**早于** `StorageCloser` 注册。
+        resources.register(DelayCloser(store=delay_store))
         # 02-2：日志关闭钩子。此处注册晚于位点刷盘句柄，逆序释放即「先刷日志、后刷位点」。
         resources.register(StorageCloser(store=file_store))
         app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
@@ -163,12 +180,11 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 01-7：主题元数据快照缓存与保留清理节流窗口（进程级；跨实例一致性归 8B_05）。
         app.state.topic_cache = TopicCache()
         app.state.retention_throttle = RetentionThrottle()
-        delay_store = InMemoryDelayStore()
-        app.state.delay_store = delay_store
         app.state.delay_scheduler = DelayScheduler(
             store=delay_store,
             messages=app.state.message_store,
             wheel=DelayWheel(),
+            durable=file_store,
         )
         app.state.uow_factory = platform_uow_factory(app)
         app.state.replay_runner = ReplayRunner(

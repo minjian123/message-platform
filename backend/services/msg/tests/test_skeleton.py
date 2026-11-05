@@ -12,7 +12,8 @@ from bms_core.core.paths import resolve_backend_root
 from bms_core.core.plugin import default_plugin_registry
 
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
-from bms_msg.broker.delay import InMemoryDelayStore
+from bms_msg.broker.delay import DelayMetrics
+from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
@@ -131,7 +132,9 @@ def test_application_assembles_data_plane_state() -> None:
         assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)
         assert isinstance(app.state.group_store, InMemoryGroupStore)
-        assert isinstance(app.state.delay_store, InMemoryDelayStore)
+        # 02-7 起延迟区换成文件实现（`.delay` 独立序号段），端口与注入点不变。
+        assert isinstance(app.state.delay_store, FileDelayStore)
+        assert isinstance(app.state.delay_metrics, DelayMetrics)
         assert isinstance(app.state.delay_scheduler, DelayScheduler)
         assert app.state.delay_scheduler.wheel is not None
         assert app.state.delay_scheduler.running is False, "推进器不得在装配期启动（由 startup_hooks 启动）"

@@ -30,19 +30,30 @@ from bms_msg.core.config import (
 )
 
 __all__ = [
+    "DELAY_KIND_CLEAR",
+    "DELAY_KIND_PUT",
     "CorruptedRecordError",
+    "DelayStamp",
     "ParsedRecord",
     "RecordFrame",
     "RecordHeader",
     "UnsupportedRecordVersionError",
     "decode_header_blob",
     "decode_record",
+    "encode_record",
     "from_epoch_us",
     "parse_header",
     "read_frame",
     "record_total_bytes",
     "to_epoch_us",
 ]
+
+DELAY_KIND_PUT = "put"
+"""延迟记录类型：待投（`.delay` 段里的正常记录）。"""
+
+DELAY_KIND_CLEAR = "clear"
+"""延迟记录类型：tombstone（转投成功后追加，重建时把该 `log_id` 从索引移除）。"""
+
 
 _PACK = cast("Callable[..., bytes]", msgpack.packb)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 """编码入口（msgpack 无类型存根，按既有 `protocol/codec.py` 同法收窄）。"""
@@ -133,6 +144,38 @@ class CorruptedRecordError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DelayStamp(BaseValueObject):
+    """延迟区的记录级元数据（02-7）：挂在 `RecordHeader.delay` 上，**只出现在 `.delay` 段**。
+
+    **为什么做成子结构而不是平铺进头**：平铺会给每条 `.log` 记录都带上这几个字段（普通消息零收益、
+    每条多十几字节）；做成可选子结构后 `.log` 记录不写该键、体积与 02-1 完全一致，而延迟语义仍聚在
+    一处（将来加 `last_error` 之类不外溢到消息头）。
+
+    **版本不升**（仍 `RECORD_FORMAT_VERSION = 1`）：新增键属「只增不删」，旧解码器按 `.get()` 取缺省
+    即可读；升版本会让**旧二进制拒读新记录**（不可回滚）。`kind` 取未知值时由重建层跳过并计数，
+    不在本层判损坏——段级隔离会把「将来新增的 kind」误判成整段作废。
+    """
+
+    kind: str = DELAY_KIND_PUT
+    """`put`（待投）/ `clear`（tombstone）。"""
+
+    deliver_at_us: int = 0
+    """到期时刻（epoch 微秒，UTC）；`clear` 记录为 0。"""
+
+    delay_level: str = ""
+    """档位名（存名不存毫秒：档位表只增不删，存毫秒会在调档后语义漂移）。"""
+
+    attempts: int = 0
+    """转投失败次数（只计数与告警，**不作为丢弃依据**）。"""
+
+    namespace: str = ""
+    """命名空间展示名（主题停用 / 删除后仍能报出「哪条延迟消息没能投出去」）。"""
+
+    topic: str = ""
+    """主题展示名（同上）。"""
+
+
+@dataclass(frozen=True)
 class RecordHeader(BaseValueObject):
     """一条记录的完整头（写入与读取的唯一字段口径）。"""
 
@@ -183,6 +226,9 @@ class RecordHeader(BaseValueObject):
 
     replicas: tuple[int, ...] = ()
     """副本位点（复制预留，本期恒空）。"""
+
+    delay: DelayStamp | None = None
+    """延迟区元数据（02-7；`.log` 记录为 None，因此不写 `delay` 键、零体积开销）。"""
 
 
 @dataclass(frozen=True)
@@ -271,6 +317,9 @@ def _pack_header(header: RecordHeader) -> bytes:
         "hw": header.hw,
         "replicas": list(header.replicas),
     }
+    if header.delay is not None:
+        # 只在延迟记录上写该键：`.log` 记录的字节与 02-1 完全一致（`delay` 子结构约 90 字节）
+        raw["delay"] = _pack_delay(header.delay)
     packed = _PACK(raw, use_bin_type=True)
     if len(packed) > MAX_RECORD_HEADER_BYTES:
         raise ValueError(f"记录头超过上限 {MAX_RECORD_HEADER_BYTES} 字节（实际 {len(packed)} 字节）")
@@ -322,6 +371,50 @@ def _unpack_header(blob: bytes) -> RecordHeader:
         epoch=int(data.get("epoch", 0)),
         hw=int(data.get("hw", 0)),
         replicas=tuple(int(item) for item in replicas_list),
+        delay=_decode_delay(data.get("delay")),
+    )
+
+
+def _pack_delay(stamp: DelayStamp) -> dict[str, Any]:
+    """把延迟元数据编码为 MessagePack 子 map（键名固定，只增不删）。
+
+    Args:
+        stamp: 延迟元数据。
+
+    Returns:
+        dict[str, Any]: 子 map。
+    """
+    return {
+        "kind": stamp.kind,
+        "deliver_at": stamp.deliver_at_us,
+        "delay_level": stamp.delay_level,
+        "attempts": stamp.attempts,
+        "namespace": stamp.namespace,
+        "topic": stamp.topic,
+    }
+
+
+def _decode_delay(value: object) -> DelayStamp | None:
+    """把 `delay` 子 map 解码成 `DelayStamp`（缺失 / 非 map 即视为普通记录）。
+
+    字段一律取缺省：将来新增字段时旧实现照常解析，不让「多一个键」变成「整条记录损坏」。
+
+    Args:
+        value: JSON / msgpack 解出的值。
+
+    Returns:
+        DelayStamp | None: 延迟元数据；普通记录返回 None。
+    """
+    if not isinstance(value, dict):
+        return None
+    data = cast("dict[str, Any]", value)
+    return DelayStamp(
+        kind=str(data.get("kind", DELAY_KIND_PUT)),
+        deliver_at_us=int(data.get("deliver_at", 0)),
+        delay_level=str(data.get("delay_level", "")),
+        attempts=int(data.get("attempts", 0)),
+        namespace=str(data.get("namespace", "")),
+        topic=str(data.get("topic", "")),
     )
 
 

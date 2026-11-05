@@ -19,15 +19,18 @@ from bms_core.core.logging import get_logger
 from bms_core.core.resources import ResourceManager
 from fastapi import FastAPI
 
+from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
 
 __all__ = [
     "BackgroundLoops",
     "CloseableStore",
+    "DelayCloser",
     "FlushableOffsetStore",
     "OffsetFlushLoop",
     "OffsetFlusher",
+    "RebuildableDelayStore",
     "StorageCloser",
     "start_background_tasks",
 ]
@@ -40,6 +43,22 @@ class CloseableStore(Protocol):
 
     async def aclose(self) -> None:
         """刷盘、写恢复点并释放句柄。"""
+
+
+class RebuildableDelayStore(Protocol):
+    """可从盘上重建的延迟区（`FileDelayStore` 结构上满足；内存实现没有 `rebuild`）。"""
+
+    async def rebuild(self) -> object:
+        """全量扫 `.delay` 重建索引与计数。
+
+        Returns:
+            object: 重建报告（只用于日志字段，故不绑定具体类型）。
+        """
+        ...
+
+    async def aclose(self) -> None:
+        """补写待落盘的计数、刷 `.delay`、关句柄。"""
+        ...
 
 
 class FlushableOffsetStore(Protocol):
@@ -79,6 +98,28 @@ class StorageCloser(BaseAsyncResource):
         """刷盘 + 写恢复点 + 关句柄（`aclose` 幂等，重复调用无副作用）。"""
         await self._store.aclose()
         _LOGGER.info("storage_closed")
+
+
+class DelayCloser(BaseAsyncResource):
+    """延迟区关闭句柄（02-7）：停机时补写待落盘的 `attempts` 并刷 `.delay`。
+
+    **注册顺序即偏序**（与位点同源推导）：清 `.delay` 依赖日志已落盘，所以本资源必须晚于
+    `StorageCloser` 释放，也就是**早于它注册**（`ResourceManager` 逆序释放）。顺序错的表现是
+    「优雅关闭后重启仍丢了几条延迟消息」，而且只在 os / time 档下复现——用例 D18 直接断言注册顺序。
+    """
+
+    def __init__(self, *, store: RebuildableDelayStore) -> None:
+        """初始化。
+
+        Args:
+            store: 延迟区存储（文件实现）。
+        """
+        self._store = store
+
+    async def aclose(self) -> None:
+        """补写 + 刷盘 + 关句柄（`aclose` 幂等，重复调用无副作用）。"""
+        await self._store.aclose()
+        _LOGGER.info("delay_store_closed")
 
 
 class OffsetFlushLoop(BaseAsyncResource):
@@ -151,15 +192,21 @@ async def start_background_tasks(app: FastAPI) -> None:
 
     幂等：`ensure_started()` 内部按 `running` 判定；重复执行不会起第二个循环、不会重复登记。
 
+    **02-7 新增重建**：先把 `.delay` 全量扫一遍装进时间轮，再 `ensure_started()`。顺序不能反——
+    先起推进器会让首轮扫到一个空轮，重启后存量延迟记录要等下一次装填才动；重建放在这里也保证
+    「进程起来就能投」，不必等第一个延迟发布来触发（01-5 留下的那条惰性入口仍然保留、仍然幂等）。
+
     **注册顺序即偏序**（逆序释放）：本函数里先登记 `OffsetFlushLoop`、后登记 `BackgroundLoops`，
     于是停机时先停延迟 / 重放、再停位点刷盘——先断掉会产生新位点的上游，再停刷盘。
 
     Args:
-        app: 应用实例（取 `delay_scheduler` / `replay_runner` / `offset_store` 与资源管理器）。
+        app: 应用实例（取 `delay_store` / `delay_scheduler` / `replay_runner` / `offset_store` 与资源管理器）。
     """
     scheduler = cast("DelayScheduler", app.state.delay_scheduler)
     runner = cast("ReplayRunner", app.state.replay_runner)
     offsets = cast("FlushableOffsetStore", app.state.offset_store)
+    delay_store = cast("DelayStore", app.state.delay_store)
+    await _rebuild_delay_store(delay_store=delay_store, scheduler=scheduler)
     scheduler.ensure_started()
     runner.ensure_started()
     offsets.ensure_started()
@@ -177,4 +224,27 @@ async def start_background_tasks(app: FastAPI) -> None:
         delay_scheduler=scheduler.running,
         replay_runner=runner.running,
         offset_flush_loop=getattr(app.state, "offset_flush_loop", None) is not None,
+    )
+
+
+async def _rebuild_delay_store(*, delay_store: DelayStore, scheduler: DelayScheduler) -> None:
+    """重建延迟区并把记录装进时间轮（内存实现没有 `rebuild`，整段跳过）。
+
+    Args:
+        delay_store: 延迟区存储。
+        scheduler: 到期推进器（提供时间轮实例）。
+    """
+    rebuild = getattr(delay_store, "rebuild", None)
+    if rebuild is None:
+        return
+    report = await rebuild()
+    wheel = scheduler.wheel
+    records = await delay_store.list_all()
+    for record in records:
+        wheel.place(record)
+    _LOGGER.info(
+        "delay_store_rebuilt",
+        records=len(records),
+        expired=getattr(report, "expired", 0),
+        isolated_segments=getattr(report, "isolated_segments", 0),
     )

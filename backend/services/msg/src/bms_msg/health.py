@@ -126,7 +126,11 @@ class MsgStorageCheck(BaseHealthCheck):
 
 
 class MsgRecoveryCheck(BaseHealthCheck):
-    """恢复状态检查项（**非必需**）：已打开分区是否发生过截断 / 非末段损坏。"""
+    """恢复状态检查项（**非必需**）：已恢复过的分区是否发生过截断 / 段损坏。
+
+    数据来源是进程级台账：`.log` 的恢复（02-2，分区懒加载时）与 `.delay` 的重建（02-7，启动钩子）
+    都往同一张台账写，因此「延迟消息有损」与「日志有损」在这里是同一个可见出口，不另立检查项。
+    """
 
     required = False
 
@@ -153,7 +157,7 @@ class MsgRecoveryCheck(BaseHealthCheck):
         Returns:
             str: 检查项说明。
         """
-        return f"恢复状态健康检查（{self.key}；非必需项：数据有损不摘实例）"
+        return f"恢复状态健康检查（{self.key}：日志与延迟区；非必需项，数据有损不摘实例）"
 
     async def check(self) -> HealthCheckResult:
         """执行检查：台账里存在损坏条目即失败。
@@ -162,7 +166,7 @@ class MsgRecoveryCheck(BaseHealthCheck):
             HealthCheckResult: 通过时的结果（`ok=True`；启动期台账为空必然通过）。
 
         Raises:
-            MsgRecoveryDegradedError: 至少一个分区在恢复期发生过截断或段损坏。
+            MsgRecoveryDegradedError: 至少一个分区在恢复期发生过截断或段损坏（含延迟区）。
         """
         degraded = self._ledger().degraded()
         if degraded:

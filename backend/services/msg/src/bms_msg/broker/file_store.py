@@ -148,6 +148,15 @@ class PartitionDirectory:
         self._root = root
         self._locations: dict[int, TopicLocation] = {}
 
+    @property
+    def root(self) -> Path:
+        """数据根（02-7 延迟区重建要遍历 `{root}/data/` 找 `.delay` 段）。
+
+        Returns:
+            Path: 数据根目录。
+        """
+        return self._root
+
     def bind(self, *, tenant_id: int, namespace: str, name: str, topic_id: int) -> bool:
         """登记主题目录身份（幂等；值冲突时保留首次绑定）。
 
@@ -676,6 +685,43 @@ class _PartitionLog:
         for segment in self._segments:
             segment.close()
 
+    def log_ids_since(self, *, since_us: int, candidates: set[str]) -> set[str]:
+        """取本分区日志里「发布时间不早于 `since_us`」且命中候选集的 `log_id`（02-7 恢复期去重）。
+
+        **为什么以候选集为查询集**：`.delay` 侧条数有上限（≤ 延迟区条数），而「自某时刻起的日志条数」
+        可能很大——反过来的集合会让内存与扫描都随日志量增长。
+
+        **为什么锚点取「最后一条时间索引项 ≤ since_us」**：时间索引是稀疏的（每 1s 一条），
+        直接取「第一条 ≥ since_us」的项会跳过它之前那批记录；取它前一条则一定覆盖
+        （代价是多扫一个间隔内的记录）。
+
+        Args:
+            since_us: 发布时间下界（epoch 微秒）。
+            candidates: 关心的 `log_id` 集合。
+
+        Returns:
+            set[str]: 命中的 `log_id`。
+        """
+        found: set[str] = set()
+        if not candidates:
+            return found
+        started = False
+        for segment in self._segments:
+            if not started:
+                if segment.max_published_us() < since_us:
+                    continue
+                anchor = _anchor_at_or_before(segment, since_us)
+                started = True
+            else:
+                anchor = (0, 0)
+            scan = segment.scan_tail(verify_crc=False, anchor=anchor)
+            for _position, _relative, header in scan.entries:
+                if header.log_id in candidates:
+                    found.add(header.log_id)
+            if found >= candidates:
+                break
+        return found
+
     def flush(self) -> None:
         """把当前写段刷盘、重置刷盘窗口并写恢复点（段轮转 / 优雅关闭用）。"""
         if self._segments:
@@ -1030,6 +1076,27 @@ def _first_published_us(segment: SegmentFile) -> int:
     segment.ensure_indexes()
     entries = segment.time_index_entries()
     return entries[0][0] if entries else 0
+
+
+def _anchor_at_or_before(segment: SegmentFile, since_us: int) -> tuple[int, int]:
+    """取段内「最后一条时间索引项 ≤ `since_us`」的扫描锚点。
+
+    Args:
+        segment: 段。
+        since_us: 发布时间下界（epoch 微秒）。
+
+    Returns:
+        tuple[int, int]: `(字节偏移, 相对 offset)`；没有更早的索引项时从段首扫。
+    """
+    chosen: tuple[int, int] | None = None
+    for timestamp, relative in segment.time_index_entries():
+        if timestamp > since_us:
+            break
+        chosen = (timestamp, relative)
+    if chosen is None:
+        return 0, 0
+    position, relative = segment.position_of(offset=segment.base_offset + chosen[1])
+    return position, relative
 
 
 def _to_message(parsed: ParsedRecord, *, offset: int) -> StoredMessage:
@@ -1472,6 +1539,46 @@ class FileMessageStore(MessageStore):
                 current=item.current,
                 leo=ceiling,
             )
+
+    async def log_ids_since(self, *, topic_id: int, partition_no: int, since_us: int, candidates: set[str]) -> set[str]:
+        """取该分区日志里发布时间不早于 `since_us` 且命中候选集的 `log_id`（02-7 恢复期去重）。
+
+        **非端口方法**：`MessageStore` 端口只服务数据面读写，去重是恢复期的内部动作；
+        延迟区通过 `DelayDedupeSource` 协议结构性地依赖本方法（端口签名不变）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            since_us: 发布时间下界（epoch 微秒）。
+            candidates: 关心的 `log_id` 集合。
+
+        Returns:
+            set[str]: 命中的 `log_id`。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+        """
+        self._require_location(topic_id)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        return partition.log_ids_since(since_us=since_us, candidates=candidates)
+
+    async def sync(self, *, topic_id: int, partition_no: int) -> None:
+        """把该分区日志刷到磁盘并写恢复点（02-7 转投的耐久点，与 fsync 档位无关）。
+
+        **为什么必须显式刷**：转投的偏序是「日志已落盘 → 才清 `.delay`」。`os` 档下 `append` 只进
+        页缓存，此时清掉延迟记录、崩溃就会同时丢掉两份（既无日志也无延迟记录）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+        """
+        self._require_location(topic_id)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        async with partition.lock:
+            partition.flush()
 
     async def corrupted_segments(self, *, topic_id: int, partition_no: int) -> tuple[int, ...]:
         """取该分区非末段对账失败的段 base（排障 / 指标出口；只读）。

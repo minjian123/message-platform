@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.logging import get_logger
@@ -45,6 +46,7 @@ __all__ = [
     "DELAY_LAYER_SECOND",
     "DelayScheduler",
     "DelayWheel",
+    "DurabilityPoint",
 ]
 
 _LOGGER = get_logger("bms_msg.broker.scheduler")
@@ -175,14 +177,33 @@ class DelayWheel:
         self._last_scan = self._now()
 
 
+class DurabilityPoint(Protocol):
+    """转投的耐久点端口（02-7）：把某分区日志显式刷到磁盘。
+
+    只要求一个方法，实现方是 `FileMessageStore.sync()`（结构满足）；缺省 `None` 表示不判
+    （内存实现与用例路径）。
+    """
+
+    async def sync(self, *, topic_id: int, partition_no: int) -> None:
+        """刷该分区日志并写恢复点。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+        """
+        ...
+
+
 class DelayScheduler:
-    """到期推进器（进程级单例）：取候选 → 转投 `append` → 成功才清延迟记录。
+    """到期推进器（进程级单例）：取候选 → 转投 `append` → **显式刷盘** → 成功才清延迟记录。
 
-    **偏序**（§6.1）：先写日志、后清记录。反向会把崩溃变成丢消息；本序最坏结果是重复转投
-    （B 段按 `log_id` 去重），而延迟是「出问题时的兜底」，丢一条等于让业务的重试彻底失联。
+    **偏序**（详细设计 §6.1 / 02-7 §8.1）：先写日志、**等它落盘**、后清记录。反向会把崩溃变成丢消息；
+    只 append 不刷盘同样不行——`os` 档下页缓存里的一行还不是「已写入」，此时清掉 `.delay` 崩溃即两头皆空。
+    本序最坏结果是重复转投（恢复期按 `log_id` 去重），而延迟是「出问题时的兜底」，丢一条等于让业务的
+    重试彻底失联。
 
-    **生命周期**（§6.5）：惰性启动——首个延迟发布触发 `ensure_started()`，无延迟消息即不起任务；
-    基座 `service_lifespan` 未提供产品启动钩子，显式注册归 8B_01。
+    **生命周期**（01-5 §6.5 / 02-7 §8.2）：启动钩子里先重建再 `ensure_started()`；首个延迟发布的
+    惰性调用保留（幂等）。
     """
 
     def __init__(
@@ -196,6 +217,7 @@ class DelayScheduler:
         batch_limit: int = DELAY_BATCH_LIMIT,
         failure_log_window_ms: int = DELAY_FAILURE_LOG_WINDOW_MS,
         clock: Callable[[], float] | None = None,
+        durable: DurabilityPoint | None = None,
     ) -> None:
         """初始化（不启动任务：由 `ensure_started()` 决定）。
 
@@ -208,6 +230,7 @@ class DelayScheduler:
             batch_limit: 单轮转投上限（条）。
             failure_log_window_ms: 同分区同原因的失败日志抑制窗口（毫秒；缺省一个 tick）。
             clock: 单调毫秒时钟（抑制窗口判据；用例注入以确定性控制窗口边界）。
+            durable: 日志耐久点（02-7；None 表示不显式刷盘，用于内存实现与用例）。
         """
         self._store = store
         self._messages = messages
@@ -217,6 +240,7 @@ class DelayScheduler:
         self._batch_limit = batch_limit
         self._failure_log_window_ms = failure_log_window_ms
         self._clock = clock if clock is not None else _monotonic_ms
+        self._durable = durable
         self._failure_logged: dict[tuple[int, int, str], float] = {}
         self._task: asyncio.Task[None] | None = None
 
@@ -286,7 +310,7 @@ class DelayScheduler:
             await asyncio.sleep(self._interval_ms / MS_PER_SECOND)
 
     async def _transfer(self, record: DelayRecord) -> bool:
-        """转投一条到期消息（先 `append`、成功才删延迟记录；失败保留并计次）。
+        """转投一条到期消息（先 `append` 并**落盘**、成功才删延迟记录；失败保留并计次）。
 
         Args:
             record: 到期记录。
@@ -309,6 +333,10 @@ class DelayScheduler:
                 compression=record.compression,
                 uncompressed_len=record.uncompressed_len,
             )
+            if self._durable is not None:
+                # 02-7：偏序的「已写入」= 已 fsync，不是「已 append」。刷盘失败与写失败同等对待
+                # （记录保留、下一轮重试），否则 os 档下崩溃会两头皆空。
+                await self._durable.sync(topic_id=record.topic_id, partition_no=record.partition_no)
             await self._store.remove(log_id=record.log_id)
         except Exception as exc:  # 主题停用 / 租户停用 / 存储故障：保留记录，下一轮重试
             return await self._defer(record, exc)
