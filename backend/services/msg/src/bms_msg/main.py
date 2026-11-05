@@ -27,6 +27,7 @@ from bms_core.services.table_registry import TableRecord
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
+from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.router import api_router, frame_router
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
@@ -120,6 +121,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             uow_factory=app.state.uow_factory,
             auditor=ReplayAuditor(sink=sink),
         )
+        register_frame_handlers(app)
 
     def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
         """服务侧插件登记：租户守卫 `tenant_guard:msg` 与产品码覆盖 `error_mapper:msg`。

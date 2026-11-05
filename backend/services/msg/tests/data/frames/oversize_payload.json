@@ -1,0 +1,7 @@
+{
+  "name": "oversize_payload",
+  "note": "payload 声明 1 MiB + 1：350006",
+  "kind": "hex",
+  "hex": "4d530100010000000000020010000180",
+  "expect": "350006"
+}

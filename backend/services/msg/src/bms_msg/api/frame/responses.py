@@ -1,0 +1,212 @@
+"""帧结果装配：成功结果帧与错误帧（任务 03-2）。
+
+两条原则：
+
+1. **码 → 层 → 重试**：错误帧不只给码，还给 `layer` 与 `retryable`——客户端据此决定「断开 / 改参 /
+   重试 / 放弃」，不必维护一张隐式的码表。判定只在 `classify()` 一处，新增码必须在此登记。
+2. **头体分离落到响应上**：`consume` 的元数据进 header、消息体按序进 payload，`length` 是切分表，
+   客户端按切片取即可（不做整包重排，也不 base64）。
+"""
+
+from __future__ import annotations
+
+import base64
+from datetime import datetime
+from typing import Any
+
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+
+from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
+from bms_msg.schemas.message import AckResult, ConsumeResult, PublishResult
+
+__all__ = ["FRAME_MEDIA_TYPE", "classify", "error_frame", "result_frame"]
+
+_RETRYABLE_BUSINESS = frozenset({350005, 350015})
+"""业务层里「等一会儿再试有意义」的码：限流 / 背压、延迟区已满。"""
+
+_RETRYABLE_SYSTEM = frozenset({10006, 10007})
+"""系统层里可退避重试的码：数据库繁忙、下游服务不可用。"""
+
+_BUSINESS_CODES = frozenset(
+    {
+        350001,
+        350002,
+        350003,
+        350005,
+        350006,
+        350007,
+        350008,
+        350009,
+        350010,
+        350011,
+        350012,
+        350013,
+        350014,
+        350015,
+        350016,
+        350017,
+    }
+)
+"""business 层的产品码（其余产品码兜底进 system，宁可少重试也不放大故障）。"""
+
+
+def classify(code: int) -> tuple[str, bool]:
+    """按码判定错误层与可重试性（错误帧的 `layer` / `retryable` 唯一出处）。
+
+    Args:
+        code: 产品码 / 平台码。
+
+    Returns:
+        tuple[str, bool]: `(layer, retryable)`。
+    """
+    if code == 350018 or code == 10001:  # 帧格式非法（协议层） / 契约层参数非法
+        return "protocol", False
+    if code == 350019 or code == 350006:  # 版本不支持 / 帧或消息体超限：连接不可继续按本协议使用
+        return "transport", False
+    if code in _BUSINESS_CODES:
+        return "business", code in _RETRYABLE_BUSINESS
+    return "system", code in _RETRYABLE_SYSTEM
+
+
+def _result_header(request_id: str | None) -> ConcurrentStableDict[str, Any]:
+    """响应帧的公共头（`request_id` 回显 + 版本可见）。
+
+    Args:
+        request_id: 请求标识（可空：解码前失败时无此值）。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 头（含公共字段）。
+    """
+    header: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    header.set("request_id", request_id)
+    header.set("protocol_version", PROTOCOL_VERSION)
+    return header
+
+
+def _iso(value: datetime | None) -> str | None:
+    """时间转 ISO 文本（帧头里不放 datetime，跨语言解析成本高）。
+
+    Args:
+        value: 时间或空。
+
+    Returns:
+        str | None: ISO 文本；空值原样返回 None。
+    """
+    return value.isoformat() if value is not None else None
+
+
+def error_frame(
+    *,
+    code: int,
+    message: str,
+    request_id: str | None = None,
+    detail: object | None = None,
+    retry_after_ms: int | None = None,
+) -> bytes:
+    """编码错误帧（`type=error` + response 位，payload 为空）。
+
+    Args:
+        code: 产品码 / 平台码。
+        message: 可读提示。
+        request_id: 请求标识（可空）。
+        detail: 随附数据（对应 JSON 的 `data`）。
+        retry_after_ms: 建议重试间隔（毫秒）。
+
+    Returns:
+        bytes: 完整错误帧。
+    """
+    layer, retryable = classify(code)
+    header = _result_header(request_id)
+    header.set("code", code)
+    header.set("message", message)
+    header.set("retryable", retryable)
+    header.set("layer", layer)
+    header.set("detail", detail)
+    header.set("retry_after_ms", retry_after_ms)
+    return encode_frame(
+        frame_type=int(FrameType.ERROR),
+        flags=FrameFlags.RESPONSE,
+        header=header,
+    )
+
+
+def result_frame(*, frame_type: int, request_id: str | None, result: object) -> bytes:
+    """编码成功结果帧（同 type + response 位）。
+
+    Args:
+        frame_type: 请求帧类型（响应沿用）。
+        request_id: 请求标识。
+        result: 业务结果模型（`PublishResult` / `ConsumeResult` / `AckResult`）。
+
+    Returns:
+        bytes: 完整结果帧。
+
+    Raises:
+        TypeError: 结果类型与帧类型不匹配（装配错误，不属协议错误）。
+    """
+    header = _result_header(request_id)
+    payload = b""
+    if frame_type == int(FrameType.PUBLISH) and isinstance(result, PublishResult):
+        header.set("message_id", result.message_id)
+        header.set("log_id", result.log_id)
+        header.set("topic", result.topic)
+        header.set("partition", result.partition)
+        header.set("offset", result.offset)
+        header.set("deliver_at", _iso(result.deliver_at))
+    elif frame_type == int(FrameType.CONSUME) and isinstance(result, ConsumeResult):
+        header.set("count", len(result.messages))
+        header.set("messages", _consume_meta(result))
+        payload = _consume_payload(result)
+    elif frame_type == int(FrameType.ACK) and isinstance(result, AckResult):
+        header.set("committed_offset", result.committed_offset)
+    else:
+        raise TypeError(f"帧类型 {frame_type} 与结果类型 {type(result).__name__} 不匹配")
+    return encode_frame(
+        frame_type=frame_type,
+        flags=FrameFlags.RESPONSE,
+        header=header,
+        payload=payload,
+    )
+
+
+def _consume_meta(result: ConsumeResult) -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
+    """构造 consume 响应头的消息元数据（含切分用的 `length`）。
+
+    Args:
+        result: 拉取结果。
+
+    Returns:
+        ConcurrentStableList[ConcurrentStableDict[str, Any]]: 逐条元数据。
+    """
+    metas: ConcurrentStableList[ConcurrentStableDict[str, Any]] = ConcurrentStableList()
+    for item in result.messages:
+        body = base64.b64decode(item.payload)
+        meta: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+        meta.set("message_id", item.message_id)
+        meta.set("topic", item.topic)
+        meta.set("partition", item.partition)
+        meta.set("offset", item.offset)
+        meta.set("key", item.key)
+        meta.set("trace_id", item.trace_id)
+        meta.set("delivery_count", item.delivery_count)
+        meta.set("published_at", _iso(item.published_at))
+        meta.set("headers", dict(item.headers.items()))
+        meta.set("length", len(body))
+        metas.add(meta)
+    return metas
+
+
+def _consume_payload(result: ConsumeResult) -> bytes:
+    """把各消息体按序拼接为 payload（顺序与 header.messages 一一对应）。
+
+    Args:
+        result: 拉取结果。
+
+    Returns:
+        bytes: 拼接后的消息体。
+    """
+    return b"".join(base64.b64decode(item.payload) for item in result.messages)
+
+
+FRAME_MEDIA_TYPE = FRAME_CONTENT_TYPE
+"""响应帧媒体类型（与请求一致，供路由层引用同一常量）。"""

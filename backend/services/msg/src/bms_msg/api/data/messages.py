@@ -30,6 +30,7 @@ from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, params
+from pydantic import BaseModel
 
 from bms_msg.api.deps import (
     DataPlaneTenantDep,
@@ -52,6 +53,7 @@ from bms_msg.broker.retention import RetentionService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.errors import MsgErrorCode
+from bms_msg.protocol.frame import FrameType
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
     AckRequest,
@@ -72,6 +74,7 @@ __all__ = [
     "PUBLISH_ERROR_CODES",
     "PUBLISH_PERMISSION",
     "DataPlaneRoute",
+    "FrameGateFactory",
     "apply_retention",
     "ensure_member",
     "message_item",
@@ -98,9 +101,10 @@ PUBLISH_ERROR_CODES = ConcurrentStableList(
         int(MsgErrorCode.TENANT_SUSPENDED),
         int(MsgErrorCode.TENANT_NOT_FOUND),
         int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
+        int(MsgErrorCode.PAYLOAD_TOO_LARGE),
     ]
 )
-"""发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`）。"""
+"""发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`，03-2 追加超限 `350006`）。"""
 
 CONSUME_ERROR_CODES = ConcurrentStableList(
     [
@@ -424,12 +428,46 @@ class DataPlaneRoute:
     error_codes: ConcurrentStableList[int]
     """`x-error-codes` 声明（跨仓错误码反向对账）。"""
 
+    frame_type: int
+    """帧形态的帧类型编号（03-2；与路径一一对应，闸门据此判类型匹配）。"""
+
+    request_model: type[BaseModel]
+    """请求模型（帧形态的必填键与字段白名单直接取自它，不另维护一份字段表）。"""
+
+
+FrameGateFactory = Callable[[DataPlaneRoute], params.Depends]
+"""帧闸门依赖工厂（03-2：`api/frame/gate.py::build_frame_gate` 适配成 `Depends`）。
+
+放在本模块声明、由根路径聚合注入：数据面模块**不反向依赖**帧入口模块（否则形成循环导入）。
+"""
+
 
 DATA_PLANE_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
     [
-        DataPlaneRoute(path="/publish", endpoint=publish, dependencies=[_PUBLISH], error_codes=PUBLISH_ERROR_CODES),
-        DataPlaneRoute(path="/consume", endpoint=consume, dependencies=[_CONSUME], error_codes=CONSUME_ERROR_CODES),
-        DataPlaneRoute(path="/ack", endpoint=ack, dependencies=[_CONSUME], error_codes=ACK_ERROR_CODES),
+        DataPlaneRoute(
+            path="/publish",
+            endpoint=publish,
+            dependencies=[_PUBLISH],
+            error_codes=PUBLISH_ERROR_CODES,
+            frame_type=int(FrameType.PUBLISH),
+            request_model=PublishRequest,
+        ),
+        DataPlaneRoute(
+            path="/consume",
+            endpoint=consume,
+            dependencies=[_CONSUME],
+            error_codes=CONSUME_ERROR_CODES,
+            frame_type=int(FrameType.CONSUME),
+            request_model=ConsumeRequest,
+        ),
+        DataPlaneRoute(
+            path="/ack",
+            endpoint=ack,
+            dependencies=[_CONSUME],
+            error_codes=ACK_ERROR_CODES,
+            frame_type=int(FrameType.ACK),
+            request_model=AckRequest,
+        ),
     ]
 )
 """数据面端点规格（**唯一出处**：路径 / 方法 / 权限 / 错误码只在这里写一次）。
@@ -438,21 +476,26 @@ DATA_PLANE_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
 """
 
 
-def mount_data_plane(target: BaseRouter) -> None:
+def mount_data_plane(target: BaseRouter, *, frame_gate: FrameGateFactory | None = None) -> None:
     """把数据面三端点挂到给定聚合路由（`/api/v1/msg/*` 与根路径 `/msg/*` 共用）。
 
     Args:
         target: 目标聚合路由（其 `prefix` 决定最终路径）。
+        frame_gate: 帧闸门依赖工厂（只有根路径 `/msg/*` 传；`/api/v1` 保持纯 JSON）。
+            传 None 时行为与 03-1 完全一致。
     """
     for spec in DATA_PLANE_ROUTES:
+        dependencies: list[params.Depends] = list(spec.dependencies)
+        if frame_gate is not None:
+            dependencies.append(frame_gate(spec))
         target.add_api_route(
             spec.path,
             spec.endpoint,
             methods=["POST"],
-            dependencies=list(spec.dependencies),
+            dependencies=dependencies,
             openapi_extra={"x-error-codes": list(spec.error_codes)},
         )
 
 
 mount_data_plane(router)
-"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{publish,consume,ack}`）。"""
+"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{publish,consume,ack}`；纯 JSON，无帧闸门）。"""

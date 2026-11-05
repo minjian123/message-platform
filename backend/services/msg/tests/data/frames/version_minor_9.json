@@ -1,0 +1,15 @@
+{
+  "name": "version_minor_9",
+  "note": "次版本 9：兼容接受",
+  "kind": "hex",
+  "hex": "4d5301090100000000000f0000000181aa726571756573745f6964a2723178",
+  "expect": "ok",
+  "assert": {
+    "type": 1,
+    "version": [
+      1,
+      9
+    ],
+    "payload_utf8": "x"
+  }
+}

@@ -13,6 +13,9 @@
   （`backend/config.toml` 的 `[app].package_prefix = "bms"`），故不像 mdm 那样按清单推导包名——
   服务键仍取自 `MSG_SERVICE_RECORDS`，避免「脚本里再写一份服务名」。
 - **确定性**：同代码 → 同文本（缩进 2 / 键排序 / 非 ASCII 直出），供 Git 比对与零漂移校验。
+- **帧协议契约（03-2）**：导出时在顶层注入 `x-msg-frame`（来自 `bms_msg.protocol.contract`）——帧是同一
+  路径上的另一形态，不进运行时 `/openapi.json`（否则生成式客户端会按 JSON 解析帧端点），但必须进
+  「对外承诺的全量契约」。注入在导出层完成，因此快照与实现仍只有一处事实源。
 - **为什么需要它**：01-1 起契约快照一直靠人工重导，改端点忘了重导时，跨仓 `check_modules` 的
   「声明的错误码 / 能力 ↔ 契约路径」对账会漏。本脚本接进预检后，漂移在本地提交前就红。
 """
@@ -129,10 +132,15 @@ def build_openapi(service_key: str) -> ConcurrentStableDict[str, Any]:
     if factory_cls is None:
         raise RuntimeError(f"服务缺少 ApplicationFactory：{package}.main")
     try:
-        app = cast("Any", factory_cls()).create(None)
+        app = factory_cls().create(None)
     except Exception as exc:  # CLI 边界：把任何构建失败翻成可读错误
         raise RuntimeError(f"服务应用构建失败：{service_key}（{exc!r}）") from exc
-    return ConcurrentStableDict(cast("dict[str, Any]", app.openapi()))
+    openapi = ConcurrentStableDict(app.openapi())
+    # 惰性导入：本模块在 sys.path 就绪前被 import（`python -m ops.*` 只自动带 backend/）
+    from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
+
+    openapi.set(FRAME_CONTRACT_KEY, frame_contract())
+    return openapi
 
 
 def _validate(record: ModuleRecord, openapi: ConcurrentStableDict[str, Any]) -> ConcurrentStableList[str]:
@@ -196,7 +204,7 @@ def check(root: Path) -> int:
     records = {cast("str", record.service_key): record for record in enabled_local_records()}
     expected = {contract_file_name(service_key) for service_key in records}
     directory = contracts_dir(root)
-    actual = {path.name for path in directory.glob("*.json")} if directory.is_dir() else set()
+    actual: set[str] = {path.name for path in directory.glob("*.json")} if directory.is_dir() else set[str]()
     problems: ConcurrentStableList[str] = ConcurrentStableList(
         f"缺快照文件：{name}" for name in sorted(expected - actual)
     )

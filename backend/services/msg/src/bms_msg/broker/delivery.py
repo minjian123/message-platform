@@ -36,7 +36,13 @@ from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
 from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
 from bms_msg.core.message_id import new_message_id
-from bms_msg.errors import MsgDeliveryExhaustedError, MsgMessageNotFoundError, MsgOffsetInvalidError
+from bms_msg.errors import (
+    MsgDeliveryExhaustedError,
+    MsgMessageNotFoundError,
+    MsgOffsetInvalidError,
+    MsgPayloadTooLargeError,
+)
+from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 
@@ -484,6 +490,9 @@ class DeliveryService:
 def decode_payload(payload: str) -> bytes:
     """把 base64 载荷解码为业务字节（形态属请求契约，非法即 `10001`）。
 
+    解码后判 1 MiB 上限（`350006`）：普通发布与延迟发布共用本函数，因此**两条分支同一判据**；
+    帧路径的消息体也经此进入（先 base64 再由本函数还原），上限只在这一点判。
+
     Args:
         payload: base64 字符串（空串表示空消息体）。
 
@@ -492,8 +501,12 @@ def decode_payload(payload: str) -> bytes:
 
     Raises:
         ParamError: 非法 base64（10001）。
+        MsgPayloadTooLargeError: 超过 1 MiB 上限（350006 / 413）。
     """
     try:
-        return base64.b64decode(payload, validate=True)
+        decoded = base64.b64decode(payload, validate=True)
     except ValueError as exc:
         raise ParamError(f"消息体须为合法的 base64 编码：{exc}") from exc
+    if len(decoded) > MAX_FRAME_PAYLOAD_BYTES:
+        raise MsgPayloadTooLargeError(f"消息体超过上限 {MAX_FRAME_PAYLOAD_BYTES} 字节（实际 {len(decoded)} 字节）")
+    return decoded

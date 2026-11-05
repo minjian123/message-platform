@@ -1,0 +1,7 @@
+{
+  "name": "boundary_max_header",
+  "note": "header 恰 64 KiB（含未知填充键）应可解",
+  "kind": "limit",
+  "header_bytes": 65536,
+  "payload_bytes": 0
+}

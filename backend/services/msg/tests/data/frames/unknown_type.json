@@ -1,0 +1,14 @@
+{
+  "name": "unknown_type",
+  "note": "未知类型 200（码层可解；闸门按 need_response 决定是否回错）",
+  "kind": "hex",
+  "hex": "4d530100c800040000000f0000000081aa726571756573745f6964a27231",
+  "expect": "ok",
+  "assert": {
+    "type": 200,
+    "header": {
+      "request_id": "r1"
+    },
+    "payload_len": 0
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "invalid_short",
+  "note": "不足 15B：不是一帧",
+  "kind": "hex",
+  "hex": "4d530100",
+  "expect": "350018"
+}

@@ -31,12 +31,13 @@ from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Query, Request, params
 from fastapi.responses import StreamingResponse
 
 from bms_msg.api.data.messages import (
     CONSUME_ERROR_CODES,
     CONSUME_PERMISSION,
+    DataPlaneRoute,
     apply_retention,
     delivery_service,
     ensure_member,
@@ -54,6 +55,7 @@ from bms_msg.api.deps import (
     StreamTuningDep,
     UowFactoryDep,
 )
+from bms_msg.api.frame.gate import build_frame_gate
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import GroupStore
@@ -69,6 +71,7 @@ from bms_msg.broker.transport import (
 )
 from bms_msg.core.config import ACKS_AT_LEAST_ONCE
 from bms_msg.errors import MsgError
+from bms_msg.protocol.frame import PROTOCOL_VERSION
 from bms_msg.schemas.message import ConsumeRequest, MessageItem
 from bms_msg.schemas.transport import ConnectionInfo, SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
@@ -82,8 +85,21 @@ router = BaseRouter(
 )
 """根路径数据面聚合路由（挂载前缀为空 → 最终为 `/msg/*`）。"""
 
-mount_data_plane(router)
-"""复用数据面三端点（与 `/api/v1/msg/*` 同一规格）。"""
+
+def _frame_gate(spec: DataPlaneRoute) -> params.Depends:
+    """把帧闸门适配成路由依赖（只有根路径 `/msg/*` 挂；`/api/v1` 保持纯 JSON）。
+
+    Args:
+        spec: 数据面端点规格（提供帧类型与请求模型）。
+
+    Returns:
+        params.Depends: 该端点的帧闸门依赖。
+    """
+    return Depends(build_frame_gate(frame_type=spec.frame_type, request_model=spec.request_model))
+
+
+mount_data_plane(router, frame_gate=_frame_gate)
+"""复用数据面三端点（与 `/api/v1/msg/*` 同一规格），并挂 `application/x-msg-frame` 帧形态。"""
 
 _CONSUME = Depends(require_permission(CONSUME_PERMISSION))
 """长驻流权限依赖（与拉取 / 确认同码：消费即持有 `msg:consume`）。"""
@@ -328,6 +344,8 @@ async def connection(request: Request) -> ApiResponse[ConnectionInfo]:
 
     只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。
     用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。
+    版本可见（03-2）：`supported_protocol_version` 恒有值（服务端当前帧版本），`protocol_version` 为本
+    请求所用帧版本——本端点是 JSON 请求，故恒为 null；帧形态的版本在响应帧 header 与日志里。
     **不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，
     装载校验只对它给软提示，不影响通过）。
     """
@@ -339,5 +357,7 @@ async def connection(request: Request) -> ApiResponse[ConnectionInfo]:
             is_tls=meta.is_tls,
             client_host=meta.client_host,
             client_port=meta.client_port,
+            protocol_version=None,
+            supported_protocol_version=PROTOCOL_VERSION,
         )
     )

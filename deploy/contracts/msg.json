@@ -477,9 +477,27 @@
             "title": "Is Tls",
             "type": "boolean"
           },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本请求所用帧协议版本（帧形态非空；JSON 请求为 null）",
+            "title": "Protocol Version"
+          },
           "scheme": {
             "description": "承载协议（http / https）",
             "title": "Scheme",
+            "type": "string"
+          },
+          "supported_protocol_version": {
+            "default": "1.0",
+            "description": "服务端当前帧协议版本（恒有值）",
+            "title": "Supported Protocol Version",
             "type": "string"
           }
         },
@@ -3908,7 +3926,8 @@
           350010,
           350011,
           350012,
-          350015
+          350015,
+          350006
         ]
       }
     },
@@ -4039,7 +4058,7 @@
     },
     "/msg/connection": {
       "get": {
-        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址）。\n\n只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。\n**不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，\n装载校验只对它给软提示，不影响通过）。",
+        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址）。\n\n只读自报，不含租户数据，故不加权限码；05 域认证落地后由 03-4 决定是否收紧。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、03-4 连接视图的底座。\n版本可见（03-2）：`supported_protocol_version` 恒有值（服务端当前帧版本），`protocol_version` 为本\n请求所用帧版本——本端点是 JSON 请求，故恒为 null；帧形态的版本在响应帧 header 与日志里。\n**不声明 `x-error-codes`**：本端点不触达任何业务判定，没有产品码可声明（与探针端点同性质，\n装载校验只对它给软提示，不影响通过）。",
         "operationId": "connection_msg_connection_get",
         "responses": {
           "200": {
@@ -4306,7 +4325,8 @@
           350010,
           350011,
           350012,
-          350015
+          350015,
+          350006
         ]
       }
     },
@@ -4510,6 +4530,186 @@
         },
         "summary": "Readyz"
       }
+    }
+  },
+  "x-msg-frame": {
+    "byte_order": "big-endian",
+    "content_type": "application/x-msg-frame",
+    "endpoint_fields": {
+      "ack": {
+        "optional": [],
+        "payload": "必须为空",
+        "required": [
+          "namespace",
+          "topic",
+          "group",
+          "consumer_id",
+          "partition",
+          "offset"
+        ]
+      },
+      "consume": {
+        "optional": [
+          "max_messages",
+          "acks"
+        ],
+        "payload": "必须为空",
+        "required": [
+          "namespace",
+          "topic",
+          "group",
+          "consumer_id",
+          "partition"
+        ]
+      },
+      "publish": {
+        "optional": [
+          "key",
+          "headers",
+          "trace_id",
+          "delay_level"
+        ],
+        "payload": "消息体原始字节",
+        "required": [
+          "namespace",
+          "topic"
+        ]
+      }
+    },
+    "envelope": {
+      "optional": [
+        "protocol_version",
+        "tenant",
+        "trace_id",
+        "content_type"
+      ],
+      "required": [
+        "request_id"
+      ]
+    },
+    "error_frame": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "layer",
+        "request_id",
+        "detail",
+        "retry_after_ms"
+      ],
+      "http_status": "帧可解析失败一律 200（错误在帧内）；magic 不符 / 长度越界为 400 + JSON",
+      "layers": [
+        "transport",
+        "protocol",
+        "business",
+        "system"
+      ]
+    },
+    "fields": [
+      {
+        "name": "magic",
+        "note": "固定 4D53（ASCII MS）",
+        "type": "bytes",
+        "width": 2
+      },
+      {
+        "name": "version",
+        "note": "主版本不等即 350019",
+        "type": "uint8 major + uint8 minor",
+        "width": 2
+      },
+      {
+        "name": "type",
+        "note": "分组区间见 frame_types/ reserved_types",
+        "type": "uint8",
+        "width": 1
+      },
+      {
+        "name": "flags",
+        "note": "未定义位忽略",
+        "type": "uint16",
+        "width": 2
+      },
+      {
+        "name": "header_len",
+        "note": "header 字节数",
+        "type": "uint32",
+        "width": 4
+      },
+      {
+        "name": "payload_len",
+        "note": "payload 字节数",
+        "type": "uint32",
+        "width": 4
+      },
+      {
+        "name": "header",
+        "note": "长度 = header_len",
+        "type": "messagepack map<str, any>",
+        "width": 0
+      },
+      {
+        "name": "payload",
+        "note": "长度 = payload_len，broker 不解析",
+        "type": "bytes",
+        "width": 0
+      }
+    ],
+    "flags": {
+      "0": "compressed",
+      "1": "end_of_stream",
+      "2": "need_response",
+      "3": "batch",
+      "4": "response"
+    },
+    "frame_header_bytes": 15,
+    "frame_types": {
+      "1": "publish",
+      "16": "error",
+      "17": "heartbeat",
+      "2": "consume",
+      "3": "ack",
+      "4": "subscribe"
+    },
+    "known_unsupported": {
+      "heartbeat": "心跳端点与超时判定归 03-4（当前回 350018 并提示后续任务开放）",
+      "subscribe": "帧式推送归 03-5（当前回 350018 并提示后续任务开放）"
+    },
+    "limits": {
+      "header_bytes": 65536,
+      "payload_bytes": 1048576
+    },
+    "magic": "4D53",
+    "protocol_version": "1.0",
+    "reserved_types": [
+      {
+        "name": "data-plane-reserved",
+        "range": "5-15"
+      },
+      {
+        "name": "control-plane-reserved",
+        "range": "18-31"
+      },
+      {
+        "name": "admin",
+        "range": "32-47"
+      },
+      {
+        "name": "rpc",
+        "range": "48-63"
+      },
+      {
+        "name": "reserved",
+        "range": "64-255"
+      }
+    ],
+    "version_rule": {
+      "accept_major": [
+        1
+      ],
+      "current_minor": 0,
+      "incompatible": "350019 + 结束该 stream，由客户端断开连接（GOAWAY 归 03-4）",
+      "minor": "any（只增可选字段，未知字段忽略）"
     }
   }
 }

@@ -29,6 +29,7 @@ from bms_msg.api.admin import topics
 from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
 from bms_msg.api.frame import routes as frame_routes
+from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
 from bms_msg.broker.delivery import DeliveryState
@@ -122,6 +123,7 @@ def build_frame_app(
     app.state.uow_factory = cast("UowFactory", _uow)
     app.add_middleware(TenantMiddleware)
     register_exception_handlers(app)
+    register_frame_handlers(app)
     routers = [topics.router, messages.router, data_groups.router]
     app.include_router(mount_service_routers(ConcurrentStableList(routers)))
     if mount_frame:

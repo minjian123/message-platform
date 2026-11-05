@@ -4,9 +4,10 @@
   主题不存在 `350001`、位点非法 `350002`、消息不存在 `350003`、重投超限 `350007`、
   主题已存在 `350008`、分区数 / 分区号非法 `350009`、命名空间非法 `350010`、
   租户已停用 `350011`、租户不存在 `350012`、组不存在 `350013`、成员非法 `350014`、
-  延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`
+  延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
+  帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
-  `350004` / `350005` / `350006` 由架构 05 §5 预留为超时 / 背压 / 消息过大，本任务不得占用）。
+  `350004` / `350005` 由架构 05 §5 预留为超时 / 背压；`350006` 由 03-2 按「上限 1 MiB」启用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
@@ -32,18 +33,21 @@ __all__ = [
     "MsgError",
     "MsgErrorCode",
     "MsgErrorMapper",
+    "MsgFrameInvalidError",
     "MsgGroupNotFoundError",
     "MsgMemberInvalidError",
     "MsgMessageNotFoundError",
     "MsgNamespaceInvalidError",
     "MsgOffsetInvalidError",
     "MsgPartitionCountInvalidError",
+    "MsgPayloadTooLargeError",
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
     "MsgTenantNotFoundError",
     "MsgTenantSuspendedError",
     "MsgTopicExistsError",
     "MsgTopicNotFoundError",
+    "MsgVersionUnsupportedError",
     "register_msg_error_mapper",
 ]
 
@@ -97,6 +101,15 @@ class MsgErrorCode(IntEnum):
 
     REPLAY_TASK_INVALID_STATE = 350017
     """重放任务状态不允许该操作（终态不可逆；恢复只接受已暂停的任务）。"""
+
+    PAYLOAD_TOO_LARGE = 350006
+    """帧或消息体超过上限（1 MiB）：JSON 路径按 413 拒绝，帧路径在解码期以 error 帧（layer=transport）返回。"""
+
+    FRAME_INVALID = 350018
+    """帧格式非法（magic 之外的任何结构问题：长度不足 / 多余字节 / header 非 Map / 缺必填头 / 类型不匹配）。"""
+
+    VERSION_UNSUPPORTED = 350019
+    """协议主版本不支持（服务端只认同一主版本；返回后结束该 stream，由客户端断开连接）。"""
 
 
 class MsgError(BizError):
@@ -214,6 +227,27 @@ class MsgReplayTaskInvalidStateError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.REPLAY_TASK_INVALID_STATE
     http_status_: ClassVar[int] = 409
+
+
+class MsgPayloadTooLargeError(MsgError):
+    """帧或消息体超限（350006 / 413）：上限 1 MiB（header 另限 64 KiB；口径见 03-2 详细设计 §4.6）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.PAYLOAD_TOO_LARGE
+    http_status_: ClassVar[int] = 413
+
+
+class MsgFrameInvalidError(MsgError):
+    """帧格式非法（350018 / 400）：结构、必填头、类型与路径匹配度等协议层判定。"""
+
+    code_: ClassVar[int] = MsgErrorCode.FRAME_INVALID
+    http_status_: ClassVar[int] = 400
+
+
+class MsgVersionUnsupportedError(MsgError):
+    """协议主版本不支持（350019 / 400）：返回后结束该 stream，由客户端断开连接（GOAWAY 归 03-4）。"""
+
+    code_: ClassVar[int] = MsgErrorCode.VERSION_UNSUPPORTED
+    http_status_: ClassVar[int] = 400
 
 
 class MsgErrorMapper(BaseErrorMapper):

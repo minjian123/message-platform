@@ -1,0 +1,7 @@
+{
+  "name": "oversize_header",
+  "note": "header 声明 64 KiB + 1：350006（先判长度不分配）",
+  "kind": "hex",
+  "hex": "4d5301000100000001000100000000",
+  "expect": "350006"
+}

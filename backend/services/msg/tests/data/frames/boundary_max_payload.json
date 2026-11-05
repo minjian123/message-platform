@@ -1,0 +1,7 @@
+{
+  "name": "boundary_max_payload",
+  "note": "payload 恰 1 MiB 应可解",
+  "kind": "limit",
+  "header_bytes": 64,
+  "payload_bytes": 1048576
+}

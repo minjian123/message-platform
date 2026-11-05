@@ -1,0 +1,15 @@
+{
+  "name": "unknown_header_key",
+  "note": "未知 header 键：忽略不报错",
+  "kind": "hex",
+  "hex": "4d530100010000000000240000000182aa726571756573745f6964a27231ac6675747572655f6669656c64a76b6565702d6d6578",
+  "expect": "ok",
+  "assert": {
+    "type": 1,
+    "header": {
+      "request_id": "r1",
+      "future_field": "keep-me"
+    },
+    "payload_utf8": "x"
+  }
+}

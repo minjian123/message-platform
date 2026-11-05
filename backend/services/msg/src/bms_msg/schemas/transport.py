@@ -40,6 +40,10 @@ class ConnectionInfo(BaseSchema):
     is_tls: bool = Field(description="是否 TLS 承载（TLS 下由 ALPN 协商 h2）")
     client_host: str = Field(description="客户端地址（无地址场景为空串）")
     client_port: int = Field(description="客户端端口（无地址场景为 0）")
+    protocol_version: str | None = Field(
+        default=None, description="本请求所用帧协议版本（帧形态非空；JSON 请求为 null）"
+    )
+    supported_protocol_version: str = Field(default="1.0", description="服务端当前帧协议版本（恒有值）")
 
 
 class SubscribeQuery(BaseSchema):
