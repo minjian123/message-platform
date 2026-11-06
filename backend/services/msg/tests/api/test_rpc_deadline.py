@@ -19,7 +19,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.deadline import Deadline
 from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame
-from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceSelector
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -272,7 +272,7 @@ async def _call_down(frames_app: FastAPI, service: str, method: str, call: RpcCa
         MsgRpcDeadlineExceededError: 下游返回 `350004`（超时逐跳回传，不当成失败）。
     """
     async with RpcClient(
-        StaticInstanceProvider([BASE_URL]),
+        StaticInstanceSelector([BASE_URL]),
         tenant="demo",
         deadline_ms=call.deadline_ms,
         transport=AsgiRpcTransport(frames_app),

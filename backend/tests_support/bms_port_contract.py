@@ -23,7 +23,7 @@ from bms_core.events.topic import topic_for
 from bms_core.msgclient.adapter.event_publisher import MsgEventPublisher
 from bms_core.msgclient.adapter.service_client import MsgServiceClient
 from bms_core.msgclient.frame import FrameFlags, FrameType, encode_frame
-from bms_core.msgclient.rpc import RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcClient, StaticInstanceSelector
 from bms_core.msgclient.transport import RpcHttpResponse, RpcTransportTimeoutError
 from bms_core.msgclient.values import RpcCall, RpcReply
 from bms_core.ratelimit.null import NullRateLimiter
@@ -245,7 +245,7 @@ def msg_client(transport: object, *, tenant: str | None = "demo") -> MsgServiceC
     """
     return MsgServiceClient(
         rpc_client=RpcClient(
-            StaticInstanceProvider([BASE_URL]),
+            StaticInstanceSelector([BASE_URL]),
             transport=transport,  # pyright: ignore[reportArgumentType]
         ),
         rate_limiter=NullRateLimiter(),

@@ -12,7 +12,7 @@ from bms_core.core.exceptions import ParamError
 from bms_core.msgclient.deadline import Deadline
 from bms_core.msgclient.frame import decode_frame
 from bms_core.msgclient.retry import RetryPolicy
-from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceSelector
 from structlog.testing import capture_logs
 
 from bms_msg.api.rpc.idempotency import idempotency_context
@@ -51,7 +51,7 @@ def _client(transport: object, **kwargs: object) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=transport, **kwargs)  # type: ignore[arg-type]
+    return RpcClient(StaticInstanceSelector([BASE_URL]), transport=transport, **kwargs)  # type: ignore[arg-type]
 
 
 def _context(store: InProcessIdempotencyStore, key: str) -> IdempotencyContext:

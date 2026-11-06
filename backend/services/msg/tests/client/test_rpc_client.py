@@ -7,7 +7,7 @@
    非 200（429 / 413 / 其它）→ 对应码；响应不是合法帧 → protocol 层；
 3. **超时与连接失败**：`RpcTransportTimeoutError` → `RpcCallTimeoutError`、
    `RpcTransportClosedError` / `RpcTransportProtocolError` → 对应层的 `RpcCallError`；
-4. **实例来源**：`StaticInstanceProvider` 轮询、空列表拒建；客户端可作上下文管理器释放传输。
+4. **实例来源**：`StaticInstanceSelector` 轮询、空列表拒建；客户端可作上下文管理器释放传输。
 
 注入面（04-7-1 换血）：真 app 走 `AsgiRpcTransport`（进程内），错误分支走 `ScriptedRpcTransport`；
 两者与生产 `H2Transport` 同属一份 `RpcTransport` 契约，`RpcClient` 里没有「测试才走的分支」。
@@ -29,7 +29,7 @@ from bms_core.msgclient.rpc import (
     RpcCallError,
     RpcCallTimeoutError,
     RpcClient,
-    StaticInstanceProvider,
+    StaticInstanceSelector,
 )
 from bms_core.msgclient.transport import (
     RpcHttpRequest,
@@ -62,7 +62,7 @@ async def client(msg_app: FastAPI) -> AsyncIterator[RpcClient]:
         RpcClient: 客户端。
     """
     async with RpcClient(
-        StaticInstanceProvider([BASE_URL]),
+        StaticInstanceSelector([BASE_URL]),
         tenant="demo",
         transport=AsgiRpcTransport(msg_app),
     ) as opened:
@@ -78,7 +78,7 @@ def _client_with(transport: ScriptedRpcTransport) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=transport)
+    return RpcClient(StaticInstanceSelector([BASE_URL]), transport=transport)
 
 
 def _response(status: int = 200, body: bytes = b"") -> RpcHttpResponse:
@@ -537,7 +537,7 @@ async def test_tenant_header_is_forwarded() -> None:
         return _response(200, _result_frame(b"ok"))
 
     client = RpcClient(
-        StaticInstanceProvider([BASE_URL]),
+        StaticInstanceSelector([BASE_URL]),
         tenant="demo",
         transport=ScriptedRpcTransport(handler),
     )
@@ -549,19 +549,25 @@ async def test_tenant_header_is_forwarded() -> None:
     assert ("X-Tenant-ID", "demo") in seen[0].headers
 
 
-async def test_static_provider_round_robins() -> None:
-    """静态实例来源按插入序轮询（确定性，易断言）。"""
-    provider = StaticInstanceProvider(["http://a/", "http://b"])
+def test_static_selector_round_robins() -> None:
+    """静态实例选择器按插入序轮询（确定性，易断言）。"""
+    selector = StaticInstanceSelector(["http://a/", "http://b"])
 
-    assert provider.next() == "http://a"
-    assert provider.next() == "http://b"
-    assert provider.next() == "http://a"
+    first = selector.acquire("demo")
+    assert first.origin == "http://a"
+    selector.release(first)
+    second = selector.acquire("demo")
+    assert second.origin == "http://b"
+    selector.release(second)
+    third = selector.acquire("demo")
+    assert third.origin == "http://a"
+    selector.release(third)
 
 
-def test_static_provider_requires_endpoint() -> None:
+def test_static_selector_requires_endpoint() -> None:
     """空列表拒建（否则第一次调用才炸，定位成本高）。"""
     with pytest.raises(ValueError, match="至少需要一个实例地址"):
-        StaticInstanceProvider([])
+        StaticInstanceSelector([])
 
 
 async def test_client_can_be_reused_and_closed() -> None:

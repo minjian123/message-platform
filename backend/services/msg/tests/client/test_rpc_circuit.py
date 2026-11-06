@@ -11,7 +11,7 @@ from bms_core.circuit.base import CircuitState
 from bms_core.circuit.null import NullCircuitBreaker
 from bms_core.msgclient.circuit import InProcessCircuitBreaker, rpc_dependency
 from bms_core.msgclient.retry import CircuitPolicy, RetryPolicy
-from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceSelector
 from structlog.testing import capture_logs
 
 from tests_support.rpc_retry import FakeClock, FixedJitter, error_response, result_response, scripted
@@ -48,7 +48,7 @@ def _client(transport: object, **kwargs: object) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=transport, **kwargs)  # type: ignore[arg-type]
+    return RpcClient(StaticInstanceSelector([BASE_URL]), transport=transport, **kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

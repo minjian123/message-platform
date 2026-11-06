@@ -17,7 +17,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
 from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame, encode_frame
-from bms_core.msgclient.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceSelector
 from bms_core.msgclient.transport import (
     RpcHttpRequest,
     RpcHttpResponse,
@@ -45,7 +45,7 @@ def _client(handler: object, **kwargs: object) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=ScriptedRpcTransport(handler), **kwargs)  # type: ignore[arg-type]
+    return RpcClient(StaticInstanceSelector([BASE_URL]), transport=ScriptedRpcTransport(handler), **kwargs)  # type: ignore[arg-type]
 
 
 def _response(status: int = 200, body: bytes = b"") -> RpcHttpResponse:
@@ -144,7 +144,7 @@ async def test_constructor_budget_is_default(captured: ConcurrentStableDict[str,
 def test_timeout_ms_removed_from_constructor() -> None:
     """`timeout_ms` 已删：构造期传入即 `TypeError`（不留两套预算语义）。"""
     with pytest.raises(TypeError):
-        RpcClient(StaticInstanceProvider([BASE_URL]), timeout_ms=1000)  # type: ignore[call-arg]
+        RpcClient(StaticInstanceSelector([BASE_URL]), timeout_ms=1000)  # type: ignore[call-arg]
 
 
 async def test_timeout_ms_removed_from_call() -> None:

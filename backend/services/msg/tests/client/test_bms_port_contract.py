@@ -31,7 +31,7 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import BizError, ServiceUnavailableError
 from bms_core.events.base import EventEnvelope, EventPublishError
 from bms_core.events.topic import encode_event, event_attributes
-from bms_core.msgclient.rpc import RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcClient, StaticInstanceSelector
 from bms_core.msgclient.transport import RpcHttpRequest, RpcHttpResponse
 from bms_core.servicecall.base import ServiceRequest
 from fastapi import FastAPI
@@ -101,7 +101,7 @@ async def test_same_idempotency_key_executes_once(msg_app: FastAPI) -> None:
     write_method = "modules.create"
     handler = _register_target(msg_app, method=write_method, idempotent=False)
     async with RpcClient(
-        StaticInstanceProvider([BASE_URL]),
+        StaticInstanceSelector([BASE_URL]),
         tenant="demo",
         transport=AsgiRpcTransport(msg_app),
     ) as rpc:

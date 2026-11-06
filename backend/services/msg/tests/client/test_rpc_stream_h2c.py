@@ -28,7 +28,7 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.config import Settings
 from bms_core.core.run import serve_service
 from bms_core.models.base import Base
-from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceSelector
 from bms_core.msgclient.transport import H2Transport
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -148,7 +148,7 @@ def _client(port: int, transport: H2Transport) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([f"http://127.0.0.1:{port}"]), tenant="demo", transport=transport)
+    return RpcClient(StaticInstanceSelector([f"http://127.0.0.1:{port}"]), tenant="demo", transport=transport)
 
 
 async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:

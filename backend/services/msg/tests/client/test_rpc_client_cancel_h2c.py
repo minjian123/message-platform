@@ -30,7 +30,7 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.config import Settings
 from bms_core.core.run import serve_service
 from bms_core.models.base import Base
-from bms_core.msgclient.rpc import RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcClient, StaticInstanceSelector
 from bms_core.msgclient.transport import H2Transport
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -168,7 +168,7 @@ async def test_cancel_interrupts_server_handler(app: FastAPI) -> None:
     async for port in _serve(app):
         transport = H2Transport()
         client = RpcClient(
-            StaticInstanceProvider([f"http://127.0.0.1:{port}"]),
+            StaticInstanceSelector([f"http://127.0.0.1:{port}"]),
             tenant="demo",
             transport=transport,
         )

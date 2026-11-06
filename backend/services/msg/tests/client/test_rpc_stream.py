@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame, encode_frame
-from bms_core.msgclient.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceSelector
 from bms_core.msgclient.stream import RpcStream
 from bms_core.msgclient.transport import (
     RpcHttpRequest,
@@ -116,7 +116,7 @@ def _client(transport: ScriptedRpcTransport | AsgiRpcTransport) -> RpcClient:
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider(["http://msg:8000"]), tenant="demo", transport=transport)
+    return RpcClient(StaticInstanceSelector(["http://msg:8000"]), tenant="demo", transport=transport)
 
 
 def _scripted(*chunks: bytes, **kwargs: Any) -> ScriptedRpcTransport:
