@@ -15,9 +15,12 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from bms_core.catalog.base import CATALOG_SNAPSHOT_PATH
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import BizError, ParamError, RateLimitError, ServiceUnavailableError
+from bms_core.events.topic import topic_for
+from bms_core.msgclient.adapter.event_publisher import MsgEventPublisher
 from bms_core.msgclient.adapter.service_client import MsgServiceClient
 from bms_core.msgclient.frame import FrameFlags, FrameType, encode_frame
 from bms_core.msgclient.rpc import RpcClient, StaticInstanceProvider
@@ -25,12 +28,16 @@ from bms_core.msgclient.transport import RpcHttpResponse, RpcTransportTimeoutErr
 from bms_core.msgclient.values import RpcCall, RpcReply
 from bms_core.ratelimit.null import NullRateLimiter
 from bms_core.servicecall.base import ServiceCallPolicy, ServiceRequest
+from fastapi import FastAPI
 
 from tests_support.rpc_transport import ScriptedRpcTransport
 
 __all__ = [
     "BASE_URL",
     "ERROR_CASES",
+    "EVENT_NAMESPACE",
+    "EVENT_TOPIC",
+    "EVENT_TYPE",
     "SNAPSHOT_PATH",
     "TARGET_METHOD",
     "TARGET_SERVICE",
@@ -39,6 +46,7 @@ __all__ = [
     "cancel_transport",
     "error_response",
     "msg_client",
+    "msg_event_publisher",
     "snapshot_body",
     "snapshot_request",
     "timeout_transport",
@@ -46,6 +54,15 @@ __all__ = [
 
 BASE_URL = "http://msg"
 """实例基址（ASGI 直连，主机名仅占位）。"""
+
+EVENT_NAMESPACE = "msg"
+"""事件发布命名空间（msg 侧按已启用 `module_key` 校验；用例应用只启用该模块）。"""
+
+EVENT_TYPE = "demo.order.created"
+"""事件类型（`topic_for` 据此派生 `bms-demo-order`）。"""
+
+EVENT_TOPIC = topic_for(EVENT_TYPE)
+"""事件主题（与 bms 发布器同一派生函数，避免两处写字面量）。"""
 
 TARGET_SERVICE = "platform"
 """真实调用点的目标服务（`fetch_catalog_snapshot` 的缺省）。"""
@@ -234,4 +251,25 @@ def msg_client(transport: object, *, tenant: str | None = "demo") -> MsgServiceC
         rate_limiter=NullRateLimiter(),
         caller=TARGET_SERVICE,
         tenant=tenant,
+    )
+
+
+def msg_event_publisher(
+    app: FastAPI, *, namespace: str = EVENT_NAMESPACE, tenant: str | None = None
+) -> MsgEventPublisher:
+    """构造走真实 msg 应用的事件发布器（ASGI 直连，不启网络）。
+
+    Args:
+        app: 真实 msg 应用（`build_frame_app` 产物，含 `/api/v1` 数据面）。
+        namespace: 事件命名空间（缺省为用例应用已启用的模块键）。
+        tenant: 装配期缺省租户编码（事件自带租户时优先）。
+
+    Returns:
+        MsgEventPublisher: bms 侧发布器（生产实现原样复用）。
+    """
+    return MsgEventPublisher(
+        base_url=BASE_URL,
+        namespace=namespace,
+        tenant=tenant,
+        transport=httpx.ASGITransport(app=app),
     )
