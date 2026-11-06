@@ -18,6 +18,10 @@
 
 **取消不进错误帧**：取消意味着 stream 已经没了，没有「回给谁」的问题；只落日志 + 让异常继续上抛，
 资源由请求作用域与 handler 自己的 `finally` 收口（04-2 详细设计 §5.4）。
+
+**前置判定与流式共用**（04-3-1）：上面 1~4 步收在 `_preflight()`，一元走 `prepare_handler()`（查一元表）、
+流式走 `prepare_stream_handler()`（查流式表），两者判定顺序与错误码完全一致——流式不会出现
+「JSON 路径有、帧路径没有」的静默分叉，也不会因为复制一份判定而漂移。
 """
 
 from __future__ import annotations
@@ -42,9 +46,9 @@ from bms_msg.errors import (
 from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.rpc.deadline import OUTCOME_UNKNOWN, Deadline
 from bms_msg.rpc.naming import ensure_rpc_name
-from bms_msg.rpc.registry import RpcCall, RpcHandler, RpcRegistry, RpcReply
+from bms_msg.rpc.registry import RpcCall, RpcHandler, RpcRegistry, RpcReply, RpcStreamHandler
 
-__all__ = ["invoke_rpc"]
+__all__ = ["DisconnectProbe", "exhausted_error", "invoke_rpc", "prepare_handler", "prepare_stream_handler"]
 
 _LOGGER = get_logger("bms_msg.rpc")
 
@@ -92,8 +96,8 @@ def _deadline_detail(deadline: Deadline) -> dict[str, object]:
     }
 
 
-def _exhausted_error(deadline: Deadline) -> MsgRpcDeadlineExceededError:
-    """构造预算耗尽异常（预检与硬兜底共用一处，文案与随附数据不分叉）。
+def exhausted_error(deadline: Deadline) -> MsgRpcDeadlineExceededError:
+    """构造预算耗尽异常（预检 / 硬兜底 / 流式三处共用，文案与随附数据不分叉）。
 
     Args:
         deadline: 预算视图。
@@ -105,6 +109,128 @@ def _exhausted_error(deadline: Deadline) -> MsgRpcDeadlineExceededError:
         f"RPC 预算耗尽（deadline_ms={deadline.budget_ms}，已用 {deadline.spent_ms()}）",
         data=_deadline_detail(deadline),
     )
+
+
+def _preflight(
+    *,
+    limiter: RateLimiter,
+    tenant: str,
+    service: str,
+    method: str,
+    payload: bytes,
+    deadline: Deadline,
+) -> None:
+    """调用前的四项判定（形态 → 预算 → 限流 → 参数上限），一元与流式共用一份。
+
+    **顺序不能调**（04-1 §7.2 + 04-2 §5.2）：预算预检在限流之前（耗尽的不消耗配额，否则刷
+    `deadline_ms=0` 能打穿 `(tenant, service)` 桶）；参数上限在路由之前（超大参数是客户端问题，
+    不该因方法名顺手就先查表）。
+
+    Args:
+        limiter: 限流器（RPC 维度独立于生产两级）。
+        tenant: 租户编码。
+        service: 服务标识。
+        method: 方法名。
+        payload: 调用参数原始字节。
+        deadline: 本跳预算视图。
+
+    Raises:
+        ParamError: 路径参数形态非法（`10001`）。
+        MsgRpcDeadlineExceededError: 预算已耗尽（`350004`）。
+        MsgRateLimitedError: RPC 速率超配额（`350005`）。
+        MsgPayloadTooLargeError: 参数超过 1 MiB（`350006`）。
+    """
+    ensure_rpc_name(service, method)
+    if deadline.is_exhausted():
+        raise exhausted_error(deadline)
+    verdict = limiter.check_rpc(tenant=tenant, service=service)
+    if not verdict.allowed:
+        raise MsgRateLimitedError(f"RPC 调用速率超出配额（{service}）", retry_after_ms=verdict.retry_after_ms)
+    if len(payload) > MAX_FRAME_PAYLOAD_BYTES:
+        raise MsgPayloadTooLargeError(f"RPC 参数超过上限 {MAX_FRAME_PAYLOAD_BYTES} 字节（实际 {len(payload)}）")
+
+
+def prepare_handler(
+    *,
+    registry: RpcRegistry,
+    limiter: RateLimiter,
+    tenant: str,
+    service: str,
+    method: str,
+    payload: bytes,
+    deadline: Deadline,
+) -> RpcHandler:
+    """一元调用的前置判定 + 路由（`invoke_rpc` 与流式端点共用同一份判定）。
+
+    拆出来的理由（04-3-1）：流式端点要的是**同一套**判定（形态 / 预算 / 限流 / 参数上限）但另一张
+    表的方法（流式表）；复制一份必然漂移，故判定收在 `_preflight()`，两个入口各自只做「查哪张表」。
+
+    Args:
+        registry: 方法注册表。
+        limiter: 限流器。
+        tenant: 租户编码。
+        service: 服务标识。
+        method: 方法名。
+        payload: 调用参数原始字节。
+        deadline: 本跳预算视图。
+
+    Returns:
+        RpcHandler: 已登记的一元处理器。
+
+    Raises:
+        ParamError: 路径参数形态非法（`10001`）。
+        MsgRpcDeadlineExceededError: 预算已耗尽（`350004`）。
+        MsgRateLimitedError: RPC 速率超配额（`350005`）。
+        MsgPayloadTooLargeError: 参数超过 1 MiB（`350006`）。
+        MsgRpcMethodNotFoundError: 方法未注册（`350023`）。
+    """
+    _preflight(limiter=limiter, tenant=tenant, service=service, method=method, payload=payload, deadline=deadline)
+    return _handler_of(registry, service, method)
+
+
+def prepare_stream_handler(
+    *,
+    registry: RpcRegistry,
+    limiter: RateLimiter,
+    tenant: str,
+    service: str,
+    method: str,
+    payload: bytes,
+    deadline: Deadline,
+) -> RpcStreamHandler:
+    """流式调用的前置判定 + 路由（判定与一元同一份，只换查表对象）。
+
+    「一元方法当流式调」与「完全未注册」返回同一个码（`350023`）：对调用方而言都是「这个端点上没有
+    可流式调用的方法」，区分开只会多一个客户端要处理的码，而排障信息已由 `data.service/method` 给出。
+
+    Args:
+        registry: 方法注册表。
+        limiter: 限流器。
+        tenant: 租户编码。
+        service: 服务标识。
+        method: 方法名。
+        payload: 调用参数原始字节。
+        deadline: 整条流的预算视图。
+
+    Returns:
+        RpcStreamHandler: 已登记的流式处理器。
+
+    Raises:
+        ParamError: 路径参数形态非法（`10001`）。
+        MsgRpcDeadlineExceededError: 预算已耗尽（`350004`）。
+        MsgRateLimitedError: RPC 速率超配额（`350005`）。
+        MsgPayloadTooLargeError: 参数超过 1 MiB（`350006`）。
+        MsgRpcMethodNotFoundError: 未注册或不是流式方法（`350023`）。
+    """
+    _preflight(limiter=limiter, tenant=tenant, service=service, method=method, payload=payload, deadline=deadline)
+    handler = registry.resolve_stream(service, method)
+    if handler is None:
+        raise MsgRpcMethodNotFoundError(
+            f"RPC 流式方法未注册：{service}.{method}",
+            # 普通 dict：自定义 Mapping 走 pydantic 序列化会 500（02-7 在 350015 上验过）。
+            data={"service": service, "method": method},
+        )
+    return handler
 
 
 def _log_outcome(
@@ -198,7 +324,7 @@ async def _run_handler(
         if not timeout.expired():
             raise
         await _cancel_and_wait(task)
-        raise _exhausted_error(deadline) from exc
+        raise exhausted_error(deadline) from exc
     finally:
         if not task.done():
             task.cancel()
@@ -249,15 +375,15 @@ async def invoke_rpc(
         asyncio.CancelledError: 请求被取消（原样向上，不写响应）。
     """
     try:
-        ensure_rpc_name(service, method)
-        if deadline.is_exhausted():
-            raise _exhausted_error(deadline)
-        verdict = limiter.check_rpc(tenant=tenant, service=service)
-        if not verdict.allowed:
-            raise MsgRateLimitedError(f"RPC 调用速率超出配额（{service}）", retry_after_ms=verdict.retry_after_ms)
-        if len(payload) > MAX_FRAME_PAYLOAD_BYTES:
-            raise MsgPayloadTooLargeError(f"RPC 参数超过上限 {MAX_FRAME_PAYLOAD_BYTES} 字节（实际 {len(payload)}）")
-        handler = _handler_of(registry, service, method)
+        handler = prepare_handler(
+            registry=registry,
+            limiter=limiter,
+            tenant=tenant,
+            service=service,
+            method=method,
+            payload=payload,
+            deadline=deadline,
+        )
         reply = await _run_handler(
             handler,
             RpcCall(

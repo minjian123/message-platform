@@ -13,6 +13,7 @@ import pytest
 from bms_core.core.plugin import default_plugin_registry
 from bms_core.core.serialization import normalize_collections
 
+from bms_msg.core.config import RPC_STREAM_IDLE_MS
 from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
 from bms_msg.protocol.frame import MAX_FRAME_HEADER_BYTES, MAX_FRAME_PAYLOAD_BYTES, PROTOCOL_VERSION
 from bms_msg.rpc.builtin import default_rpc_registry
@@ -93,6 +94,33 @@ def test_export_contains_rpc_contract(tmp_path: Path) -> None:
     assert [{"service": service, "method": method} for service, method in default_rpc_registry().methods()] == [
         {"service": item["service"], "method": item["method"]} for item in rpc["methods"]
     ]
+
+
+def test_export_contains_rpc_stream_contract(tmp_path: Path) -> None:
+    """`x-msg-frame.rpc.stream` 段（04-3-1）：端点 / 结束位 / 序号 / 空闲阈值 / 三个错误码 / 流式方法清单。
+
+    Args:
+        tmp_path: 临时仓库根。
+    """
+    assert contract_snapshot.export(tmp_path) == 0
+    payload = json.loads(contract_snapshot.snapshot_path(tmp_path, "msg").read_text(encoding="utf-8"))
+
+    stream = payload[FRAME_CONTRACT_KEY]["rpc"]["stream"]
+    assert stream["endpoint"] == "POST /rpc/{service}/{method}/stream"
+    assert stream["request"] == "同一元请求帧（type=48，不置 response / end_of_stream）"
+    assert stream["response"] == "同 type + flags.response；末帧另置 flags.end_of_stream"
+    assert stream["sequence"] == "header.seq，0 起逐帧 +1（缺帧 / 乱序由客户端判协议错）"
+    assert stream["idle_ms"] == RPC_STREAM_IDLE_MS
+    assert stream["errors"] == {"method_not_found": 350023, "deadline_exceeded": 350004, "stream_idle": 350024}
+    assert stream["methods"] == [
+        {"service": "demo", "method": "ticker"},
+        {"service": "demo", "method": "idle"},
+    ]
+    # 与代码里的流式注册表同源（不是手写清单），且一元清单不含流式方法。
+    assert [{"service": service, "method": method} for service, method in default_rpc_registry().stream_methods()] == [
+        {"service": item["service"], "method": item["method"]} for item in stream["methods"]
+    ]
+    assert [item["method"] for item in payload[FRAME_CONTRACT_KEY]["rpc"]["methods"]] == ["echo", "length"]
 
 
 def test_injection_only_happens_at_export() -> None:

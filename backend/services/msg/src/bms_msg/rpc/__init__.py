@@ -4,9 +4,9 @@
 `Deadline` / `validate_budget_ms` / `ensure_not_cancelled` 与服务端分发无关，客户端（`bms_msg.client`）
 与 04-5 的 bms 适配都可以安全 import。
 
-`invoke_rpc`（依赖 `broker.backpressure.RateLimiter`）与 `default_rpc_registry`（内置处理器）**不在此
-转出**，由服务端自行从 `bms_msg.rpc.service` / `bms_msg.rpc.builtin` 直取——否则调用方进程会在
-import 阶段就把 broker 侧拉进来。
+`invoke_rpc`（依赖 `broker.backpressure.RateLimiter`）、`open_rpc_stream`（同样依赖 broker 的背压
+参数）与 `default_rpc_registry`（内置处理器）**不在此转出**，由服务端自行从 `bms_msg.rpc.service` /
+`bms_msg.rpc.stream` / `bms_msg.rpc.builtin` 直取——否则调用方进程会在 import 阶段就把 broker 侧拉进来。
 """
 
 from bms_msg.rpc.cancel import ensure_not_cancelled
@@ -18,6 +18,7 @@ from bms_msg.rpc.registry import (
     RpcRegistrationError,
     RpcRegistry,
     RpcReply,
+    RpcStreamHandler,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "RpcRegistrationError",
     "RpcRegistry",
     "RpcReply",
+    "RpcStreamHandler",
     "ensure_not_cancelled",
     "ensure_rpc_name",
     "validate_budget_ms",

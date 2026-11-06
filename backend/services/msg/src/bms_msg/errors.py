@@ -7,11 +7,11 @@
   延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
-  RPC 方法未注册 `350023`
+  RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
-  `350022` 由 02-6 按「存储水位拒绝」启用）。
+  `350022` 由 02-6 按「存储水位拒绝」启用；`350024` 由 04-3-1 按「RPC 流空闲超时」启用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
@@ -56,6 +56,7 @@ __all__ = [
     "MsgReplayTaskNotFoundError",
     "MsgRpcDeadlineExceededError",
     "MsgRpcMethodNotFoundError",
+    "MsgRpcStreamIdleError",
     "MsgStorageWatermarkExceededError",
     "MsgStreamLimitExceededError",
     "MsgTenantNotFoundError",
@@ -161,6 +162,15 @@ class MsgErrorCode(IntEnum):
     （改参无用、business 层、`retryable=false`），客户端应去查对端能力而不是重试。
     `350004` 是预算耗尽（04-2 已启用），与本码同为 business / 不重试但语义不同：那个是「没时间」，
     这个是「没这个方法」。本码不复用也不占用 `350004`。
+    """
+
+    RPC_STREAM_IDLE = 350024
+    """RPC 流空闲超时（`RPC_STREAM_IDLE_MS` 内无帧写出）：business / `retryable=false` / 504。
+
+    与相邻码分工（04-3-1）：`350004` 是整条流的预算耗尽（「没时间了」，`outcome=unknown`）、
+    `350006` 是单帧结果超过 1 MiB、`350023` 是方法未注册；本码只表示「这条流半天没吐数据」——
+    服务端据此收尾并释放名额，客户端应重开流而不是原地重试。
+    与连接心跳（03-4 的 10s / 30s）**不是一件事**：那个判连接死活，本码判流有没有进展。
     """
 
 
@@ -371,6 +381,17 @@ class MsgRpcDeadlineExceededError(MsgError):
     """
 
     code_: ClassVar[int] = MsgErrorCode.RPC_DEADLINE_EXCEEDED
+    http_status_: ClassVar[int] = 504
+
+
+class MsgRpcStreamIdleError(MsgError):
+    """RPC 流空闲超时（350024 / 504）：连续 `RPC_STREAM_IDLE_MS` 无帧写出，服务端主动收尾。
+
+    `data` 两个字段：`idle_ms`（阈值）与 `idle_elapsed_ms`（实际空闲时长）——排障第一问是
+    「究竟卡了多久、阈值多少」，这两值比一句「超时了」有用。流内以 ERROR 帧收尾，随后 EOF。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.RPC_STREAM_IDLE
     http_status_: ClassVar[int] = 504
 
 

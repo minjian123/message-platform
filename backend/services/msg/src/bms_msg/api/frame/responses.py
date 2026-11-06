@@ -61,9 +61,14 @@ _BUSINESS_CODES = frozenset(
         350020,
         350021,
         350023,
+        350024,
     }
 )
-"""business 层的产品码（其余产品码兜底进 system，宁可少重试也不放大故障）。"""
+"""business 层的产品码（其余产品码兜底进 system，宁可少重试也不放大故障）。
+
+`350024`（RPC 流空闲超时）由 04-3-1 加入：它是「这条流没进展」的业务判定，不是传输故障，
+故同时不在 `_RETRYABLE_BUSINESS` 里（重开流才有意义，原地重试只会再空等一个阈值）。
+"""
 
 
 def classify(code: int) -> tuple[str, bool]:

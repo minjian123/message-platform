@@ -5442,6 +5442,118 @@
           350023
         ]
       }
+    },
+    "/rpc/{service}/{method}/stream": {
+      "post": {
+        "description": "服务端流式调用（一次请求、多次响应；只接 `application/x-msg-frame`）。\n\n需要 `msg:rpc` 权限（与一元同一权限码）。**只接帧形态**：JSON 请求按契约层拒绝（`10001`，\n基座统一错误响应），因为流式的响应是连续帧、没有 JSON 形态。\n\n建流前的失败（帧不可解析 / 类型不符 / 置了响应位或结束位 / 缺 `request_id` / 压缩 / 租户不一致 /\n路径参数形态 / 预算已耗尽 / 配额 / 参数超限 / 方法未注册或非流式 / 长驻流名额满）一律返回\n**HTTP 200 + 单帧 `error`**；对应码为 `350018` / `350019` / `350012` / `10001` / `350004` /\n`350005` / `350006` / `350023` / `350021`。推流中的错误以 `ERROR` 帧收尾（`BizError` 原码、\n`350004` 预算、`350006` 单帧超限、`350024` 空闲超时）；正常结束由末帧 `end_of_stream` 表达；\n客户端取消不写收尾帧。\n\n**路径参数不在契约里声明 `pattern` / `minLength`**（2026-11-06 确认）：FastAPI 的参数校验发生在\n端点之前，非法形态会先被渲染成 JSON 错误、永远到不了「单帧 `error`」这条口径；形态判据改在端点内\n用 `ensure_rpc_name`（与一元同一函数、同一码），契约里只保留可读描述。",
+        "operationId": "open_stream_rpc__service___method__stream_post",
+        "parameters": [
+          {
+            "description": "服务标识（与注册表登记的 service 同值）",
+            "in": "path",
+            "name": "service",
+            "required": true,
+            "schema": {
+              "description": "服务标识（与注册表登记的 service 同值）",
+              "title": "Service",
+              "type": "string"
+            }
+          },
+          {
+            "description": "流式方法名（与注册表登记的 method 同值）",
+            "in": "path",
+            "name": "method",
+            "required": true,
+            "schema": {
+              "description": "流式方法名（与注册表登记的 method 同值）",
+              "title": "Method",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-msg-frame": {}
+            },
+            "description": "帧流（48+response 逐帧、末帧另置 end_of_stream；ERROR 帧 16 收尾；EOF 即结束）"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Open Stream",
+        "tags": [
+          "msg-rpc"
+        ],
+        "x-error-codes": [
+          350004,
+          350005,
+          350006,
+          350011,
+          350012,
+          350021,
+          350023,
+          350024
+        ]
+      }
     }
   },
   "x-msg-frame": {
@@ -5798,7 +5910,29 @@
       "response_optional": [
         "used_ms",
         "remaining_ms"
-      ]
+      ],
+      "stream": {
+        "endpoint": "POST /rpc/{service}/{method}/stream",
+        "errors": {
+          "deadline_exceeded": 350004,
+          "method_not_found": 350023,
+          "stream_idle": 350024
+        },
+        "idle_ms": 60000,
+        "methods": [
+          {
+            "method": "ticker",
+            "service": "demo"
+          },
+          {
+            "method": "idle",
+            "service": "demo"
+          }
+        ],
+        "request": "同一元请求帧（type=48，不置 response / end_of_stream）",
+        "response": "同 type + flags.response；末帧另置 flags.end_of_stream",
+        "sequence": "header.seq，0 起逐帧 +1（缺帧 / 乱序由客户端判协议错）"
+      }
     },
     "stream": {
       "connection_window": "h2 连接级窗口由同连接所有 stream 共享：一条流停读会占满连接窗口、连带其它 stream 暂停发送；应用层（协程 / CPU / inflight 配额）互不影响。这是协议语义，不是实现缺陷",

@@ -244,9 +244,10 @@ message_key = "msg.error.storage_watermark_exceeded"
 severity = "error"
 description = "存储水位拒绝（卷使用率超拒绝阈值，或消息数据卷不可用）；须清理过期段或扩容后重试"
 
-# ---- RPC（任务 04-1 / 04-2）----
-# 三个码分工：350023 方法未注册（改参无用，应查对端能力）、350004 预算耗尽（超时=结果未知，
-# 不得直接重试）、10001 方法名形态非法（契约层 / 改参可解）。
+# ---- RPC（任务 04-1 / 04-2 / 04-3-1）----
+# 四个码分工：350023 方法未注册（改参无用，应查对端能力）、350004 预算耗尽（超时=结果未知，
+# 不得直接重试）、350024 流空闲超时（这条流没进展，应重开流而不是原地重试）、
+# 10001 方法名形态非法（契约层 / 改参可解）。
 [[errcodes]]
 code = 350004
 domain = "msg"
@@ -262,6 +263,14 @@ http_status = 404
 message_key = "msg.error.rpc_method_not_found"
 severity = "warning"
 description = "RPC 方法未注册（service + method 不在进程内注册表）"
+
+[[errcodes]]
+code = 350024
+domain = "msg"
+http_status = 504
+message_key = "msg.error.rpc_stream_idle"
+severity = "warning"
+description = "RPC 流空闲超时（连续 60s 无帧写出，服务端收尾并释放名额）"
 
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
