@@ -7,7 +7,7 @@
 | 编号 | 04-5 |
 | 父任务 | [04 RPC](../04_RPC.md) |
 | 对应需求 | [04-5 与 bms 端口适配](../../../需求/04_需求_RPC.md#r04-5) |
-| 依赖 | 04-1（RPC 端点 / stub）、04-4（错误语义与重试）；bms `EventPublisher` / `BaseServiceClient` / `ServiceCallPolicy` / 服务目录已交付；**bms 适配任务（跨仓）已立项：bms 07B `06_01`「协议链上移与消息平台端口适配」** |
+| 依赖 | 04-1（RPC 端点 / stub，已交付 Kiwi 2433）、04-4（错误语义与重试，已交付 Kiwi 2439）；bms `EventPublisher` / `BaseServiceClient` / `ServiceCallPolicy` / 服务目录已交付；**bms 适配任务（跨仓）已交付：bms 07B `06_01`「协议链上移与消息平台端口适配」（Kiwi 2440 / 2441 / 2442；租户解析返修 2443）** |
 | 负责人 | minjian |
 
 ## 2. 任务内容 <a id="content"></a>
@@ -43,8 +43,14 @@
 
 | 前置 | 状态 | 契约 | 对本任务的约束 |
 | --- | --- | --- | --- |
-| [04-1 RPC 一元调用](../04_RPC_01_一元调用/04_RPC_01_一元调用.md) | 待交付（本域前一任务） | `/rpc/{service}/{method}`、最小 stub、错误骨架 | 适配器只映射到该端点，不另开 RPC 路径 |
+| [04-1 RPC 一元调用](../04_RPC_01_一元调用/04_RPC_01_一元调用.md) | **已交付（2026-11-05，Kiwi 2433）** | `/rpc/{service}/{method}`、最小 stub、错误骨架 | 适配器只映射到该端点，不另开 RPC 路径 |
 | [04-4 错误语义与幂等重试](../04_RPC_04_错误语义与幂等重试/04_RPC_04_错误语义与幂等重试.md) | **已交付（2026-11-06，Kiwi 2439）** | `ErrorCategory` 五类 + `classify()` 三元组（唯一出处）、`RetryPolicy`（2 次 / 100ms / ×2 / 封顶 2s + full jitter）、`RetryBudget`（帧头 `retry_budget` + `ContextVar`）、幂等键 `idempotency_key` 与进程内去重、复用 bms `BaseCircuitBreaker` 契约的三态实现、`Retry-After` 双来源；错误帧增 `category`；帧契约重导 | bms `ServiceCallPolicy` 的韧性字段映射到同一套语义，不重复实现；适配层可整体注入 `RetryPolicy` / 熔断器，并决定生产是否默认启用三态（缺省为 `NullCircuitBreaker` 恒闭合）；`RpcCallError` 已带 `category` / `attempts` / `backoff_ms` 供错误码映射消费 |
 | bms `EventPublisher` / `BaseServiceClient` / `ServiceCallPolicy` | 已交付 | `publish` / `publish_transactional` / `call(ServiceRequest)`；超时 / 重试 / 熔断 / 限流 | 不改端口契约；业务代码只依赖端口 |
 | bms 服务目录 / 配置 | 已交付 | 服务登记、`/api/v1` 公开契约、`service_endpoints` | `BaseServiceClient` 适配沿用 bms 服务目录；04-6 提供实例选择抽象 |
-| bms 适配任务（跨仓） | **步 1 ~ 步 3 均已交付（2026-11-06，bms 07B `06_01` 收口）** | 协议链上移 `bms_core/msgclient`（消除仓级循环依赖、各产品仓天生附带客户端）、msg 实现与插件装配、`provider = "msg"` 全局切换、按 `category` 的错误映射、回滚三态演练、真实调用点（`fetch_catalog_snapshot`）替换；Kiwi 2440 / 2441 / 2442 | 「业务代码不改切换」与「替换真实调用」需两仓联合验收——已按进程内真 msg 应用（真路由 → 真帧）+ 真实业务函数达成，生产集群联调归部署阶段；msg 侧契约用例见[跨仓契约测试实施记录](实施/02_实施记录_04_RPC_05_跨仓契约测试.md)。任务文档路径（跨仓纯文本）：`bms/bms文档/项目/07B_跨产品协同/任务/06_消息平台端口适配/06_消息平台端口适配_01_消息平台端口适配/06_消息平台端口适配_01_消息平台端口适配.md` |
+| bms 适配任务（跨仓） | **步 1 ~ 步 3 已交付（2026-11-06，bms 07B `06_01` 收口）；同日返修租户解析（Kiwi 2443）** | 协议链上移 `bms_core/msgclient`（消除仓级循环依赖、各产品仓天生附带客户端）、msg 实现与插件装配、`provider = "msg"` 全局切换、按 `category` 的错误映射、回滚三态演练、真实调用点（`fetch_catalog_snapshot`）替换；`X-Tenant-ID` 支持内部租户 id（雪花 id）与外部租户编码双形态；Kiwi 2440 / 2441 / 2442 / 2443 | 「业务代码不改切换」与「替换真实调用」需两仓联合验收——已按进程内真 msg 应用（真路由 → 真帧 / 真数据面）+ 真实业务函数达成，生产集群联调归部署阶段；msg 侧契约用例见[跨仓契约测试实施记录](实施/02_实施记录_04_RPC_05_跨仓契约测试.md)，事件发布真链路见[测试记录](测试/01_测试记录_04_RPC_05_与bms端口适配.md)。任务文档路径（跨仓纯文本）：`bms/bms文档/项目/07B_跨产品协同/任务/06_消息平台端口适配/06_消息平台端口适配_01_消息平台端口适配/06_消息平台端口适配_01_消息平台端口适配.md` |
+
+## 6. 收口说明 <a id="closure"></a>
+
+- **交付物**：protocol 链上移（msg 仓删本地客户端副本、统一 `bms_core.msgclient`）、两仓契约夹具与用例（RPC 六类 + 事件发布真链路）、本任务设计与测试记录；bms 侧适配层 / 切换 / 回滚 / 真实调用替换归 bms 07B `06_01`。
+- **证据链**：bms `tests/msgclient/adapter/` 与 `tests/outbox/test_provider_switch.py`；msg `services/msg/tests/client/test_bms_port_contract.py`（14 条，真 msg 应用）；bms `tests/db/test_tenant.py`（租户 id 解析返修）。
+- **归口**：生产集群联调（真 msg 实例 + 真 platform 服务）留部署阶段；跨服务真实迁移（目标方法须在 msg 注册表登记）归 8B_08；流式适配归 8B_03 SDK；事务消息 / outbox relay 替换归 8B_04。
