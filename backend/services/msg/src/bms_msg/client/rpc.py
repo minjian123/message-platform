@@ -309,7 +309,8 @@ class RpcClient:
             ParamError: `service` / `method` 形态非法（本地先拦，省一次往返）或预算参数非法。
             RpcCallTimeoutError: 本地兜底超时 / 服务端 `350004`（都带 `code=350004`）。
             RpcCallError: 错误帧 / 非 200 / 响应不可解析。
-            asyncio.CancelledError: 调用方取消（取消协程即取消请求，无需额外句柄）。
+            asyncio.CancelledError: 调用方取消（取消协程即取消请求，无需额外句柄；传输层随后发
+                `RST_STREAM(CANCEL)` 让服务端停下，并记 `msg_rpc_client_cancel`）。
         """
         ensure_rpc_name(service, method)
         budget = validate_budget_ms(deadline_ms, default=self._deadline_ms)

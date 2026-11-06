@@ -8,8 +8,9 @@
 期间被取消时**不发 `RST_STREAM`**；`httpcore 1.0.9` 没有公开的流重置出口（`stream_id` 只能从
 `_events` 反推），要摸 5 处私有属性。精确取消依赖「拿到单条 stream 并发 RST」，只能自持连接。
 
-**取消不走异常梯度**：`asyncio.CancelledError` 原样穿透本层与 `RpcClient`，不包装、不吞；取消的接线
-与验收归 04-7-2，本层只提供 `H2Stream.abort()` 原语。
+**取消不走异常梯度**：`asyncio.CancelledError` 原样穿透本层与 `RpcClient`，不包装、不吞。取消的
+接线已在 04-7-2 落地：`H2Transport.send()` 的取消 / 超时路径调 `H2Stream.abort()` 发
+`RST_STREAM(CANCEL)`，并在同一处记 `msg_rpc_client_cancel`（`rst_sent` / `stream_id` / `reason`）。
 """
 
 from __future__ import annotations
@@ -135,7 +136,7 @@ class RpcTransport(Protocol):
             RpcTransportClosedError: 连接被关闭、GOAWAY、对端 reset、池不可用。
             RpcTransportProtocolError: 帧或 ALPN 协商异常。
             RpcTransportUnsupportedError: scheme 不受支持。
-            asyncio.CancelledError: 调用方取消（原样穿透，由 04-7-2 接线为 `RST_STREAM`）。
+            asyncio.CancelledError: 调用方取消（原样穿透；本流已被 `RST_STREAM(CANCEL)` 中止）。
         """
         ...
 

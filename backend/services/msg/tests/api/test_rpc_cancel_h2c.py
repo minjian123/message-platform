@@ -1,5 +1,10 @@
 """真 h2c 断开兜底（任务 04-2；Kiwi 2434）：连接关闭 → 服务端探测到断开 → 取消 handler、释放资源。
 
+> **本用例只覆盖「连接关闭」这一条路径**（范围声明，04-7-2 补）：它验的是「断开一旦到达，服务端确实
+> 中断并释放」。客户端**发 `RST_STREAM(CANCEL)` 精确取消单条流**、且连接不被牺牲的那条路径由
+> `tests/client/test_rpc_client_cancel_h2c.py`（Kiwi 2436，真 hypercorn + 生产 `RpcClient`）覆盖；
+> 两文件并存、互不替代——前者是 04-2 时代（客户端发不出 RST）留下的兜底网，仍然有效。
+
 **实测结论（决定了本用例的断言口径）**：`httpx 0.28.1` / `httpcore 1.0.9` 在「等待响应头期间被取消」
 时**不发 `RST_STREAM`**，只是本地放弃；`http.disconnect` 要等连接关闭才到（三组最小实验时间戳可证）。
 `hypercorn 0.18.0` 收到 `StreamReset` 只 `app_put({"type": "http.disconnect"})`、**不取消任务**。

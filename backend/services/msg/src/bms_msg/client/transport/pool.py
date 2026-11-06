@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlsplit
+
+from bms_core.core.logging import get_logger
 
 from bms_msg.client.transport.base import (
     RpcHttpRequest,
@@ -30,10 +33,14 @@ from bms_msg.client.transport.base import (
     TransportStats,
 )
 from bms_msg.client.transport.connection import H2ClientConnection
-from bms_msg.client.transport.stream import H2Stream
+from bms_msg.client.transport.stream import CLOSE_TIMEOUT, H2Stream, abort_reason_of
 from bms_msg.core.config import MS_PER_SECOND
 
 __all__ = ["H2Transport"]
+
+_LOGGER = get_logger("bms_msg.rpc.client")
+"""客户端侧日志门面（与服务端 `msg_rpc` 同一命名族：`msg_rpc` 给服务端视角，`msg_rpc_client_cancel`
+给客户端视角，06-3 按事件名分流出指标）。"""
 
 _IDLE_TIMEOUT_SECONDS = 30.0
 """空闲连接回收阈值（秒）：对端 30s 空闲即断，本端先回收，省一次「写进去才知道断了」。"""
@@ -81,6 +88,32 @@ def _parse_origin(origin: str) -> _Origin:
     )
 
 
+def _log_cancel(*, request: RpcHttpRequest, stream: H2Stream, reason: str, started_at: float) -> None:
+    """记一条 `msg_rpc_client_cancel`（客户端取消唯一出口）。
+
+    **为什么不改服务端 `msg_rpc`**：服务端四态回答的是「我这边怎么结束的」，客户端这条回答的是
+    「我为什么不等了、RST 发没发」——混成一条会让「一行日志一个视角」失效（04-7-2 决策 10）。
+    两者靠 `request_id` 对账。
+
+    Args:
+        request: 传输层入参（取 `trace` 里的关联字段）。
+        stream: 被中止的流（取 `stream_id` 与 `rst_sent`）。
+        reason: `cancelled` / `timeout` / `error`。
+        started_at: `send()` 进入时刻（`time.monotonic()`），用于算 `elapsed_ms`。
+    """
+    trace = request.trace
+    _LOGGER.info(
+        "msg_rpc_client_cancel",
+        request_id=None if trace is None else trace.request_id,
+        service=None if trace is None else trace.service,
+        method=None if trace is None else trace.method,
+        stream_id=stream.stream_id,
+        reason=reason,
+        rst_sent=stream.rst_sent,
+        elapsed_ms=int((time.monotonic() - started_at) * MS_PER_SECOND),
+    )
+
+
 class H2Transport:
     """按 origin 分池的 h2 传输（`RpcTransport` 的生产实现）。"""
 
@@ -103,7 +136,19 @@ class H2Transport:
         self._closed = False
 
     async def send(self, request: RpcHttpRequest) -> RpcHttpResponse:
-        """发送一次一元调用并读满响应（超时即中止本流，同连接其它流不受影响）。
+        """发送一次一元调用并读满响应（超时 / 取消即中止本流，同连接其它流不受影响）。
+
+        **三条「中止」出口在这里归一**（`reason` 是唯一判定处）：
+
+        | 触发 | `reason` | 对外异常 |
+        | --- | --- | --- |
+        | 调用方 `task.cancel()` | `cancelled` | 原样 `CancelledError`（不包装、不吞） |
+        | `timeout_ms` 到点 | `timeout` | `RpcTransportTimeoutError` |
+        | 其它异常 | `error` | 原样上抛 |
+
+        三条出口都走同一段 `finally`：`stream.abort(reason)` 发 `RST_STREAM(CANCEL)`，再按结果记
+        `msg_rpc_client_cancel`（`rst_sent` 直接回答「RST 发了没有」）。已收口的流 `abort()` 不发帧，
+        所以「正常返回」也走这段而不产生副作用，也不会产生日志（`reason` 为 None）。
 
         Args:
             request: 传输层入参。
@@ -121,19 +166,29 @@ class H2Transport:
         if self._closed:
             raise RpcTransportClosedError("传输层已关闭")
         origin = _parse_origin(request.origin)
-        stream: H2Stream | None = None
+        # 流一注册就收下：请求体发送中被取消时 `send_request` 会抛，返回值拿不到，只能经 `on_open` 持有。
+        opened: list[H2Stream] = []
+        reason: str | None = None
+        started_at = time.monotonic()
         try:
             async with asyncio.timeout(request.timeout_ms / MS_PER_SECOND):
                 connection = await self._connection_for(origin)
-                stream = await connection.send_request(request)
+                stream = await connection.send_request(request, on_open=opened.append)
                 return await stream.wait_response()
         except TimeoutError as exc:
+            reason = CLOSE_TIMEOUT
             raise RpcTransportTimeoutError(
                 f"RPC 传输超时（{request.timeout_ms} ms）：{origin.base}{request.target}"
             ) from exc
+        except BaseException as exc:
+            # `CancelledError` 落这一支：原样 `raise` 让它继续往上走，只在这里记下原因。
+            reason = abort_reason_of(exc)
+            raise
         finally:
-            if stream is not None:
-                stream.abort()
+            if opened:
+                opened[0].abort(reason)
+                if reason is not None:
+                    _log_cancel(request=request, stream=opened[0], reason=reason, started_at=started_at)
 
     async def aclose(self) -> None:
         """关闭全部连接与建立中的任务（幂等）。"""

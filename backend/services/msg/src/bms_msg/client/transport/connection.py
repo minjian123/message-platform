@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,7 +33,7 @@ from bms_msg.client.transport.base import (
     RpcTransportClosedError,
     RpcTransportError,
 )
-from bms_msg.client.transport.stream import H2Stream
+from bms_msg.client.transport.stream import H2Stream, abort_reason_of
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期
     from asyncio import StreamReader, StreamWriter
@@ -144,11 +144,15 @@ class H2ClientConnection:
 
     # ------------------------------------------------------------------ 发送
 
-    async def send_request(self, request: RpcHttpRequest) -> H2Stream:
+    async def send_request(self, request: RpcHttpRequest, *, on_open: Callable[[H2Stream], None]) -> H2Stream:
         """发一次一元请求（头 + 体），返回可等待结果的流。
+
+        **`on_open` 是必需的**（不是可选钩子）：流一注册就要交给调用方，因为「请求体还没发完就被取消」
+        时本方法**会抛**，返回值拿不到——那种路径下 RST 照发，但只有调用方持有流才能记出 `rst_sent`。
 
         Args:
             request: 传输层入参。
+            on_open: 流注册完成（尚未发请求体）时回调，用于让调用方持有该流。
 
         Returns:
             H2Stream: 已发出请求的流。
@@ -166,29 +170,36 @@ class H2ClientConnection:
             raise RpcTransportClosedError(f"h2 stream id 用尽：{self._origin}") from None
         stream = H2Stream(self, stream_id)
         self._streams[stream_id] = stream
+        on_open(stream)
         self._last_used_at = time.monotonic()
         self._h2.send_headers(stream_id, self._request_headers(request), end_stream=not request.body)
         self._flush()
         try:
             if request.body:
                 await self._send_body(stream_id, request.body)
-        except BaseException:
-            self.abort_stream(stream_id)
+        except BaseException as exc:
+            # 走 `stream.abort()` 而不是 `abort_stream()`：`close_reason` 只有流自己记，绕过去就会
+            # 出现「RST 发了、流却说没收口」，日志与对象状态对不上。
+            stream.abort(abort_reason_of(exc))
             raise
         return stream
 
-    def abort_stream(self, stream_id: int) -> None:
+    def abort_stream(self, stream_id: int) -> bool:
         """中止一条流（发 `RST_STREAM(CANCEL)` 并释放位）；已被读取任务收口时只返回。
 
         Args:
             stream_id: h2 流号。
+
+        Returns:
+            bool: 是否真的发了帧（`False` = 该流已收口，无需也无法再中止）。
         """
         if self._streams.pop(stream_id, None) is None:
-            return
+            return False
         self._capacity_event.set()
         # 连接已关闭时流表必为空（`_fail` 会清空并唤醒全部流），所以这里不需要额外的 `_closed` 判断。
         self._h2.reset_stream(stream_id, error_code=h2.errors.ErrorCodes.CANCEL)
         self._flush()
+        return True
 
     def _request_headers(self, request: RpcHttpRequest) -> list[tuple[bytes, bytes]]:
         """构造请求头（伪头 + `content-length` + 调用方给的普通头）。

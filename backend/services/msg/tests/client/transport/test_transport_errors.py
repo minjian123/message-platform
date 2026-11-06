@@ -179,7 +179,9 @@ async def test_unstarted_connection_can_be_closed() -> None:
 
         assert connection.is_available is False
         with pytest.raises(RpcTransportClosedError):
-            await connection.send_request(_request(server.url))
+            # `on_open` 是必需参数（04-7-2：流一注册就要交给调用方）：本用例在连接不可用处就失败，
+            # 回调不会被调用，给个空实现即可。
+            await connection.send_request(_request(server.url), on_open=lambda _stream: None)
 
 
 async def test_aclose_during_connect_cancels_pending() -> None:
