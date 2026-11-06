@@ -43,7 +43,7 @@
 | 前置 | 状态 | 契约 | 对本任务的约束 |
 | --- | --- | --- | --- |
 | [04-1 RPC 一元调用](../04_RPC_01_一元调用/04_RPC_01_一元调用.md) | 待交付（本域前一任务） | `/rpc/{service}/{method}`、最小 stub、错误骨架 | 适配器只映射到该端点，不另开 RPC 路径 |
-| [04-4 错误语义与幂等重试](../04_RPC_04_错误语义与幂等重试/04_RPC_04_错误语义与幂等重试.md) | 待交付（本域前序） | `retryable` 分类、退避、幂等键、熔断 | bms `ServiceCallPolicy` 的韧性字段映射到同一套语义，不重复实现 |
+| [04-4 错误语义与幂等重试](../04_RPC_04_错误语义与幂等重试/04_RPC_04_错误语义与幂等重试.md) | **已交付（2026-11-06，Kiwi 2439）** | `ErrorCategory` 五类 + `classify()` 三元组（唯一出处）、`RetryPolicy`（2 次 / 100ms / ×2 / 封顶 2s + full jitter）、`RetryBudget`（帧头 `retry_budget` + `ContextVar`）、幂等键 `idempotency_key` 与进程内去重、复用 bms `BaseCircuitBreaker` 契约的三态实现、`Retry-After` 双来源；错误帧增 `category`；帧契约重导 | bms `ServiceCallPolicy` 的韧性字段映射到同一套语义，不重复实现；适配层可整体注入 `RetryPolicy` / 熔断器，并决定生产是否默认启用三态（缺省为 `NullCircuitBreaker` 恒闭合）；`RpcCallError` 已带 `category` / `attempts` / `backoff_ms` 供错误码映射消费 |
 | bms `EventPublisher` / `BaseServiceClient` / `ServiceCallPolicy` | 已交付 | `publish` / `publish_transactional` / `call(ServiceRequest)`；超时 / 重试 / 熔断 / 限流 | 不改端口契约；业务代码只依赖端口 |
 | bms 服务目录 / 配置 | 已交付 | 服务登记、`/api/v1` 公开契约、`service_endpoints` | `BaseServiceClient` 适配沿用 bms 服务目录；04-6 提供实例选择抽象 |
 | bms 适配任务（跨仓） | **待交付（另立）** | 插件装配、`provider` 配置切换、回滚演练 | 本任务的「业务代码不改切换」与「替换真实调用」需两仓联合验收 |
