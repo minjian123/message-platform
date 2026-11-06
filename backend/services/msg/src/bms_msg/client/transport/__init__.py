@@ -1,4 +1,4 @@
-"""RPC 客户端传输层（任务 04-7-1）：协议、值对象、异常与 h2 实现。
+"""RPC 客户端传输层（任务 04-7-1 / 04-3-2）：协议、值对象、异常、h2 实现与流式出口。
 
 出口只有本模块：`client/rpc.py` 只 import 这里，不认识 `h2`，也不认识 socket。
 """
@@ -16,6 +16,7 @@ from bms_msg.client.transport.base import (
     RpcTransportTimeoutError,
     RpcTransportUnsupportedError,
     TransportStats,
+    TransportStream,
 )
 from bms_msg.client.transport.pool import H2Transport
 
@@ -31,4 +32,5 @@ __all__ = [
     "RpcTransportTimeoutError",
     "RpcTransportUnsupportedError",
     "TransportStats",
+    "TransportStream",
 ]

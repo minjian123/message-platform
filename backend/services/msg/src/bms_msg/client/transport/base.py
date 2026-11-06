@@ -1,4 +1,4 @@
-"""RPC 客户端传输层协议（任务 04-7-1）：值对象、异常梯度与 `RpcTransport` 契约。
+"""RPC 客户端传输层协议（任务 04-7-1 / 04-3-2）：值对象、异常梯度与 `RpcTransport` 契约。
 
 **为什么单独一层**：`client/rpc.py` 只该管「怎么调用」（帧编码、预算、错误码），不该管「怎么发字节」。
 把传输抽成协议后，生产实现（`pool.H2Transport`）与测试实现（`tests_support.rpc_transport`）走同一份
@@ -11,10 +11,16 @@
 **取消不走异常梯度**：`asyncio.CancelledError` 原样穿透本层与 `RpcClient`，不包装、不吞。取消的
 接线已在 04-7-2 落地：`H2Transport.send()` 的取消 / 超时路径调 `H2Stream.abort()` 发
 `RST_STREAM(CANCEL)`，并在同一处记 `msg_rpc_client_cancel`（`rst_sent` / `stream_id` / `reason`）。
+
+**流式只加一类能力（04-3-2）**：`open_stream()` 给出可逐块 `read()` 的 `TransportStream`。它返回
+**异步上下文管理器**而不是裸对象——发请求要取连接（可能还要建连），是异步的；把「进入 = 发请求」
+放进 `__aenter__`，调用方写 `async with` 就够，不必 `async with await client.stream(...)`。一元
+`send()` 与池行为**一个字节不改**（两条路径共用同一份连接与异常梯度）。
 """
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -31,6 +37,7 @@ __all__ = [
     "RpcTransportTimeoutError",
     "RpcTransportUnsupportedError",
     "TransportStats",
+    "TransportStream",
 ]
 
 
@@ -119,6 +126,55 @@ class TransportStats(BaseValueObject):
     """当前在途（未收 `END_STREAM` 且未中止）的流数。"""
 
 
+class TransportStream(Protocol):
+    """一条已发出请求、可逐块读的流（04-3-2 流式消费的唯一传输面）。
+
+    **只承诺三件事**：本流的 h2 流号、读到一块字节或「没有了」、发起中止。切帧、序号、结束三态
+    一律归句柄层（`client/stream.py`）——传输层不认识帧，把帧语义塞回来会让它依赖 `protocol.frame`
+    （与 04-7-1「协议与字节分开」同一取向）。
+
+    **不暴露 `close_reason`**：句柄层只需要「RST 发出去没有」（即 `abort()` 的返回值）；细分状态留在
+    `H2Stream` 里由传输层日志消费，与 04-7-2 §5.3 同取向。
+    """
+
+    @property
+    def stream_id(self) -> int:
+        """本条响应对应的 h2 流号（观测与用例断言；进程内替身给 0）。
+
+        Returns:
+            int: 流号。
+        """
+        ...
+
+    async def read(self) -> bytes | None:
+        """读下一块响应体字节。
+
+        **用 `None` 表示结束而不是抛 `StopAsyncIteration`**：传输层不认识迭代协议；`None` 是最小的
+        「没有更多字节」表达，句柄层再翻译成 `StopAsyncIteration`。读完一块就可以继续读下一块，
+        不需要调用方记账。
+
+        Returns:
+            bytes | None: 下一块字节；None 表示已收 `END_STREAM`。
+
+        Raises:
+            RpcTransportClosedError: 本流被对端 reset / 本地已中止 / 连接故障。
+            RpcTransportProtocolError: 连接级协议异常（`h2` 状态机拒绝）。
+            asyncio.CancelledError: 调用方取消（原样穿透）。
+        """
+        ...
+
+    def abort(self, reason: str | None = None) -> bool:
+        """本地中止本流（取消 / 超时 / 解析错）：发 `RST_STREAM(CANCEL)`。
+
+        Args:
+            reason: 中止原因（`cancelled` / `timeout` / `error`；None 表示只清理、不记原因）。
+
+        Returns:
+            bool: 本次是否真的发出了 `RST_STREAM`（已收口的流返回 False，不发帧）。
+        """
+        ...
+
+
 class RpcTransport(Protocol):
     """RPC 传输层契约（生产 `H2Transport`，测试 `AsgiRpcTransport` / `ScriptedRpcTransport`）。"""
 
@@ -137,6 +193,27 @@ class RpcTransport(Protocol):
             RpcTransportProtocolError: 帧或 ALPN 协商异常。
             RpcTransportUnsupportedError: scheme 不受支持。
             asyncio.CancelledError: 调用方取消（原样穿透；本流已被 `RST_STREAM(CANCEL)` 中止）。
+        """
+        ...
+
+    def open_stream(self, request: RpcHttpRequest) -> AbstractAsyncContextManager[TransportStream]:
+        """打开一条流式请求（**进入上下文时才发请求**）。
+
+        `request.timeout_ms` 在本方法里只约束「建连 + 发请求 + 等到响应头」这一段：整条流的期限由
+        服务端预算兜底，客户端不套整段本地超时（04-3-2 §5.5）——把一元的「预算 + 余量」包到流上，
+        预算 30s 的流 30s 后必被本地掐断，长流等于不可用。
+
+        Args:
+            request: 传输层入参（`target` 为 `/rpc/{service}/{method}/stream`）。
+
+        Returns:
+            AbstractAsyncContextManager[TransportStream]: 进入后拿到可 `read()` / `abort()` 的流。
+
+        Raises:
+            RpcTransportTimeoutError: 建连 / 发请求 / 等响应头超时。
+            RpcTransportClosedError: 连接不可用、对端 reset、流端点返回非 200。
+            RpcTransportProtocolError: ALPN 未协商到 `h2`。
+            RpcTransportUnsupportedError: scheme 不受支持。
         """
         ...
 

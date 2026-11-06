@@ -136,6 +136,30 @@ class _Connection:
         elif path == "/gated":
             await self._server.release.wait()
             await self.respond(stream_id, b"gated")
+        elif path == "/chunks":
+            # 逐块写出（不置 `content-length`）：客户端应「到一块读一块」，最后读到 None。
+            # 三块之间留 10ms：让三帧落在三次读里，用例才能断言「分块」而不是「一次收全」。
+            self.h2.send_headers(stream_id, [(b":status", b"200")])
+            self._flush()
+            await self._writer.drain()
+            for part in (b"one", b"two", b"three"):
+                self.h2.send_data(stream_id, part)
+                self._flush()
+                await self._writer.drain()
+                await asyncio.sleep(0.01)
+            self.h2.end_stream(stream_id)
+            self._flush()
+            await self._writer.drain()
+        elif path == "/hold":
+            # 只发响应头再挂住：覆盖「读中 abort()」（本流被中止）与「在途流」两条路径。
+            self.h2.send_headers(stream_id, [(b":status", b"200")])
+            self._flush()
+            await self._writer.drain()
+            await self._server.release.wait()
+            with suppress(h2.exceptions.H2Error):
+                # 客户端已发 `RST_STREAM` 时再写属于协议违规，h2 会抛；这条路径本身就是被测行为。
+                self.h2.send_data(stream_id, b"late", end_stream=True)
+                self._flush()
         elif path == "/drip":
             # 帧字节分两次写：客户端第一次读到的只是半帧，`receive_data()` 返回空事件列表
             # （覆盖「读到半帧」这条路径，真实网络的分包就是这样）。

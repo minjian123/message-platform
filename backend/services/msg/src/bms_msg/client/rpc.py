@@ -1,4 +1,4 @@
-"""最小 RPC 客户端（任务 04-1 / 04-2 / 04-7-1）：一元调用、帧编解码、预算传播、错误映射骨架。
+"""最小 RPC 客户端（任务 04-1 / 04-2 / 04-3-2 / 04-7-1）：一元调用、流式入口、帧编解码与错误映射骨架。
 
 **为什么单独一个 `client/` 包**：`protocol/` 是 broker 侧编解码（明确「不碰连接、不碰业务语义」），
 客户端要发网络请求；`rpc/` 是服务端域（注册表 / 分发）。三者分开后，04-5 的 bms 适配只 import
@@ -11,16 +11,20 @@
 `client/transport/base.py` 模块说明：精确取消要求拿到单条 stream 并发 `RST_STREAM`，通用 HTTP 客户端
 给不了。生产实现 `H2Transport` 由构造参数缺省注入，用例注入 `AsgiRpcTransport` / `ScriptedRpcTransport`。
 
-**做的**：一元调用、`request_id` 关联（单 stream 一请求）、预算传播（`deadline_ms` 写入帧头）、
-本地超时 = 预算 + 余量、本地超时与服务端 `350004` 统一异常、错误帧 → `RpcCallError`、地址轮询。
-**不做的**（后续任务）：流式（04-3）、重试 / 熔断 / 幂等（04-4）、实例选择策略与失败摘除（04-6）。
+**做的**：一元调用、流式入口（`stream()` 返回句柄，实现见 `client/stream.py`）、`request_id` 关联
+（单 stream 一请求）、预算传播（`deadline_ms` 写入帧头）、一元本地超时 = 预算 + 余量、本地超时与服务端
+`350004` 统一异常、错误帧 → `RpcCallError`、地址轮询。
+**不做的**（后续任务）：重试 / 熔断 / 幂等（04-4）、实例选择策略与失败摘除（04-6）。
+
+**请求帧组装只写一份**：`call()` 与 `stream()` 共用 `_request_frame()` / `_http_request()`。两份编码
+会在「加一个帧头字段」时悄悄漂移，而漂移只会在跨版本联调时才暴露——那时已经很难说清是哪边旧。
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from types import TracebackType
-from typing import Any, Protocol, Self, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 from uuid import uuid4
 
 from bms_core.core.concurrent import ConcurrentStableDict
@@ -55,12 +59,17 @@ from bms_msg.rpc.deadline import OUTCOME_UNKNOWN, validate_budget_ms
 from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcReply
 
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期
+    from bms_msg.client.stream import RpcStream
+
 __all__ = [
     "InstanceProvider",
     "RpcCallError",
     "RpcCallTimeoutError",
     "RpcClient",
     "StaticInstanceProvider",
+    "error_of_frame",
+    "frame_headers",
 ]
 
 _LOGGER = get_logger("bms_msg.rpc.client")
@@ -183,6 +192,37 @@ def _error_of(response: RpcHttpResponse) -> RpcCallError:
     return RpcCallError(0, f"RPC 端点返回 HTTP {response.status}", retryable=False, layer="transport")
 
 
+def error_of_frame(header: Mapping[str, Any], *, budget_ms: int | None = None) -> RpcCallError:
+    """把 `ERROR` 帧头映射为调用错误（一元与流式共用一份判定）。
+
+    **`layer` / `retryable` / `retry_after_ms` 全部照搬帧头**：服务端 `classify()` 是唯一出处，客户端
+    再维护一张码表，两端就会逐渐漂移。流式与一元的区别只在「从哪里拿到这帧」，不在「怎么解释它」。
+
+    Args:
+        header: 帧头（`code` / `message` / `retryable` / `layer` / `retry_after_ms`）。
+        budget_ms: 本次预算（毫秒；`350004` 映射成 `RpcCallTimeoutError` 时带上）。
+
+    Returns:
+        RpcCallError: 待抛出的错误（`350004` 时是 `RpcCallTimeoutError` 子类实例）。
+
+    Raises:
+        RpcCallTimeoutError: 帧头 `code` 为 `350004`（预算耗尽）。
+    """
+    code = _int_of(header.get("code"))
+    message = str(header.get("message") or "")
+    if code == int(MsgErrorCode.RPC_DEADLINE_EXCEEDED):
+        # 服务端预算耗尽与本地兜底超时对调用方是同一件事：没在预算内拿到结果。
+        raise RpcCallTimeoutError(message or "RPC 预算耗尽", budget_ms=budget_ms)
+    retry_after = header.get("retry_after_ms")
+    return RpcCallError(
+        code,
+        message,
+        retryable=bool(header.get("retryable")),
+        layer=str(header.get("layer") or "system"),
+        retry_after_ms=retry_after if isinstance(retry_after, int) else None,
+    )
+
+
 def _reply_of(content: bytes, *, budget_ms: int | None = None) -> RpcReply:
     """解析响应帧（结果帧 / 错误帧）。
 
@@ -202,22 +242,10 @@ def _reply_of(content: bytes, *, budget_ms: int | None = None) -> RpcReply:
     except MsgError as exc:
         raise RpcCallError(exc.code, f"响应不是合法帧：{exc}", layer="protocol") from exc
     if frame.frame_type == int(FrameType.ERROR):
-        code = _int_of(frame.header.get("code"))
-        message = str(frame.header.get("message") or "")
-        if code == int(MsgErrorCode.RPC_DEADLINE_EXCEEDED):
-            # 服务端预算耗尽与本地兜底超时对调用方是同一件事：没在预算内拿到结果。
-            raise RpcCallTimeoutError(message or "RPC 预算耗尽", budget_ms=budget_ms)
-        retry_after = frame.header.get("retry_after_ms")
-        raise RpcCallError(
-            code,
-            message,
-            retryable=bool(frame.header.get("retryable")),
-            layer=str(frame.header.get("layer") or "system"),
-            retry_after_ms=retry_after if isinstance(retry_after, int) else None,
-        )
+        raise error_of_frame(frame.header, budget_ms=budget_ms)
     if frame.frame_type != int(FrameType.RPC) or not frame.flags & FrameFlags.RESPONSE:
         raise RpcCallError(0, f"响应帧类型不符：{frame.frame_type}", layer="protocol")
-    return RpcReply(payload=bytes(frame.payload), headers=_headers_of(frame.header.get("headers")))
+    return RpcReply(payload=bytes(frame.payload), headers=frame_headers(frame.header.get("headers")))
 
 
 def _int_of(value: Any) -> int:
@@ -232,8 +260,10 @@ def _int_of(value: Any) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _headers_of(raw: Any) -> ConcurrentStableDict[str, str]:
+def frame_headers(raw: Any) -> ConcurrentStableDict[str, str]:
     """把帧头里的 `headers` 转结构化头（非法给空，不抛）。
+
+    一元与流式共用：「一帧的结果头」与「整次调用的结果头」是同一种东西，转换规则不该有两份。
 
     Args:
         raw: 帧头值。
@@ -248,6 +278,87 @@ def _headers_of(raw: Any) -> ConcurrentStableDict[str, str]:
         if isinstance(key, str) and isinstance(value, str):
             headers.set(key, value)
     return headers
+
+
+def _request_header(
+    *,
+    request_id: str,
+    service: str,
+    method: str,
+    headers: Mapping[str, str] | None,
+    trace_id: str | None,
+    caller: str | None,
+    deadline_ms: int,
+) -> ConcurrentStableDict[str, Any]:
+    """构造请求帧头（只放 `rpc/contract.py` 声明过的可选字段）。
+
+    Args:
+        request_id: 请求标识。
+        service: 服务标识。
+        method: 方法名。
+        headers: 结构化头。
+        trace_id: 链路标识。
+        caller: 调用方服务标识。
+        deadline_ms: 本次预算（毫秒；进帧头供逐跳扣减）。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 帧头。
+    """
+    header: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    header.set("request_id", request_id)
+    header.set("protocol_version", PROTOCOL_VERSION)
+    header.set("service", service)
+    header.set("method", method)
+    header.set(RPC_DEADLINE_HEADER, deadline_ms)
+    if headers:
+        header.set("headers", dict(headers.items()))
+    if trace_id is not None:
+        header.set("trace_id", trace_id)
+    if caller is not None:
+        header.set("caller", caller)
+    return header
+
+
+def _request_frame(
+    *,
+    request_id: str,
+    service: str,
+    method: str,
+    payload: bytes,
+    headers: Mapping[str, str] | None,
+    trace_id: str | None,
+    caller: str | None,
+    deadline_ms: int,
+) -> bytes:
+    """编码请求帧（`call()` 与 `stream()` 共用，避免两份编码漂移）。
+
+    Args:
+        request_id: 请求标识。
+        service: 服务标识。
+        method: 方法名。
+        payload: 调用参数原始字节。
+        headers: 结构化头。
+        trace_id: 链路标识。
+        caller: 调用方服务标识。
+        deadline_ms: 本次预算（毫秒）。
+
+    Returns:
+        bytes: 完整帧字节。
+    """
+    return encode_frame(
+        frame_type=int(FrameType.RPC),
+        flags=FrameFlags.NEED_RESPONSE,
+        header=_request_header(
+            request_id=request_id,
+            service=service,
+            method=method,
+            headers=headers,
+            trace_id=trace_id,
+            caller=caller,
+            deadline_ms=deadline_ms,
+        ),
+        payload=payload,
+    )
 
 
 class RpcClient:
@@ -315,33 +426,17 @@ class RpcClient:
         ensure_rpc_name(service, method)
         budget = validate_budget_ms(deadline_ms, default=self._deadline_ms)
         request_id = uuid4().hex
-        frame = encode_frame(
-            frame_type=int(FrameType.RPC),
-            flags=FrameFlags.NEED_RESPONSE,
-            header=self._request_header(
-                request_id=request_id,
-                service=service,
-                method=method,
-                headers=headers,
-                trace_id=trace_id,
-                caller=caller,
-                deadline_ms=budget,
-            ),
+        request = self._http_request(
+            request_id=request_id,
+            service=service,
+            method=method,
             payload=payload,
-        )
-        effective_tenant = self._tenant if tenant is None else tenant
-        # `content-type` 与租户头一起给：只带帧媒体类型时服务端解析不到租户（`350012`），
-        # 这条链路正是「RPC 与 `/msg/*` 共用同一中间件」的落点。
-        request_headers: list[tuple[str, str]] = [("content-type", FRAME_CONTENT_TYPE)]
-        if effective_tenant:
-            request_headers.append((RPC_TENANT_HEADER, effective_tenant))
-        request = RpcHttpRequest(
-            origin=self._instances.next(),
-            target=f"/rpc/{service}/{method}",
-            headers=tuple(request_headers),
-            body=frame,
-            timeout_ms=budget + RPC_CLIENT_TIMEOUT_SLACK_MS,
-            trace=RpcRequestTrace(request_id=request_id, service=service, method=method),
+            headers=headers,
+            trace_id=trace_id,
+            caller=caller,
+            budget=budget,
+            tenant=tenant,
+            suffix="",
         )
         try:
             response = await self._transport.send(request)
@@ -355,44 +450,132 @@ class RpcClient:
             raise _error_of(response)
         return _reply_of(response.body, budget_ms=budget)
 
-    def _request_header(
+    def stream(
+        self,
+        service: str,
+        method: str,
+        payload: bytes = b"",
+        headers: Mapping[str, str] | None = None,
+        *,
+        trace_id: str | None = None,
+        caller: str | None = None,
+        deadline_ms: int | None = None,
+        tenant: str | None = None,
+    ) -> RpcStream:
+        """流式调用：返回**惰性打开**的 `RpcStream` 句柄（构造时一个字节都不发）。
+
+        **唯一推荐写法是 `async with`**：
+
+        ```python
+        async with client.stream("demo", "ticker", b"5") as replies:
+            async for reply in replies:
+                handle(reply.payload)
+                if enough:
+                    break            # 退出 with 时发 RST_STREAM(CANCEL)
+        ```
+
+        `async for` 的 `break` 在语言层面**不通知迭代器**，所以「提前不看了」只有两条路：`async with`
+        退出，或显式 `await replies.aclose()`。只写 `break` 而不退出上下文，服务端会一直把这条流推完
+        （用例把这条已知行为固定下来，见 04-3-2 详细设计 §4.2）。
+
+        Args:
+            service: 服务标识。
+            method: 流式方法名（须在注册表里以 `register_stream()` 登记）。
+            payload: 调用参数原始字节。
+            headers: 结构化头（随请求帧发，服务端透传给处理器）。
+            trace_id: 链路标识（进帧头）。
+            caller: 调用方服务标识（进帧头；服务端仍以 HTTP 头优先）。
+            deadline_ms: 整条流的预算（毫秒；缺省取构造时的值）。**只作为请求字段发给服务端**，
+                客户端不据此设本地整段超时——长流靠服务端按预算收尾，客户端只兜「90s 没数据」。
+            tenant: 本次调用的租户编码（缺省取构造时的值）。
+
+        Returns:
+            RpcStream: 流句柄（`__aenter__` / 首次 `__anext__` 才发请求）。
+
+        Raises:
+            ParamError: `service` / `method` 形态非法（本地先拦，省一次往返）或预算参数非法。
+        """
+        from bms_msg.client.stream import RpcStream
+
+        ensure_rpc_name(service, method)
+        budget = validate_budget_ms(deadline_ms, default=self._deadline_ms)
+        request_id = uuid4().hex
+        request = self._http_request(
+            request_id=request_id,
+            service=service,
+            method=method,
+            payload=payload,
+            headers=headers,
+            trace_id=trace_id,
+            caller=caller,
+            budget=budget,
+            tenant=tenant,
+            suffix="/stream",
+        )
+        return RpcStream(
+            transport=self._transport,
+            request=request,
+            request_id=request_id,
+            service=service,
+            method=method,
+            budget_ms=budget,
+        )
+
+    def _http_request(
         self,
         *,
         request_id: str,
         service: str,
         method: str,
+        payload: bytes,
         headers: Mapping[str, str] | None,
         trace_id: str | None,
         caller: str | None,
-        deadline_ms: int,
-    ) -> ConcurrentStableDict[str, Any]:
-        """构造请求帧头（只放 `rpc/contract.py` 声明过的可选字段）。
+        budget: int,
+        tenant: str | None,
+        suffix: str,
+    ) -> RpcHttpRequest:
+        """构造传输层请求（一元与流式共用；`suffix` 决定走哪个端点）。
 
         Args:
             request_id: 请求标识。
             service: 服务标识。
             method: 方法名。
+            payload: 调用参数原始字节。
             headers: 结构化头。
             trace_id: 链路标识。
             caller: 调用方服务标识。
-            deadline_ms: 本次预算（毫秒；进帧头供逐跳扣减）。
+            budget: 本次预算（毫秒）。
+            tenant: 本次调用的租户编码。
+            suffix: 端点后缀（一元为空串、流式为 `/stream`）。
 
         Returns:
-            ConcurrentStableDict[str, Any]: 帧头。
+            RpcHttpRequest: 传输层入参。
         """
-        header: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
-        header.set("request_id", request_id)
-        header.set("protocol_version", PROTOCOL_VERSION)
-        header.set("service", service)
-        header.set("method", method)
-        header.set(RPC_DEADLINE_HEADER, deadline_ms)
-        if headers:
-            header.set("headers", dict(headers.items()))
-        if trace_id is not None:
-            header.set("trace_id", trace_id)
-        if caller is not None:
-            header.set("caller", caller)
-        return header
+        effective_tenant = self._tenant if tenant is None else tenant
+        # `content-type` 与租户头一起给：只带帧媒体类型时服务端解析不到租户（`350012`），
+        # 这条链路正是「RPC 与 `/msg/*` 共用同一中间件」的落点。
+        request_headers: list[tuple[str, str]] = [("content-type", FRAME_CONTENT_TYPE)]
+        if effective_tenant:
+            request_headers.append((RPC_TENANT_HEADER, effective_tenant))
+        return RpcHttpRequest(
+            origin=self._instances.next(),
+            target=f"/rpc/{service}/{method}{suffix}",
+            headers=tuple(request_headers),
+            body=_request_frame(
+                request_id=request_id,
+                service=service,
+                method=method,
+                payload=payload,
+                headers=headers,
+                trace_id=trace_id,
+                caller=caller,
+                deadline_ms=budget,
+            ),
+            # 一元：超时包住整次调用；流式：只约束「打开阶段」（见 `open_stream` 的说明）。
+            timeout_ms=budget + RPC_CLIENT_TIMEOUT_SLACK_MS,
+            trace=RpcRequestTrace(request_id=request_id, service=service, method=method),
+        )
 
     async def aclose(self) -> None:
         """释放底层传输（连接池 / 后台任务）。"""

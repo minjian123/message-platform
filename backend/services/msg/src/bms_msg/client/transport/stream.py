@@ -1,8 +1,15 @@
-"""单条 h2 流（任务 04-7-1 / 04-7-2）：状态由连接的读取任务推进，调用方只 `await` 结果。
+"""单条 h2 流（任务 04-7-1 / 04-7-2 / 04-3-2）：状态由连接的读取任务推进，调用方 `await` 结果或逐块读。
 
-**一元语义**：本任务只做「一请求一响应」，所以流不需要「逐块读」的接口——`wait_response()` 等到
-`END_STREAM` 或错误后一次返回。流式（多次读、背压消费、流内错误）归 04-3，届时在本类上加读队列，
-而不是改连接层。
+**两条读路径共存、互不改写**：
+
+| 路径 | 入口 | 语义 |
+| --- | --- | --- |
+| 一元 | `wait_response()` | 等 `_finished` 后一次返回整段响应体（04-7-1） |
+| 流式 | `read_chunk()` | 到一块读一块，`None` 表示已收 `END_STREAM`（04-3-2） |
+
+两者共用 `_finished` / `_error` / `_close_reason` 这套「流什么时候完」的事实，**不新建第二套状态机**
+——两套状态必然漂移，最后会出现「一元说完了、流式说还在」这种无法自证的日志。数据也只有一份：
+`_chunks` 是字节块的唯一存放处，一元路径在收口后把它拼成整段。
 
 **中止（`abort`）是关键原语**：一元响应不需要 `RST_STREAM` 之外的任何东西就能让服务端停下
 （04-2 的 50ms 断开探测据此生效）。已结束的流再 `abort` 必须不发帧——对已关闭流发 `RST_STREAM`
@@ -17,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import TYPE_CHECKING
 
 from bms_msg.client.transport.base import (
@@ -80,10 +88,11 @@ def abort_reason_of(exc: BaseException) -> str:
 
 
 class H2Stream:
-    """单条 h2 流（一请求一响应）。"""
+    """单条 h2 流（一请求一响应；流式时逐块读）。"""
 
     __slots__ = (
-        "_body",
+        "_chunk_event",
+        "_chunks",
         "_close_reason",
         "_connection",
         "_error",
@@ -105,9 +114,14 @@ class H2Stream:
         self._connection = connection
         self.stream_id = stream_id
         self._event = asyncio.Event()
+        self._chunk_event = asyncio.Event()
         self._status = 0
         self._headers: tuple[tuple[str, str], ...] = ()
-        self._body = bytearray()
+        # 字节块只存一处：一元在收口时拼成整段，流式逐块取走。
+        # **不设队列上限**：上限由 h2 窗口决定——`connection.py` 只在 `DataReceived` 时
+        # `acknowledge_received_data()`，未读走的字节不会让窗口继续打开，服务端写就会被阻塞。
+        # 若将来改成「读完再 ack」，这里必须同时加上限，否则无界缓冲。
+        self._chunks: deque[bytes] = deque()
         self._error: RpcTransportError | None = None
         self._finished = False
         self._close_reason: str | None = None
@@ -145,19 +159,29 @@ class H2Stream:
         self._event.set()
 
     def on_data(self, data: bytes) -> None:
-        """收到响应体片段。
+        """收到响应体片段（两块都记：一元拼整段、流式逐块取）。
+
+        **唤醒读等待者**（04-3-2）：流式语义就是「到一块读一块」，不唤醒会让 `read_chunk()` 一直睡到
+        下一块或收口。一元路径不读 `_chunk_event`，多一次 `set()` 无副作用——无人等待时事件保持置位，
+        下次进 `wait()` 立即返回（这正是 `clear()` 放在 `wait()` 之前的原因）。
 
         Args:
             data: 片段字节。
         """
-        # 不唤醒等待者：一元语义只等「结束」，body 累积过程中唤醒只会让等待者空转一轮。
-        self._body.extend(data)
+        if not data:
+            # 空 DATA 帧（`h2.end_stream()` 就是这种形态）没有信息量：排进队列只会让读循环空转一圈，
+            # 而「结束了」这件事由 `on_end()` 单独表达，不会因为丢掉空块而丢信息。
+            return
+        self._chunks.append(data)
+        self._chunk_event.set()
 
     def on_end(self) -> None:
         """收到 `END_STREAM`（正常结束）。"""
         self._finished = True
         self._close_reason = CLOSE_DONE
         self._event.set()
+        # 收口也要唤醒读者：只读 `_finished` 的循环靠这一下才会退出去看「结束了」。
+        self._chunk_event.set()
 
     def on_reset(self, error_code: int) -> None:
         """对端发来 `RST_STREAM`（本流被中止）。
@@ -169,6 +193,7 @@ class H2Stream:
         self._finished = True
         self._close_reason = CLOSE_PEER_RESET
         self._event.set()
+        self._chunk_event.set()
 
     def on_connection_error(self, exc: RpcTransportError) -> None:
         """连接级故障：把错误转给本流的等待者。
@@ -180,11 +205,12 @@ class H2Stream:
         self._finished = True
         self._close_reason = CLOSE_CONNECTION_ERROR
         self._event.set()
+        self._chunk_event.set()
 
     # ------------------------------------------------------------------ 调用方入口
 
     async def wait_response(self) -> RpcHttpResponse:
-        """等到流收口并返回响应。
+        """等到流收口并返回响应（一元路径；语义与 04-7-1 一致）。
 
         **不带自己的超时**：超时只在 `H2Transport.send()` 一处判（`asyncio.timeout` 包住整段），
         否则同一份预算会写两遍、两处同时到点，排查时看不出到底谁先放弃。
@@ -203,9 +229,50 @@ class H2Stream:
         return RpcHttpResponse(
             status=self._status,
             headers=self._headers,
-            body=bytes(self._body),
+            body=b"".join(self._chunks),
             stream_id=self.stream_id,
         )
+
+    async def wait_headers(self) -> int:
+        """等到响应头（流式打开阶段用：非 200 与建连失败都在这里落地）。
+
+        Returns:
+            int: `:status` 数值。
+
+        Raises:
+            RpcTransportClosedError: 等头期间连接故障 / 对端 reset / 未收头即结束。
+        """
+        while self._status == 0 and not self._finished:
+            await self._event.wait()
+            self._event.clear()
+        if self._error is not None:
+            # 头没到就以错误收口：连接故障 / 对端 reset 都会先把 `_error` 放进来，原样给出去
+            # ——「对端 reset 了」比「HTTP 0」有用得多。
+            raise self._error
+        return self._status
+
+    async def read_chunk(self) -> bytes | None:
+        """读下一块响应体字节（流式路径）。
+
+        **顺序是先取队列、再看收口**：`END_STREAM` 之前到达的字节块必须全部交出去，否则末帧会丢。
+        队列空且已收口时才回 `None`；带着 `_error` 收口（对端 reset / 连接故障 / 本地已中止）则抛错
+        ——「悄悄结束」会让句柄层把一次故障误判成「对方没写收尾帧」。
+
+        Returns:
+            bytes | None: 下一块字节；None 表示已收 `END_STREAM`。
+
+        Raises:
+            RpcTransportError: 本流以错误收口（对端 reset / 连接故障 / 本地已中止）。
+        """
+        while True:
+            if self._chunks:
+                return self._chunks.popleft()
+            if self._finished:
+                if self._error is not None:
+                    raise self._error
+                return None
+            self._chunk_event.clear()
+            await self._chunk_event.wait()
 
     def abort(self, reason: str | None = None) -> bool:
         """本地中止本流（取消 / 超时 / 其它异常）：发 `RST_STREAM(CANCEL)`。
@@ -229,4 +296,11 @@ class H2Stream:
             self._rst_sent = True
             if reason is not None:
                 self._close_reason = reason
+            # 本地中止之后本流不再可读：让 `read_chunk()` / `wait_response()` 的第二个调用方
+            # 拿到「被中止了」而不是「正常结束」（前者才是事实）。这里直接覆盖、不判 `_error`：
+            # `sent` 为真意味着本流还在流表里（没被 reset / 连接故障收口过），此时不可能已有错误；
+            # 即使将来出现，本地中止也是更晚、更准确的那条原因。
+            self._error = RpcTransportClosedError(f"本流已被本地中止（reason={reason or 'cleanup'}）")
+        # 无论发没发帧都要唤醒读者：正卡在 `read_chunk()` 的调用方不该等它自己的超时才醒。
+        self._chunk_event.set()
         return sent
