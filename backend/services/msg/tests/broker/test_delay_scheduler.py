@@ -25,11 +25,11 @@ from datetime import datetime, timedelta
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.delay import DelayRecord, DelayStore
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 pytestmark = pytest.mark.kiwi_id(2417)
 

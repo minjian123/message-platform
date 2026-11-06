@@ -11,10 +11,10 @@ from datetime import UTC, datetime
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame
 
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, classify, error_frame, result_frame
 from bms_msg.errors import ErrorCategory
-from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 
 pytestmark = pytest.mark.kiwi_id(2421)

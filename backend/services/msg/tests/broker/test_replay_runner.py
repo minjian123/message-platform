@@ -28,6 +28,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.db.session import DbSession
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.events.base import EventEnvelope
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
@@ -35,7 +36,6 @@ from bms_msg.broker.replay import ReplayAuditor, ReplayRunner, ReplayService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.models.replay import TASK_CANCELLED, TASK_COMPLETED, TASK_FAILED, TASK_PAUSED, TASK_RUNNING
 from bms_msg.models.topic import MsgTopic
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.replay import ReplayRequest

@@ -24,6 +24,19 @@ from bms_core.api.errors import build_error_response
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
+from bms_core.msgclient.frame import (
+    PROTOCOL_VERSION,
+    Frame,
+    FrameFlags,
+    FrameType,
+    decode_frame,
+)
+from bms_core.msgclient.payload import (
+    KNOWN_CONTENT_TYPES,
+    ensure_compression_flag,
+    normalize_compression,
+    normalize_content_type,
+)
 from bms_core.schemas.common import ApiResponse
 from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel, ValidationError
@@ -77,19 +90,6 @@ from bms_msg.errors import (
     MsgRateLimitedError,
     MsgTenantNotFoundError,
     MsgVersionUnsupportedError,
-)
-from bms_msg.protocol.frame import (
-    PROTOCOL_VERSION,
-    Frame,
-    FrameFlags,
-    FrameType,
-    decode_frame,
-)
-from bms_msg.protocol.payload import (
-    KNOWN_CONTENT_TYPES,
-    ensure_compression_flag,
-    normalize_compression,
-    normalize_content_type,
 )
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant

@@ -8,9 +8,8 @@
 边界：这里只回答「是不是帧形态」，不解析帧、不判业务。
 """
 
+from bms_core.msgclient.frame import FRAME_CONTENT_TYPE
 from fastapi import Request
-
-from bms_msg.protocol.frame import FRAME_CONTENT_TYPE
 
 __all__ = ["is_frame_request"]
 

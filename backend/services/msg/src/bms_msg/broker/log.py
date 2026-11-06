@@ -21,9 +21,9 @@ from datetime import datetime
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 __all__ = [
     "InMemoryMessageStore",

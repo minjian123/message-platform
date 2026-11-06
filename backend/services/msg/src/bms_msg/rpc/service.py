@@ -32,6 +32,9 @@ from contextlib import suppress
 
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.logging import get_logger
+from bms_core.msgclient.deadline import OUTCOME_UNKNOWN, Deadline
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
+from bms_core.msgclient.naming import ensure_rpc_name
 
 from bms_msg.broker.backpressure import RateLimiter
 from bms_msg.core.config import MS_PER_SECOND, RPC_CANCEL_POLL_MS
@@ -44,10 +47,7 @@ from bms_msg.errors import (
     MsgRpcInProgressError,
     MsgRpcMethodNotFoundError,
 )
-from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
-from bms_msg.rpc.deadline import OUTCOME_UNKNOWN, Deadline
 from bms_msg.rpc.idempotency import IdempotencyContext
-from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcCall, RpcHandler, RpcRegistry, RpcReply, RpcStreamHandler
 
 __all__ = ["DisconnectProbe", "exhausted_error", "invoke_rpc", "prepare_handler", "prepare_stream_handler"]

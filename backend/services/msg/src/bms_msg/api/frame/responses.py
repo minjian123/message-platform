@@ -15,9 +15,9 @@ from datetime import datetime
 from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 
 from bms_msg.errors import ErrorCategory
-from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 from bms_msg.schemas.transport import ConnectionInfo, StreamOpen
 

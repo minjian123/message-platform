@@ -13,12 +13,12 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
+from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from bms_msg.api.deps import get_rate_limiter
 from bms_msg.broker.backpressure import RateLimiter, RateLimitTuning
-from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame
 from tests_support.frame_client import frame_bytes, header, post_frame
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
 

@@ -13,10 +13,10 @@ from datetime import UTC, datetime
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, StoredMessage
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore, WaitOutcome
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 pytestmark = pytest.mark.kiwi_id(2425)
 

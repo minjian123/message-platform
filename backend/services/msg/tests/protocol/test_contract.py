@@ -7,10 +7,7 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
-from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.frame import (
     FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
     MAX_FRAME_HEADER_BYTES,
@@ -18,7 +15,10 @@ from bms_msg.protocol.frame import (
     PROTOCOL_VERSION,
     FrameType,
 )
-from bms_msg.protocol.payload import DEFAULT_CONTENT_TYPE, KNOWN_COMPRESSIONS, KNOWN_CONTENT_TYPES
+from bms_core.msgclient.payload import DEFAULT_CONTENT_TYPE, KNOWN_COMPRESSIONS, KNOWN_CONTENT_TYPES
+from pydantic import BaseModel
+
+from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 
 pytestmark = pytest.mark.kiwi_id(2421)

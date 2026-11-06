@@ -21,6 +21,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from bms_core.core.exceptions import ParamError
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import decode_frame
+from bms_core.msgclient.naming import ensure_rpc_name
 from fastapi import Request, Response
 
 from bms_msg.api.deps import DataPlaneTenantDep, IdempotencyStoreDep, RateLimiterDep, RpcRegistryDep
@@ -44,11 +47,8 @@ from bms_msg.errors import (
     MsgFrameInvalidError,
     MsgVersionUnsupportedError,
 )
-from bms_msg.protocol.frame import decode_frame
 from bms_msg.rpc.cancel import ensure_not_cancelled
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
-from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.rpc.service import invoke_rpc
 from bms_msg.tenant.context import CurrentTenant

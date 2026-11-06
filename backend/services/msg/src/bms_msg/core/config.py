@@ -8,6 +8,44 @@ import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
+# 07B 06_01 步 1：RPC 协议常量整体上移 bms_core.msgclient.constants（单一事实源在基座）。
+# 用显式赋值转发（而非 `from ... import`），既让 `from bms_msg.core.config import RPC_*` 零改动，
+# 也不会被 ruff 当作未使用的 re-export import 删掉。
+from bms_core.msgclient import constants as _rpc_constants
+
+RATE_LIMIT_RPC_PER_SECOND = _rpc_constants.RATE_LIMIT_RPC_PER_SECOND
+RPC_CALLER_HEADER = _rpc_constants.RPC_CALLER_HEADER
+RPC_CALLER_MAX_LENGTH = _rpc_constants.RPC_CALLER_MAX_LENGTH
+RPC_CANCEL_POLL_MS = _rpc_constants.RPC_CANCEL_POLL_MS
+RPC_CIRCUIT_FAILURE_THRESHOLD = _rpc_constants.RPC_CIRCUIT_FAILURE_THRESHOLD
+RPC_CIRCUIT_HALF_OPEN_MAX_CALLS = _rpc_constants.RPC_CIRCUIT_HALF_OPEN_MAX_CALLS
+RPC_CIRCUIT_OPEN_MS = _rpc_constants.RPC_CIRCUIT_OPEN_MS
+RPC_CIRCUIT_WINDOW_MS = _rpc_constants.RPC_CIRCUIT_WINDOW_MS
+RPC_CLIENT_TIMEOUT_SLACK_MS = _rpc_constants.RPC_CLIENT_TIMEOUT_SLACK_MS
+RPC_DEADLINE_HEADER = _rpc_constants.RPC_DEADLINE_HEADER
+RPC_DEADLINE_MAX_MS = _rpc_constants.RPC_DEADLINE_MAX_MS
+RPC_DEFAULT_TIMEOUT_MS = _rpc_constants.RPC_DEFAULT_TIMEOUT_MS
+RPC_IDEMPOTENCY_IN_PROGRESS_MS = _rpc_constants.RPC_IDEMPOTENCY_IN_PROGRESS_MS
+RPC_IDEMPOTENCY_TTL_MS = _rpc_constants.RPC_IDEMPOTENCY_TTL_MS
+RPC_METHOD_MAX_LENGTH = _rpc_constants.RPC_METHOD_MAX_LENGTH
+RPC_METHOD_PATTERN = _rpc_constants.RPC_METHOD_PATTERN
+RPC_REMAINING_MS_HEADER = _rpc_constants.RPC_REMAINING_MS_HEADER
+RPC_RETURN_RESERVE_MS = _rpc_constants.RPC_RETURN_RESERVE_MS
+RPC_RETRY_BASE_MS = _rpc_constants.RPC_RETRY_BASE_MS
+RPC_RETRY_CAP_MS = _rpc_constants.RPC_RETRY_CAP_MS
+RPC_RETRY_MAX_ATTEMPTS = _rpc_constants.RPC_RETRY_MAX_ATTEMPTS
+RPC_RETRY_MAX_BUDGET = _rpc_constants.RPC_RETRY_MAX_BUDGET
+RPC_RETRY_MULTIPLIER = _rpc_constants.RPC_RETRY_MULTIPLIER
+RPC_SERVICE_MAX_LENGTH = _rpc_constants.RPC_SERVICE_MAX_LENGTH
+RPC_SERVICE_PATTERN = _rpc_constants.RPC_SERVICE_PATTERN
+RPC_STREAM_CLIENT_IDLE_MS = _rpc_constants.RPC_STREAM_CLIENT_IDLE_MS
+RPC_STREAM_COALESCE_BYTES = _rpc_constants.RPC_STREAM_COALESCE_BYTES
+RPC_STREAM_COALESCE_FRAMES = _rpc_constants.RPC_STREAM_COALESCE_FRAMES
+RPC_STREAM_IDLE_MS = _rpc_constants.RPC_STREAM_IDLE_MS
+RPC_TENANT_HEADER = _rpc_constants.RPC_TENANT_HEADER
+RPC_TRACE_HEADER = _rpc_constants.RPC_TRACE_HEADER
+RPC_USED_MS_HEADER = _rpc_constants.RPC_USED_MS_HEADER
+
 MIN_PARTITION_COUNT = 1
 """分区数下界（0 个分区无法承载消息）。"""
 
@@ -555,175 +593,3 @@ DELAY_METRICS_KEY_LIMIT = 200
 # ---------------------------------------------------------------------------
 # 04-1 RPC 一元调用：路径形态 / 调用方标识 / 客户端兜底超时 / RPC 速率
 # ---------------------------------------------------------------------------
-
-RPC_SERVICE_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,64}$")
-"""RPC 服务标识形态（与主题名的字符集同尺：字母数字 + `.` `_` `-`）。"""
-
-RPC_METHOD_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
-"""RPC 方法名形态（比服务标识宽一档：方法名常带前缀，如 `user.get_by_id`）。"""
-
-RPC_SERVICE_MAX_LENGTH = 64
-"""服务标识长度上限（与 `RPC_SERVICE_PATTERN` 同宽；契约层 `10001`）。"""
-
-RPC_METHOD_MAX_LENGTH = 128
-"""方法名长度上限（与 `RPC_METHOD_PATTERN` 同宽；契约层 `10001`）。"""
-
-RPC_CALLER_MAX_LENGTH = 128
-"""调用方服务标识长度上限（与服务标识同尺；非鉴权字段，只做透传与记录）。"""
-
-RPC_DEFAULT_TIMEOUT_MS = 30_000
-"""缺省预算（毫秒）：调用方未给 `deadline_ms` 时的缺省值，同时是客户端本地超时的基准。
-
-04-2 起这个常量就是「缺省 deadline」本身（此前只是客户端兜底超时）；与 `SUBSCRIBE_MAX_WAIT_MS`
-同尺度，运维只记一个时间量级。
-"""
-
-RPC_TENANT_HEADER = "X-Tenant-ID"
-"""租户来源头（基座中间件的显式来源；与子域名 / 令牌租户位同一解析链，首个命中即止）。"""
-
-RPC_CALLER_HEADER = "X-Caller-Service"
-"""调用方服务标识头（优先级高于帧头 / JSON 体的 `caller`）。"""
-
-RPC_TRACE_HEADER = "X-Trace-Id"
-"""链路标识头（优先级高于帧头 / JSON 体的 `trace_id`）。"""
-
-RATE_LIMIT_RPC_PER_SECOND = 0
-"""RPC 速率（次/秒，按 `(tenant, service)` 计；0 = 不限）。缺省关闭，数值由 05-3 / 8B_12 给。
-
-与生产限流（tenant / namespace+topic 两级）**互不消耗**：大消息发布打满 topic 桶不连带拒 RPC。
-"""
-
-# ---------------------------------------------------------------------------
-# 04-2 超时传播与取消：预算字段 / 上限 / 返回余量 / 客户端冗余 / 回传头
-# ---------------------------------------------------------------------------
-
-RPC_DEADLINE_HEADER = "deadline_ms"
-"""预算字段名（帧头与 JSON 体**同名**；相对剩余毫秒）。
-
-同名是有意的：一个量只有一种写法，文档 / SDK / 用例不必在两套名字之间做映射；也因此不额外引入
-`X-Deadline-Ms` 之类的 HTTP 头（三处承载就要定三次优先序）。
-"""
-
-RPC_DEADLINE_MAX_MS = 600_000
-"""预算上限（毫秒，10 分钟；与订阅 `max_seconds` 上限同尺）：越界按契约层 `10001` 拒绝。
-
-`0` 是合法值（预算立即耗尽 → `350004`），用于「只探活不执行」的调用方。
-"""
-
-RPC_RETURN_RESERVE_MS = 50
-"""返回余量（毫秒）：传给下游的预算 = 本跳剩余 − 该值。
-
-固定值而非比例：小预算按比例扣出来是 0（12ms 的 10% 毫无意义），大预算按比例又扣太多。
-本值只回答「回程至少需要多久」，与预算大小无关。预算 < 该值时下游预算归 0 → 下游预检即 `350004`
-（连回程都不够的时间，派下去只会白跑）。
-"""
-
-RPC_CLIENT_TIMEOUT_SLACK_MS = 200
-"""客户端本地超时相对预算的冗余（毫秒）。
-
-守住「客户端超时 > 服务端处理超时」：服务端先到点、先回 `350004`，调用方才能看到「结果未知」；
-反过来是客户端先放弃、服务端白跑，且调用方只看到本地超时、拿不到任何产品码。
-"""
-
-RPC_USED_MS_HEADER = "X-Rpc-Used-Ms"
-"""本次调用已用毫秒（JSON 形态回传；只读、不参与判定）。"""
-
-RPC_REMAINING_MS_HEADER = "X-Rpc-Remaining-Ms"
-"""本次调用剩余毫秒（JSON 形态回传；夹取到 0）。"""
-
-RPC_CANCEL_POLL_MS = 50
-"""取消轮询间隔（毫秒，04-2）：执行期探测 `request.is_disconnected()` 的节拍。
-
-**为什么必须轮询**：hypercorn 0.18 收到 `RST_STREAM` 时只 `app_put({"type": "http.disconnect"})`
-并标记流关闭，**不 cancel** 运行中的任务（源码 `protocol/http_stream.py` 的 `StreamClosed` 分支）；
-一元 RPC 的 handler 是纯计算、不写流，走不到「写失败才取消生成器」那条路（03-1 验的是流式响应）。
-于是断开只能在执行期主动探测——Starlette 的 `is_disconnected()` 正是对队列的非阻塞探测。
-
-与仓内其它节流同尺度（十毫秒级）：取消延迟 ≤ 50ms，探测成本是一次队列读。
-"""
-
-# ---------------------------------------------------------------------------
-# 04-3-1 服务端流式：流空闲超时 / 攒批上界
-# ---------------------------------------------------------------------------
-
-RPC_STREAM_IDLE_MS = 60_000
-"""流空闲超时（毫秒）：连续这么久没有帧写出即结束流并发 `350024`。
-
-**与连接心跳分层**（04-3 决策 7）：心跳（10s 探 / 30s 判死，03-4）管「连接还活着吗」，本阈值只看
-「这条流还有没有数据」。取 60s 而不是 30s：一条正常的长流允许较长的思考期，两侧同时到点还会让
-排障时分不清谁先放弃（客户端 90s 兜底，阈值刻意错开）。
-"""
-
-RPC_STREAM_COALESCE_BYTES = 64 * 1024
-"""攒批字节上界（64 KiB）：累积到该字节数就交出一批，不再继续向处理器索取。
-
-与 `RPC_STREAM_COALESCE_FRAMES` 同时生效、先到者触发。**写死常量、不做配置**：攒批是性能细节而非
-契约，能配的阈值（inflight 双阈值）已经有两个，再加一个只会让定参时更不知道信谁。
-"""
-
-RPC_STREAM_COALESCE_FRAMES = 8
-"""攒批帧数上界（8 帧）：攒批让「已产出未写出」成为真实在途量，`InflightUsage` 双阈值才有意义。
-
-若一帧一 `yield`，`yield` 返回即代表已写出、在途恒 ≤1 帧，双阈值永远不可达（等于装饰）。
-"""
-
-# ---------------------------------------------------------------------------
-# 04-3-2 客户端流式消费：单次读取的空闲上限
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# 04-4 错误语义与幂等重试：退避 / 预算 / 熔断 / 幂等键 TTL
-# ---------------------------------------------------------------------------
-
-RPC_RETRY_MAX_ATTEMPTS = 2
-"""最大重试次数（不含首次；共 3 次尝试）。
-
-对齐 bms `ServiceCallPolicy` 的 `DEFAULT_MAX_RETRIES = 2`，让 04-5 适配层无需换算。
-"""
-
-RPC_RETRY_BASE_MS = 100
-"""初始退避基数（毫秒）：对齐 bms `DEFAULT_RETRY_BACKOFF = 0.1s`，换算成毫秒整数。"""
-
-RPC_RETRY_MULTIPLIER = 2
-"""退避倍数（`base * multiplier ** (attempt - 1)`）；与 bms 指数退避同式。"""
-
-RPC_RETRY_CAP_MS = 2_000
-"""退避封顶（毫秒）：`Retry-After` 与计算退避都夹到这个值，防止服务端建议值把调用拖死。"""
-
-RPC_RETRY_MAX_BUDGET = 2
-"""调用链共享的重试预算上限（次数）：A→B→C 各跳共用，防重试风暴。"""
-
-RPC_CIRCUIT_FAILURE_THRESHOLD = 5
-"""熔断阈值：窗口内**连续**失败达到该次数即打开。
-
-取连续失败而非失败率：低流量 RPC 服务凑不够比例阈值的最小样本就会永不熔断。
-"""
-
-RPC_CIRCUIT_WINDOW_MS = 30_000
-"""熔断计数窗口（毫秒）：窗口内无新失败即清零连续计数。"""
-
-RPC_CIRCUIT_OPEN_MS = 30_000
-"""打开态时长（毫秒）：到点转半开，放一个探测请求。"""
-
-RPC_CIRCUIT_HALF_OPEN_MAX_CALLS = 1
-"""半开期最大在途探测数：防恢复瞬间被并发打挂（RPC 模型 §9）。"""
-
-RPC_IDEMPOTENCY_TTL_MS = 300_000
-"""幂等键有效期（毫秒，5 分钟）：覆盖最长重试窗口，与 bms `REPLAY_WINDOW = 300` 同量级。
-
-**首期进程内实现**：不跨实例、不跨重启；多副本须换共享存储（8B_05）。
-"""
-
-RPC_IDEMPOTENCY_IN_PROGRESS_MS = 100
-"""重复请求「首次仍在执行」时的建议重试间隔（毫秒）；与退避基数同尺度。"""
-
-RPC_STREAM_CLIENT_IDLE_MS = 90_000
-"""客户端读空闲上限（毫秒，90s）：单次 `read()` 连续这么久没有拿到任何字节即本地放弃并发 `RST_STREAM`。
-
-**与一元超时分开**（04-3-2 §5.5）：一元的本地超时是「预算 + 余量」包住整次调用；流式不能照搬——
-预算 30s 的流 30s 后必被本地掐断，哪怕服务端正正常推、调用方也没意见，长流等于不可用。整条流的
-期限由**服务端预算**兜底（服务端到点发 `350004`），客户端只兜「长时间没有任何数据」。
-
-**与服务端 `RPC_STREAM_IDLE_MS`（60s）刻意错开 30s**：服务端先收尾、客户端后兜底，排障时一眼能
-分清是谁先放弃；服务端卡死（连收尾帧都发不出）时才轮到这条 90s 生效，且 `RST` 只作用于本流。
-"""

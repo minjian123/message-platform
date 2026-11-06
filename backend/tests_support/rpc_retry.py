@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from bms_msg.client.transport import RpcHttpResponse
-from bms_msg.protocol.frame import FrameFlags, FrameType, encode_frame
+from bms_core.msgclient.frame import FrameFlags, FrameType, encode_frame
+from bms_core.msgclient.transport import RpcHttpResponse
+
 from tests_support.rpc_transport import ScriptedRpcTransport
 
 __all__ = ["FakeClock", "FixedJitter", "error_response", "result_response", "scripted"]

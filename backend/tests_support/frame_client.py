@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bms_core.msgclient.frame import FrameFlags, encode_frame
 from httpx import AsyncClient, Response
-
-from bms_msg.protocol.frame import FrameFlags, encode_frame
 
 __all__ = [
     "CONSUMER",

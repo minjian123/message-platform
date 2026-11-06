@@ -18,11 +18,11 @@ import pytest
 from bms_core.core.config import Settings
 from bms_core.core.run import serve_service
 from bms_core.models.base import Base
+from bms_core.msgclient.frame import FrameFlags, FrameType, encode_frame
 from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from bms_msg.protocol.frame import FrameFlags, FrameType, encode_frame
 from bms_msg.rpc.registry import RpcCall, RpcReply
 from tests_support.frame_app import build_frame_app
 from tests_support.frame_client import DEMO_HEADERS, FRAME_TYPE

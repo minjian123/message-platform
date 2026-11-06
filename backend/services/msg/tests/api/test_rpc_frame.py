@@ -15,16 +15,16 @@ import base64
 from collections.abc import AsyncIterator
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient, Response
-
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.frame import (
     Frame,
     FrameFlags,
     FrameType,
     decode_frame,
     encode_frame,
 )
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient, Response
+
 from tests_support.frame_client import DEMO_HEADERS, FRAME_TYPE, frame_bytes, header, post_frame
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
 

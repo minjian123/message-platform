@@ -15,17 +15,15 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
 import pytest
-from structlog.testing import capture_logs
-
-from bms_msg.client.transport import (
+from bms_core.msgclient.transport import (
     H2Transport,
     RpcHttpRequest,
     RpcRequestTrace,
     RpcTransportClosedError,
     RpcTransportTimeoutError,
 )
-from bms_msg.client.transport.connection import H2ClientConnection
-from bms_msg.client.transport.stream import (
+from bms_core.msgclient.transport.connection import H2ClientConnection
+from bms_core.msgclient.transport.stream import (
     CLOSE_CANCELLED,
     CLOSE_CONNECTION_ERROR,
     CLOSE_DONE,
@@ -35,6 +33,8 @@ from bms_msg.client.transport.stream import (
     H2Stream,
     abort_reason_of,
 )
+from structlog.testing import capture_logs
+
 from tests_support.h2_server import H2TestServer
 
 pytestmark = pytest.mark.kiwi_id(2436)

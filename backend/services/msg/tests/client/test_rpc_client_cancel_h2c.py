@@ -30,12 +30,12 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.config import Settings
 from bms_core.core.run import serve_service
 from bms_core.models.base import Base
+from bms_core.msgclient.rpc import RpcClient, StaticInstanceProvider
+from bms_core.msgclient.transport import H2Transport
 from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from bms_msg.client.rpc import RpcClient, StaticInstanceProvider
-from bms_msg.client.transport import H2Transport
 from bms_msg.rpc.registry import RpcCall, RpcReply
 from tests_support.frame_app import build_frame_app
 from tests_support.frame_client import DEMO_HEADERS

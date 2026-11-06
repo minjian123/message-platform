@@ -7,9 +7,8 @@
 
 from __future__ import annotations
 
-from bms_msg.protocol.codec import decode_header, encode_header
-from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.codec import decode_header, encode_header
+from bms_core.msgclient.frame import (
     FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
     FRAME_MAGIC,
@@ -27,7 +26,7 @@ from bms_msg.protocol.frame import (
     decode_frames,
     encode_frame,
 )
-from bms_msg.protocol.payload import (
+from bms_core.msgclient.payload import (
     DEFAULT_CONTENT_TYPE,
     KNOWN_COMPRESSIONS,
     KNOWN_CONTENT_TYPES,
@@ -35,6 +34,8 @@ from bms_msg.protocol.payload import (
     normalize_compression,
     normalize_content_type,
 )
+
+from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
 from bms_msg.protocol.validation import PayloadValidationError, PayloadValidator, ValidatorRegistry
 
 __all__ = [

@@ -1,7 +1,7 @@
 """RPC 域出口（任务 04-1 / 04-2）：方法注册表 / 调用契约 / 名称校验 / 预算 / 取消复核。
 
 **这里只导出「不依赖 broker 侧」的东西**：`RpcCall` / `RpcReply` / `RpcRegistry` / `ensure_rpc_name` /
-`Deadline` / `validate_budget_ms` / `ensure_not_cancelled` 与服务端分发无关，客户端（`bms_msg.client`）
+`Deadline` / `validate_budget_ms` / `ensure_not_cancelled` 与服务端分发无关，客户端（`bms_core.msgclient`）
 与 04-5 的 bms 适配都可以安全 import。
 
 `invoke_rpc`（依赖 `broker.backpressure.RateLimiter`）、`open_rpc_stream`（同样依赖 broker 的背压
@@ -9,9 +9,10 @@
 `bms_msg.rpc.stream` / `bms_msg.rpc.builtin` 直取——否则调用方进程会在 import 阶段就把 broker 侧拉进来。
 """
 
+from bms_core.msgclient.deadline import Deadline, validate_budget_ms
+from bms_core.msgclient.naming import ensure_rpc_name
+
 from bms_msg.rpc.cancel import ensure_not_cancelled
-from bms_msg.rpc.deadline import Deadline, validate_budget_ms
-from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import (
     RpcCall,
     RpcHandler,

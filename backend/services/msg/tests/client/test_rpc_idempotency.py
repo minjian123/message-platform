@@ -9,17 +9,17 @@ from __future__ import annotations
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import decode_frame
+from bms_core.msgclient.retry import RetryPolicy
+from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceProvider
 from structlog.testing import capture_logs
 
 from bms_msg.api.rpc.idempotency import idempotency_context
 from bms_msg.api.rpc.request import optional_budget, optional_text
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
-from bms_msg.client.retry import RetryPolicy
-from bms_msg.client.rpc import RpcCallError, RpcClient, StaticInstanceProvider
 from bms_msg.errors import MsgRpcInProgressError
-from bms_msg.protocol.frame import decode_frame
 from bms_msg.rpc.builtin import default_rpc_registry
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.idempotency import (
     IdempotencyContext,
     InProcessIdempotencyStore,
@@ -141,7 +141,7 @@ async def test_idempotent_call_needs_no_key() -> None:
 
 async def test_non_idempotent_without_key_is_blocked() -> None:
     """关闭自动生成键后，非幂等调用遇到可重试错误被阻止，且零重试（任务 §2.4）。"""
-    from bms_msg.client.retry import RpcRetryBlockedError
+    from bms_core.msgclient.retry import RpcRetryBlockedError
 
     transport = scripted(error_response(350005), result_response())
     client = _client(

@@ -24,6 +24,7 @@ from typing import Annotated, cast
 
 from bms_core.core.logging import get_logger
 from bms_core.db.tenant import TenantContext
+from bms_core.msgclient.frame import PROTOCOL_VERSION
 from fastapi import Depends, Request, Response
 
 from bms_msg.api.deps import ConnectionRegistryDep, ConnectionTuningDep
@@ -38,7 +39,6 @@ from bms_msg.broker.connection import (
 from bms_msg.broker.transport import connection_meta
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import MsgConnectionLimitExceededError, MsgError
-from bms_msg.protocol.frame import PROTOCOL_VERSION
 from bms_msg.schemas.transport import ConnectionInfo
 
 __all__ = [

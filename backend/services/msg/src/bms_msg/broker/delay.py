@@ -23,6 +23,12 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
 from bms_core.core.roots import BaseFrameworkObject
+from bms_core.msgclient.payload import (
+    COMPRESSION_NONE,
+    DEFAULT_CONTENT_TYPE,
+    normalize_compression,
+    normalize_content_type,
+)
 
 from bms_msg.broker.delivery import resolve_payload
 from bms_msg.broker.router import TopicRouter
@@ -36,12 +42,6 @@ from bms_msg.core.config import (
 )
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import MsgDelayQuotaExceededError
-from bms_msg.protocol.payload import (
-    COMPRESSION_NONE,
-    DEFAULT_CONTENT_TYPE,
-    normalize_compression,
-    normalize_content_type,
-)
 from bms_msg.schemas.message import PublishRequest
 from bms_msg.services.topic import MAX_LIST_SIZE
 from bms_msg.tenant.context import CurrentTenant

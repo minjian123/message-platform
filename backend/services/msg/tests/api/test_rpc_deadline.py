@@ -17,20 +17,20 @@ from contextlib import suppress
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame
+from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.backpressure import RateLimiter, RateLimitTuning
-from bms_msg.client.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
 from bms_msg.core.config import (
     RPC_DEADLINE_MAX_MS,
     RPC_DEFAULT_TIMEOUT_MS,
     RPC_RETURN_RESERVE_MS,
 )
 from bms_msg.errors import MsgRpcDeadlineExceededError
-from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.registry import RpcCall, RpcRegistry, RpcReply
 from bms_msg.rpc.service import invoke_rpc
 from tests_support.frame_app import build_frame_app

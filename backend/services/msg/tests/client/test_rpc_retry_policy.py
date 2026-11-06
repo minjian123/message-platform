@@ -7,10 +7,9 @@ fake clock + 固定随机源让退避序列精确可断言；04-2「超时 = 结
 from __future__ import annotations
 
 import pytest
-from structlog.testing import capture_logs
-
-from bms_msg.api.frame.responses import classify, error_frame
-from bms_msg.client.retry import (
+from bms_core.msgclient.deadline import OUTCOME_UNKNOWN
+from bms_core.msgclient.frame import decode_frame
+from bms_core.msgclient.retry import (
     JitterMode,
     RetryBudget,
     RetryDecision,
@@ -23,16 +22,17 @@ from bms_msg.client.retry import (
     parse_retry_after,
     release_budget,
 )
-from bms_msg.client.rpc import (
+from bms_core.msgclient.rpc import (
     RpcCallError,
     RpcCallTimeoutError,
     RpcClient,
     StaticInstanceProvider,
     error_of_frame,
 )
+from structlog.testing import capture_logs
+
+from bms_msg.api.frame.responses import classify, error_frame
 from bms_msg.errors import ErrorCategory, Outcome
-from bms_msg.protocol.frame import decode_frame
-from bms_msg.rpc.deadline import OUTCOME_UNKNOWN
 from tests_support.rpc_retry import (
     FakeClock,
     FixedJitter,
@@ -226,7 +226,7 @@ def test_parse_retry_after(headers: tuple[tuple[str, str], ...], expected: int |
 
 async def test_retry_after_http_header_is_respected() -> None:
     """HTTP 429 的 `Retry-After` 作为下限：取 max(退避, 建议) 并夹到 cap。"""
-    from bms_msg.client.transport import RpcHttpResponse
+    from bms_core.msgclient.transport import RpcHttpResponse
 
     clock = FakeClock()
     limited = RpcHttpResponse(status=429, headers=(("Retry-After", "3"),), body=b"", stream_id=1)
@@ -340,7 +340,7 @@ def _decide(error: RpcCallError, **kwargs: object) -> object:
 
 def test_decide_retry_short_circuits() -> None:
     """六步短路逐条固定：类别 / unknown 无键 / transient 但不可重试 / 次数 / 预算 / 幂等门槛。"""
-    from bms_msg.client.retry import RpcRetryBlockedError
+    from bms_core.msgclient.retry import RpcRetryBlockedError
 
     assert _decide(RpcCallError(10001, "x", category=ErrorCategory.PARAM_ERROR)) is None
     assert _decide(RpcCallError(350023, "x", category=ErrorCategory.BUSINESS_REJECT)) is None

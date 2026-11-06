@@ -15,6 +15,7 @@
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.msgclient.frame import PROTOCOL_VERSION, FrameType, decode_frame
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -24,7 +25,6 @@ from bms_msg.api.frame.guard import HEARTBEAT_GUARD, HeartbeatRecordDep, connect
 from bms_msg.api.frame.media import is_frame_request
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, error_frame, result_frame
 from bms_msg.errors import MsgError, MsgErrorCode, MsgFrameInvalidError
-from bms_msg.protocol.frame import PROTOCOL_VERSION, FrameType, decode_frame
 
 __all__ = ["router"]
 

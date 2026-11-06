@@ -28,13 +28,13 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.config import Settings
 from bms_core.core.run import serve_service
 from bms_core.models.base import Base
+from bms_core.msgclient.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.transport import H2Transport
 from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from structlog.testing import capture_logs
 
-from bms_msg.client.rpc import RpcCallTimeoutError, RpcClient, StaticInstanceProvider
-from bms_msg.client.transport import H2Transport
 from bms_msg.rpc.registry import RpcCall, RpcReply
 from tests_support.frame_app import build_frame_app
 from tests_support.frame_client import DEMO_HEADERS
@@ -307,7 +307,7 @@ async def test_aclose_stops_server_producer(app: FastAPI) -> None:
 
 async def test_client_idle_aborts_stream(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """空闲兜底：服务端只推 1 帧再不出声 → 本地 20ms 后放弃、发 `RST_STREAM`，服务端流被释放。"""
-    monkeypatch.setattr("bms_msg.client.stream.RPC_STREAM_CLIENT_IDLE_MS", IDLE_MS)
+    monkeypatch.setattr("bms_core.msgclient.stream.RPC_STREAM_CLIENT_IDLE_MS", IDLE_MS)
 
     async for port in _serve(app):
         transport = H2Transport()

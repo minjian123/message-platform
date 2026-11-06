@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import pytest
 from bms_core.core.exceptions import ParamError
-
-from bms_msg.errors import MsgFrameInvalidError
-from bms_msg.protocol.payload import (
+from bms_core.msgclient.payload import (
     COMPRESSION_GZIP,
     COMPRESSION_NONE,
     COMPRESSION_SNAPPY,
@@ -37,6 +35,8 @@ from bms_msg.protocol.payload import (
     payload_contract,
     split_content_type,
 )
+
+from bms_msg.errors import MsgFrameInvalidError
 
 pytestmark = pytest.mark.kiwi_id(2423)
 

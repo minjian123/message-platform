@@ -22,6 +22,7 @@ from typing import Annotated
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import ParamError
+from bms_core.msgclient.deadline import Deadline
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Request, Response
@@ -46,7 +47,6 @@ from bms_msg.core.config import (
 )
 from bms_msg.errors import MsgErrorCode
 from bms_msg.rpc.cancel import ensure_not_cancelled
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.service import invoke_rpc
 from bms_msg.schemas.rpc import RpcRequest, RpcResult
 

@@ -34,6 +34,8 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import BizError
 from bms_core.core.logging import get_logger
 from bms_core.core.roots import BaseValueObject
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
 
 from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage, RateLimiter
 from bms_msg.core.config import (
@@ -44,8 +46,6 @@ from bms_msg.core.config import (
     RPC_STREAM_IDLE_MS,
 )
 from bms_msg.errors import MsgPayloadTooLargeError, MsgRpcDeadlineExceededError, MsgRpcStreamIdleError
-from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.registry import RpcCall, RpcRegistry, RpcReply
 from bms_msg.rpc.service import DisconnectProbe, exhausted_error, prepare_stream_handler
 

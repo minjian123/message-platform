@@ -18,14 +18,14 @@ import socket
 from collections.abc import Callable
 
 import pytest
-
-from bms_msg.client.transport import (
+from bms_core.msgclient.transport import (
     H2Transport,
     RpcHttpRequest,
     RpcTransportClosedError,
     RpcTransportTimeoutError,
 )
-from bms_msg.client.transport.stream import CLOSE_CANCELLED
+from bms_core.msgclient.transport.stream import CLOSE_CANCELLED
+
 from tests_support.h2_server import H2TestServer
 
 pytestmark = pytest.mark.kiwi_id(2438)

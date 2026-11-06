@@ -21,6 +21,7 @@ from enum import StrEnum
 from typing import Annotated
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_core.schemas.base import (
     CONTRACT_COLLECTION,
     CONTRACT_STABLE_DICT,
@@ -38,7 +39,6 @@ from bms_msg.core.config import (
     SUBSCRIBE_MAX_WAIT_LIMIT_MS,
     SUBSCRIBE_MAX_WAIT_MS,
 )
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, PARTITION_FIELD, TOPIC_FIELD
 
 __all__ = [

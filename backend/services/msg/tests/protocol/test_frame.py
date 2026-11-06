@@ -8,9 +8,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-
-from bms_msg.errors import MsgFrameInvalidError, MsgPayloadTooLargeError, MsgVersionUnsupportedError
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.frame import (
     FRAME_HEADER_BYTES,
     FRAME_MAGIC,
     MAX_FRAME_HEADER_BYTES,
@@ -21,6 +19,8 @@ from bms_msg.protocol.frame import (
     decode_frames,
     encode_frame,
 )
+
+from bms_msg.errors import MsgFrameInvalidError, MsgPayloadTooLargeError, MsgVersionUnsupportedError
 
 pytestmark = pytest.mark.kiwi_id(2421)
 

@@ -14,8 +14,8 @@ import asyncio
 from collections.abc import Callable
 
 import pytest
+from bms_core.msgclient.transport import H2Transport, RpcHttpRequest, RpcTransportClosedError
 
-from bms_msg.client.transport import H2Transport, RpcHttpRequest, RpcTransportClosedError
 from tests_support.h2_server import H2TestServer
 
 pytestmark = pytest.mark.kiwi_id(2435)

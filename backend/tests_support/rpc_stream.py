@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from bms_msg.protocol.frame import Frame, FrameFlags, FrameType, decode_frames
+from bms_core.msgclient.frame import Frame, FrameFlags, FrameType, decode_frames
 
 __all__ = [
     "FRAME_TYPE",

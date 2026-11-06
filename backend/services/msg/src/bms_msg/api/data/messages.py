@@ -32,6 +32,7 @@ from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
+from bms_core.msgclient.frame import FrameType
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, params
@@ -73,7 +74,6 @@ from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
 from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import MsgErrorCode, MsgRateLimitedError
-from bms_msg.protocol.frame import FrameType
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
     AckRequest,

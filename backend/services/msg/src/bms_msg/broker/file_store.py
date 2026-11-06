@@ -29,6 +29,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.log import MessageStore, PartitionNotBoundError, SegmentMeta, StoredMessage
 from bms_msg.broker.offset import OffsetRealigner
@@ -71,7 +72,6 @@ from bms_msg.core.config import (
     SEGMENT_ROLL_MS,
     TIME_INDEX_INTERVAL_MS,
 )
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 __all__ = [
     "FileMessageStore",

@@ -16,10 +16,10 @@ from typing import Any, cast
 
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
+from bms_core.msgclient.frame import Frame, FrameFlags, FrameType
+from bms_core.msgclient.payload import COMPRESSION_NONE, normalize_compression
 
 from bms_msg.errors import MsgFrameInvalidError
-from bms_msg.protocol.frame import Frame, FrameFlags, FrameType
-from bms_msg.protocol.payload import COMPRESSION_NONE, normalize_compression
 
 __all__ = [
     "MAX_HEADER_TEXT",

@@ -21,6 +21,7 @@ from typing import Any, cast
 import pytest
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.plugin import default_plugin_registry
+from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame, encode_frame
 from bms_core.registry.products import load_product_manifest
 from bms_core.services.module_registry import register_error_code_records, reset_error_code_records
 from fastapi import FastAPI
@@ -30,7 +31,6 @@ from bms_msg.api.deps import get_connection_tuning
 from bms_msg.api.frame import guard as guard_module
 from bms_msg.broker.connection import ConnectionTuning
 from bms_msg.errors import MsgErrorCode, register_msg_error_mapper
-from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame, encode_frame
 from tests_support.frame_app import build_frame_app
 
 pytestmark = pytest.mark.kiwi_id(2424)

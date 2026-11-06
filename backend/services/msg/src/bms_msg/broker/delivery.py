@@ -29,6 +29,8 @@ from datetime import UTC, datetime, timedelta
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseValueObject
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
+from bms_core.msgclient.payload import normalize_compression, normalize_content_type
 
 from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage
 from bms_msg.broker.deadletter import (
@@ -50,8 +52,6 @@ from bms_msg.errors import (
     MsgOffsetInvalidError,
     MsgPayloadTooLargeError,
 )
-from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
-from bms_msg.protocol.payload import normalize_compression, normalize_content_type
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 

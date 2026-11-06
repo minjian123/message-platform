@@ -15,6 +15,19 @@ from __future__ import annotations
 from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.frame import (
+    FRAME_CONTENT_TYPE,
+    FRAME_HEADER_BYTES,
+    FRAME_MAGIC,
+    MAX_FRAME_HEADER_BYTES,
+    MAX_FRAME_PAYLOAD_BYTES,
+    PROTOCOL_MAJOR,
+    PROTOCOL_MINOR,
+    PROTOCOL_VERSION,
+    FrameFlags,
+    FrameType,
+)
+from bms_core.msgclient.payload import payload_contract
 
 from bms_msg.core.config import (
     CONNECTION_HEARTBEAT_INTERVAL_MS,
@@ -32,19 +45,6 @@ from bms_msg.core.config import (
     SUBSCRIBE_PREFETCH_LIMIT,
 )
 from bms_msg.errors import ErrorCategory, MsgErrorCode
-from bms_msg.protocol.frame import (
-    FRAME_CONTENT_TYPE,
-    FRAME_HEADER_BYTES,
-    FRAME_MAGIC,
-    MAX_FRAME_HEADER_BYTES,
-    MAX_FRAME_PAYLOAD_BYTES,
-    PROTOCOL_MAJOR,
-    PROTOCOL_MINOR,
-    PROTOCOL_VERSION,
-    FrameFlags,
-    FrameType,
-)
-from bms_msg.protocol.payload import payload_contract
 from bms_msg.rpc.contract import rpc_contract
 
 __all__ = ["FRAME_CONTRACT_KEY", "frame_contract"]

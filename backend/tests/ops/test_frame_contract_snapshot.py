@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 from bms_core.core.plugin import default_plugin_registry
 from bms_core.core.serialization import normalize_collections
+from bms_core.msgclient.frame import MAX_FRAME_HEADER_BYTES, MAX_FRAME_PAYLOAD_BYTES, PROTOCOL_VERSION
 
 from bms_msg.core.config import RPC_STREAM_IDLE_MS
 from bms_msg.protocol.contract import FRAME_CONTRACT_KEY, frame_contract
-from bms_msg.protocol.frame import MAX_FRAME_HEADER_BYTES, MAX_FRAME_PAYLOAD_BYTES, PROTOCOL_VERSION
 from bms_msg.rpc.builtin import default_rpc_registry
 from ops import contract_snapshot
 

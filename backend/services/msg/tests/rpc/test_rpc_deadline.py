@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 from bms_core.core.exceptions import ParamError
+from bms_core.msgclient.deadline import OUTCOME_UNKNOWN, Deadline, validate_budget_ms
 
 from bms_msg.core.config import (
     RPC_DEADLINE_MAX_MS,
@@ -18,7 +19,6 @@ from bms_msg.core.config import (
     RPC_RETURN_RESERVE_MS,
 )
 from bms_msg.rpc.cancel import ensure_not_cancelled
-from bms_msg.rpc.deadline import OUTCOME_UNKNOWN, Deadline, validate_budget_ms
 
 pytestmark = pytest.mark.kiwi_id(2434)
 

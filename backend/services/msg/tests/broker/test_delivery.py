@@ -21,6 +21,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.db.session import DbSession
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.deadletter import DeadLetter, DeadLetterQueue, InMemoryDeadLetterQueue
@@ -40,7 +41,6 @@ from bms_msg.errors import (
     MsgTopicNotFoundError,
 )
 from bms_msg.models.topic import MsgTopic
-from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackReason, NackRequest, PublishRequest
 from bms_msg.schemas.topic import TopicCreateRequest

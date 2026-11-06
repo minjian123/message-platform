@@ -25,13 +25,21 @@
 
 """
 
-from enum import IntEnum, StrEnum
+from enum import IntEnum
 from typing import ClassVar
 
 from bms_core.core.exceptions import BizError, TenantNotFoundError, TenantSuspendedError
 from bms_core.core.logging import get_logger
 from bms_core.core.plugin import register_plugin
 from bms_core.error_mapper.base import BaseErrorMapper
+from bms_core.msgclient.errors import (
+    ErrorCategory,
+    MsgError,
+    MsgFrameInvalidError,
+    MsgPayloadTooLargeError,
+    MsgVersionUnsupportedError,
+    Outcome,
+)
 
 from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS, RPC_IDEMPOTENCY_IN_PROGRESS_MS
 
@@ -74,45 +82,6 @@ MSG_ERROR_MAPPER = "msg"
 """产品码覆盖实现名（配置 `[error_mapper].provider = "msg"`）。"""
 
 _LOGGER = get_logger("bms_msg.errors")
-
-
-class ErrorCategory(StrEnum):
-    """错误类别（04-4）：`classify()` 三元组的第一维，客户端据此推导动作。
-
-    与 `layer` **正交**：`layer` 回答「错在哪一层」，`category` 回答「调用方该怎么办」。
-    同一类别可跨层（如 `transient` 既有 business 的 `350005`，也有 system 的 `350022`）。
-    """
-
-    PARAM_ERROR = "param_error"
-    """参数错误：改参后放弃，不重试。"""
-
-    BUSINESS_REJECT = "business_reject"
-    """业务拒绝：上抛调用方，不重试。"""
-
-    TRANSIENT = "transient"
-    """瞬时故障：指数退避 + 抖动重试。"""
-
-    UNKNOWN = "unknown"
-    """超时 / 结果未知：`retryable=false`，仅在带幂等键时谨慎重试。"""
-
-    SERVER_BUG = "server_bug"
-    """服务端 bug：上抛 + 告警，不自动重试。"""
-
-
-class Outcome(StrEnum):
-    """调用结果语义（04-2 遗留闭合）：`ok` / `unknown` / `failed`。
-
-    StrEnum 的值就是字符串，04-2 既有的 `detail.outcome == "unknown"` 断言零破坏。
-    """
-
-    OK = "ok"
-    """确定成功。"""
-
-    UNKNOWN = "unknown"
-    """结果未知（超时 / 取消：可能已生效，也可能没跑）。"""
-
-    FAILED = "failed"
-    """确定失败（未产生副作用）。"""
 
 
 class MsgErrorCode(IntEnum):
@@ -214,25 +183,6 @@ class MsgErrorCode(IntEnum):
     服务端据此收尾并释放名额，客户端应重开流而不是原地重试。
     与连接心跳（03-4 的 10s / 30s）**不是一件事**：那个判连接死活，本码判流有没有进展。
     """
-
-
-class MsgError(BizError):
-    """msg 业务异常基类（段位基；子类预置码位与 HTTP 状态）。"""
-
-    code_: ClassVar[int]
-    """错误码（子类预置）。"""
-
-    http_status_: ClassVar[int] = 400
-    """HTTP 状态（子类预置；业务失败缺省 400）。"""
-
-    def __init__(self, message: str | None = None, *, data: object | None = None) -> None:
-        """初始化 msg 业务异常。
-
-        Args:
-            message: 提示信息（缺省由前端按 `msg.error.*` 映射）。
-            data: 随附数据（可选）。
-        """
-        super().__init__(type(self).code_, message, http_status=type(self).http_status_, data=data)
 
 
 class MsgNamespaceInvalidError(MsgError):
@@ -355,27 +305,6 @@ class MsgReplayTaskInvalidStateError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.REPLAY_TASK_INVALID_STATE
     http_status_: ClassVar[int] = 409
-
-
-class MsgPayloadTooLargeError(MsgError):
-    """帧或消息体超限（350006 / 413）：上限 1 MiB（header 另限 64 KiB；口径见 03-2 详细设计 §4.6）。"""
-
-    code_: ClassVar[int] = MsgErrorCode.PAYLOAD_TOO_LARGE
-    http_status_: ClassVar[int] = 413
-
-
-class MsgFrameInvalidError(MsgError):
-    """帧格式非法（350018 / 400）：结构、必填头、类型与路径匹配度等协议层判定。"""
-
-    code_: ClassVar[int] = MsgErrorCode.FRAME_INVALID
-    http_status_: ClassVar[int] = 400
-
-
-class MsgVersionUnsupportedError(MsgError):
-    """协议主版本不支持（350019 / 400）：返回后结束该 stream，由客户端断开连接（GOAWAY 归 03-4）。"""
-
-    code_: ClassVar[int] = MsgErrorCode.VERSION_UNSUPPORTED
-    http_status_: ClassVar[int] = 400
 
 
 class MsgConnectionLimitExceededError(MsgError):

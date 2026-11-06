@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.msgclient.frame import FrameType
 
 from bms_msg.core.config import (
     RPC_DEADLINE_HEADER,
@@ -25,7 +26,6 @@ from bms_msg.core.config import (
     RPC_STREAM_IDLE_MS,
 )
 from bms_msg.errors import ErrorCategory, MsgErrorCode
-from bms_msg.protocol.frame import FrameType
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.registry import RpcDeclaration
 

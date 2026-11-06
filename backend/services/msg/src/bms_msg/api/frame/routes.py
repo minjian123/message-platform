@@ -35,6 +35,7 @@ from typing import Annotated, cast
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import BizError, ParamError
+from bms_core.msgclient.frame import FrameType, decode_frame
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Query, Request, params
@@ -108,7 +109,6 @@ from bms_msg.errors import (
     MsgFrameInvalidError,
     MsgTenantNotFoundError,
 )
-from bms_msg.protocol.frame import FrameType, decode_frame
 from bms_msg.schemas.message import ConsumeRequest, MessageItem
 from bms_msg.schemas.transport import (
     ConnectionInfo,

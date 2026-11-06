@@ -16,6 +16,13 @@ from typing import Any, cast
 import pytest
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.plugin import default_plugin_registry, register_plugin
+from bms_core.msgclient.frame import (
+    FRAME_MAGIC,
+    FrameFlags,
+    FrameType,
+    decode_frame,
+    encode_frame,
+)
 from bms_core.permission.base import BasePermissionChecker
 from bms_core.registry.products import load_product_manifest
 from bms_core.services.module_registry import register_error_code_records, reset_error_code_records
@@ -23,13 +30,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from bms_msg.errors import register_msg_error_mapper
-from bms_msg.protocol.frame import (
-    FRAME_MAGIC,
-    FrameFlags,
-    FrameType,
-    decode_frame,
-    encode_frame,
-)
 from tests_support.frame_app import build_frame_app
 
 pytestmark = pytest.mark.kiwi_id(2421)

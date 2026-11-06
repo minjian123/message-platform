@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
+from bms_core.msgclient.frame import FrameType, decode_frames
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
@@ -25,7 +26,6 @@ from bms_msg.api.frame.routes import stream_events, wait_timeout_ms
 from bms_msg.broker.backpressure import default_backpressure_tuning
 from bms_msg.broker.transport import StreamTuning, connection_meta
 from bms_msg.broker.waiter import DeliveryWaiter
-from bms_msg.protocol.frame import FrameType, decode_frames
 from bms_msg.schemas.transport import SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
 from tests_support.frame_client import frame_bytes, header, post_frame

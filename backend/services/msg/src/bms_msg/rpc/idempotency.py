@@ -65,7 +65,7 @@ class InProcessIdempotencyStore:
             clock: 提供 `now_ms()` 的时钟（缺省 `SystemClock()`）。
             ttl_ms: 键有效期（毫秒）。
         """
-        from bms_msg.client.retry import SystemClock
+        from bms_core.msgclient.retry import SystemClock
 
         self._clock = clock if clock is not None else SystemClock()
         self._ttl_ms = ttl_ms

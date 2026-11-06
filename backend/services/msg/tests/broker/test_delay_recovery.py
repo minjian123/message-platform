@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker import delay_file as delay_file_module
 from bms_msg.broker.delay import DelayRecord, InMemoryDelayStore
@@ -34,7 +35,6 @@ from bms_msg.broker.record import (
 )
 from bms_msg.broker.recovery import RecoveryLedger
 from bms_msg.broker.scheduler import DELAY_LAYER_SECOND, DelayScheduler, DelayWheel
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 pytestmark = pytest.mark.kiwi_id(2432)
 

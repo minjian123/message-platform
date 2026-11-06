@@ -10,9 +10,9 @@ from typing import cast
 
 import msgpack
 import pytest
+from bms_core.msgclient.codec import decode_header, encode_header
 
 from bms_msg.errors import MsgFrameInvalidError
-from bms_msg.protocol.codec import decode_header, encode_header
 
 pytestmark = pytest.mark.kiwi_id(2421)
 

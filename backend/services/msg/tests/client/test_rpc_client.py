@@ -18,28 +18,28 @@ from collections.abc import AsyncIterator
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
-from fastapi import FastAPI
-
-from bms_msg.client.rpc import (
-    RpcCallError,
-    RpcCallTimeoutError,
-    RpcClient,
-    StaticInstanceProvider,
-)
-from bms_msg.client.transport import (
-    RpcHttpRequest,
-    RpcHttpResponse,
-    RpcTransportClosedError,
-    RpcTransportProtocolError,
-    RpcTransportTimeoutError,
-)
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.frame import (
     PROTOCOL_VERSION,
     FrameFlags,
     FrameType,
     decode_frame,
     encode_frame,
 )
+from bms_core.msgclient.rpc import (
+    RpcCallError,
+    RpcCallTimeoutError,
+    RpcClient,
+    StaticInstanceProvider,
+)
+from bms_core.msgclient.transport import (
+    RpcHttpRequest,
+    RpcHttpResponse,
+    RpcTransportClosedError,
+    RpcTransportProtocolError,
+    RpcTransportTimeoutError,
+)
+from fastapi import FastAPI
+
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
 from tests_support.rpc_transport import AsgiRpcTransport, ScriptedRpcTransport
 

@@ -25,9 +25,7 @@ from contextlib import AbstractAsyncContextManager, suppress
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
-
-from bms_msg.client.transport import (
+from bms_core.msgclient.transport import (
     RpcHttpRequest,
     RpcHttpResponse,
     RpcTransportClosedError,
@@ -35,6 +33,7 @@ from bms_msg.client.transport import (
     TransportStats,
     TransportStream,
 )
+from fastapi import FastAPI
 
 __all__ = [
     "AsgiRpcTransport",

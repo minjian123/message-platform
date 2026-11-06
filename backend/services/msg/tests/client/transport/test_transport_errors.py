@@ -9,8 +9,7 @@ import socket
 from collections.abc import Callable
 
 import pytest
-
-from bms_msg.client.transport import (
+from bms_core.msgclient.transport import (
     H2Transport,
     RpcHttpRequest,
     RpcTransportClosedError,
@@ -18,7 +17,8 @@ from bms_msg.client.transport import (
     RpcTransportTimeoutError,
     RpcTransportUnsupportedError,
 )
-from bms_msg.client.transport.connection import H2ClientConnection
+from bms_core.msgclient.transport.connection import H2ClientConnection
+
 from tests_support.h2_server import H2TestServer, client_ssl_context, server_tls_context
 
 pytestmark = pytest.mark.kiwi_id(2435)

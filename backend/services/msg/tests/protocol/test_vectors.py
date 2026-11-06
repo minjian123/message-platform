@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from bms_msg.errors import MsgError
-from bms_msg.protocol.codec import encode_header
-from bms_msg.protocol.frame import (
+from bms_core.msgclient.codec import encode_header
+from bms_core.msgclient.frame import (
     MAX_FRAME_HEADER_BYTES,
     Frame,
     decode_frame,
     encode_frame,
 )
+
+from bms_msg.errors import MsgError
 
 pytestmark = pytest.mark.kiwi_id(2421)
 

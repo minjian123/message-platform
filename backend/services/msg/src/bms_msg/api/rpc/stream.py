@@ -25,6 +25,9 @@ from typing import Annotated, cast
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import BizError, ParamError
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import FrameFlags, decode_frame
+from bms_core.msgclient.naming import ensure_rpc_name
 from bms_core.permission.base import require_permission
 from fastapi import Depends, Path, Request, Response
 from fastapi.responses import StreamingResponse
@@ -59,9 +62,6 @@ from bms_msg.errors import (
     MsgFrameInvalidError,
     MsgVersionUnsupportedError,
 )
-from bms_msg.protocol.frame import FrameFlags, decode_frame
-from bms_msg.rpc.deadline import Deadline
-from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.rpc.stream import open_rpc_stream
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from bms_msg.protocol.payload import normalize_content_type
+from bms_core.msgclient.payload import normalize_content_type
 
 __all__ = [
     "PayloadValidationError",

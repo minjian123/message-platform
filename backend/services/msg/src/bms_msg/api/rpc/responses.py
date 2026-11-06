@@ -17,8 +17,8 @@ from __future__ import annotations
 from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.msgclient.frame import PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 
-from bms_msg.protocol.frame import PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 from bms_msg.rpc.registry import RpcReply
 
 __all__ = ["rpc_result_frame", "rpc_stream_frame"]

@@ -15,10 +15,10 @@ from collections.abc import AsyncIterator
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
-from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.rpc.registry import RpcCall, RpcReply
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
 

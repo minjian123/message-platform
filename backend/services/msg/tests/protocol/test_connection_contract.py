@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+from bms_core.msgclient.frame import FrameType
 
 from bms_msg.core.config import (
     CONNECTION_HEARTBEAT_INTERVAL_MS,
@@ -15,7 +16,6 @@ from bms_msg.core.config import (
     MAX_STREAMS_PER_CONNECTION,
 )
 from bms_msg.protocol.contract import frame_contract
-from bms_msg.protocol.frame import FrameType
 
 pytestmark = pytest.mark.kiwi_id(2424)
 

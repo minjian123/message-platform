@@ -27,6 +27,8 @@ from typing import TypedDict
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.msgclient.deadline import Deadline
+from bms_core.msgclient.frame import FrameFlags, FrameType, encode_frame
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from structlog.testing import capture_logs
@@ -40,8 +42,6 @@ from bms_msg.broker.backpressure import (
 )
 from bms_msg.broker.connection import default_connection_tuning
 from bms_msg.errors import MsgTopicNotFoundError
-from bms_msg.protocol.frame import FrameFlags, FrameType, encode_frame
-from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.registry import RpcCall, RpcRegistry, RpcReply
 from bms_msg.rpc.stream import StreamItem, open_rpc_stream
 from tests_support.frame_client import DEMO_HEADERS, FRAME_TYPE, frame_bytes, header, post_frame

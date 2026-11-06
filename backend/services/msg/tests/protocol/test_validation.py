@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import pytest
+from bms_core.msgclient.payload import CONTENT_TYPE_JSON, CONTENT_TYPE_MSGPACK
 
-from bms_msg.protocol.payload import CONTENT_TYPE_JSON, CONTENT_TYPE_MSGPACK
 from bms_msg.protocol.validation import PayloadValidationError, PayloadValidator, ValidatorRegistry
 
 pytestmark = pytest.mark.kiwi_id(2423)

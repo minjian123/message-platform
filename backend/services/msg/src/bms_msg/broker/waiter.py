@@ -24,10 +24,10 @@ from enum import StrEnum
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.roots import BaseFrameworkObject
+from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.log import MessageStore, SegmentMeta, StoredMessage
 from bms_msg.core.config import MAX_LONG_POLL_WAITERS, MS_PER_SECOND
-from bms_msg.protocol.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 __all__ = ["DeliveryWaiter", "NotifyingMessageStore", "WaitKey", "WaitOutcome"]
 

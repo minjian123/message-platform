@@ -25,22 +25,22 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
+from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame, encode_frame
+from bms_core.msgclient.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceProvider
+from bms_core.msgclient.stream import RpcStream
+from bms_core.msgclient.transport import (
+    RpcHttpRequest,
+    RpcTransportClosedError,
+    RpcTransportProtocolError,
+    RpcTransportTimeoutError,
+)
+from bms_core.msgclient.transport.stream import CLOSE_CANCELLED
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from structlog.testing import capture_logs
 
 from bms_msg.api.frame.responses import error_frame
 from bms_msg.api.rpc.responses import rpc_stream_frame
-from bms_msg.client.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceProvider
-from bms_msg.client.stream import RpcStream
-from bms_msg.client.transport import (
-    RpcHttpRequest,
-    RpcTransportClosedError,
-    RpcTransportProtocolError,
-    RpcTransportTimeoutError,
-)
-from bms_msg.client.transport.stream import CLOSE_CANCELLED
-from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame, encode_frame
 from bms_msg.rpc.registry import RpcReply
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
 from tests_support.rpc_transport import AsgiRpcTransport, ScriptedRpcTransport
@@ -539,7 +539,7 @@ async def test_cancel_during_read_aborts_stream() -> None:
 
 async def test_idle_timeout_aborts_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     """单次读空闲超 90s（用例注入 20ms）→ `abort(timeout)` + `RpcCallTimeoutError`。"""
-    monkeypatch.setattr("bms_msg.client.stream.RPC_STREAM_CLIENT_IDLE_MS", 20)
+    monkeypatch.setattr("bms_core.msgclient.stream.RPC_STREAM_CLIENT_IDLE_MS", 20)
     transport = ScriptedRpcTransport(
         stream_chunks=lambda request: [_frame(_rid_of(request), 0, b"x")], stream_hold=True
     )

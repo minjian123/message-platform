@@ -9,11 +9,11 @@ from __future__ import annotations
 import pytest
 from bms_core.circuit.base import CircuitState
 from bms_core.circuit.null import NullCircuitBreaker
+from bms_core.msgclient.circuit import InProcessCircuitBreaker, rpc_dependency
+from bms_core.msgclient.retry import CircuitPolicy, RetryPolicy
+from bms_core.msgclient.rpc import RpcCallError, RpcClient, StaticInstanceProvider
 from structlog.testing import capture_logs
 
-from bms_msg.client.circuit import InProcessCircuitBreaker, rpc_dependency
-from bms_msg.client.retry import CircuitPolicy, RetryPolicy
-from bms_msg.client.rpc import RpcCallError, RpcClient, StaticInstanceProvider
 from tests_support.rpc_retry import FakeClock, FixedJitter, error_response, result_response, scripted
 
 pytestmark = pytest.mark.kiwi_id(2439)
