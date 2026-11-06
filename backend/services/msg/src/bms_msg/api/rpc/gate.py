@@ -20,7 +20,6 @@ from typing import Any, cast
 
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
-from bms_core.core.logging import get_logger
 from fastapi import Request, Response
 
 from bms_msg.api.deps import DataPlaneTenantDep, RateLimiterDep, RpcRegistryDep
@@ -42,14 +41,14 @@ from bms_msg.protocol.frame import (
     decode_frame,
 )
 from bms_msg.protocol.payload import COMPRESSION_NONE, normalize_compression
+from bms_msg.rpc.cancel import ensure_not_cancelled
+from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.rpc.service import invoke_rpc
 from bms_msg.tenant.context import CurrentTenant
 
 __all__ = ["build_rpc_frame_gate"]
-
-_LOGGER = get_logger("bms_msg.rpc")
 
 _MAX_HEADER_TEXT = 128
 """帧头里 `caller` / `trace_id` 的长度上限（与 JSON 体字段同尺；超限即契约层 `10001`）。"""
@@ -202,6 +201,11 @@ async def _handle_rpc_frame(
         return _frame_response(error_frame(code=exc.code, message=str(exc)))
     request_id = _request_id(frame.header)
     try:
+        deadline = Deadline.start(frame.header.get("deadline_ms"))
+    except ParamError as exc:
+        # 预算值非法：契约层，与 JSON 路径同码同形态（错误帧里的 10001）。
+        return _frame_response(error_frame(code=10001, message=str(exc), request_id=request_id))
+    try:
         ensure_rpc_name(service, method)
         _ensure_request_frame(frame, service, method)
         if request_id is None:
@@ -225,18 +229,13 @@ async def _handle_rpc_frame(
             method=method,
             payload=bytes(frame.payload),
             headers=headers,
+            deadline=deadline,
             trace_id=trace_id,
             caller=caller,
+            request_id=request_id,
+            disconnected=request.is_disconnected,
         )
     except MsgError as exc:
-        _LOGGER.info(
-            "msg_rpc",
-            service=service,
-            method=method,
-            request_id=request_id,
-            outcome="business_error",
-            code=exc.code,
-        )
         return _frame_response(
             error_frame(
                 code=exc.code,
@@ -246,8 +245,18 @@ async def _handle_rpc_frame(
                 retry_after_ms=getattr(exc, "retry_after_ms", None),
             )
         )
-    _LOGGER.info("msg_rpc", service=service, method=method, request_id=request_id, outcome="ok")
-    return _frame_response(rpc_result_frame(request_id=request_id, service=service, method=method, reply=reply))
+    # 判定必须紧贴「写响应」：handler 若吞掉取消并正常返回，这里把响应丢掉（详细设计 §5.4）。
+    ensure_not_cancelled()
+    return _frame_response(
+        rpc_result_frame(
+            request_id=request_id,
+            service=service,
+            method=method,
+            reply=reply,
+            used_ms=deadline.spent_ms(),
+            remaining_ms=deadline.remaining_ms(),
+        )
+    )
 
 
 def build_rpc_frame_gate() -> Callable[..., Awaitable[None]]:

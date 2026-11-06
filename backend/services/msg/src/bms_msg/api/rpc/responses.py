@@ -20,7 +20,15 @@ from bms_msg.rpc.registry import RpcReply
 __all__ = ["rpc_result_frame"]
 
 
-def rpc_result_frame(*, request_id: str, service: str, method: str, reply: RpcReply) -> bytes:
+def rpc_result_frame(
+    *,
+    request_id: str,
+    service: str,
+    method: str,
+    reply: RpcReply,
+    used_ms: int,
+    remaining_ms: int,
+) -> bytes:
     """编码 RPC 成功结果帧（`type=rpc` + response 位）。
 
     Args:
@@ -28,6 +36,8 @@ def rpc_result_frame(*, request_id: str, service: str, method: str, reply: RpcRe
         service: 服务标识（回显，便于客户端断言「响应确实是发给这个服务的」）。
         method: 方法名（回显）。
         reply: 处理结果。
+        used_ms: 本次调用已用毫秒（04-2 回传；只读）。
+        remaining_ms: 本次调用剩余毫秒（04-2 回传；夹取到 0）。
 
     Returns:
         bytes: 完整帧字节（header 带 `length`，payload 为结果原始字节）。
@@ -38,6 +48,8 @@ def rpc_result_frame(*, request_id: str, service: str, method: str, reply: RpcRe
     header.set("service", service)
     header.set("method", method)
     header.set("length", len(reply.payload))
+    header.set("used_ms", used_ms)
+    header.set("remaining_ms", remaining_ms)
     header.set("headers", dict(reply.headers.items()))
     return encode_frame(
         frame_type=int(FrameType.RPC),

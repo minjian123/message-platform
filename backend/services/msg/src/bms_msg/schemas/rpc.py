@@ -17,7 +17,7 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.schemas.base import CONTRACT_COLLECTION, CONTRACT_STABLE_DICT, BaseSchema
 from pydantic import Field
 
-from bms_msg.core.config import RPC_CALLER_MAX_LENGTH
+from bms_msg.core.config import RPC_CALLER_MAX_LENGTH, RPC_DEADLINE_MAX_MS
 
 __all__ = ["RpcRequest", "RpcResult"]
 
@@ -36,6 +36,15 @@ class RpcRequest(BaseSchema):
         default=None,
         max_length=RPC_CALLER_MAX_LENGTH,
         description="调用方服务标识（非鉴权字段，只透传与记录；与 HTTP 头冲突时以 HTTP 头为准）",
+    )
+    deadline_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=RPC_DEADLINE_MAX_MS,
+        description=(
+            "剩余预算（毫秒，相对量；缺省 30000）。与帧头 `deadline_ms` 同名字段同一语义；"
+            "服务端扣本跳耗时后把剩余值传给下游，耗尽返回 350004"
+        ),
     )
 
 

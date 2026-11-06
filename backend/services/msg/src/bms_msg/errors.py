@@ -9,7 +9,7 @@
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
   RPC 方法未注册 `350023`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
-  `350004` 仍由架构 05 §5 预留为超时（归 8B_03 RPC deadline），`350005` 由 03-5 按「生产限流」启用；
+  `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
   `350022` 由 02-6 按「存储水位拒绝」启用）。
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
@@ -54,6 +54,7 @@ __all__ = [
     "MsgRateLimitedError",
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
+    "MsgRpcDeadlineExceededError",
     "MsgRpcMethodNotFoundError",
     "MsgStorageWatermarkExceededError",
     "MsgStreamLimitExceededError",
@@ -82,6 +83,14 @@ class MsgErrorCode(IntEnum):
 
     MESSAGE_NOT_FOUND = 350003
     """消息不存在（未投递过，或位点已被保留期清理）。"""
+
+    RPC_DEADLINE_EXCEEDED = 350004
+    """RPC 预算耗尽（`deadline_ms` 到期，或收到时已耗尽）：business / `retryable=false` / 504。
+
+    **「超时 = 结果未知」，不是失败**：不得直接重试（需求 04-2 §3.5），是否重试由 04-4 按幂等键判定。
+    `data` / `detail` 带 `outcome=unknown` 与已用 / 剩余毫秒。与相邻码分工：`350023` 方法未注册
+    （改参无用，应查对端能力）、`350005` 速率超配额（退避可解）、`350006` 参数或结果过大。
+    """
 
     RATE_LIMITED = 350005
     """生产限流（租户 / 主题速率超出配额）：429 + `Retry-After`，帧形态带 `retry_after_ms`。
@@ -150,7 +159,8 @@ class MsgErrorCode(IntEnum):
 
     与 `10001` 分工：`10001` 是「参数形态非法」（改参可解、协议层）；本码是「对端没有这个方法」
     （改参无用、business 层、`retryable=false`），客户端应去查对端能力而不是重试。
-    `350004` 仍预留为 RPC deadline（04-2），本码不复用也不占用它。
+    `350004` 是预算耗尽（04-2 已启用），与本码同为 business / 不重试但语义不同：那个是「没时间」，
+    这个是「没这个方法」。本码不复用也不占用 `350004`。
     """
 
 
@@ -351,6 +361,17 @@ class MsgRpcMethodNotFoundError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.RPC_METHOD_NOT_FOUND
     http_status_: ClassVar[int] = 404
+
+
+class MsgRpcDeadlineExceededError(MsgError):
+    """RPC 预算耗尽（350004 / 504）：`deadline_ms` 到期，或收到时预算已耗尽。
+
+    `data` 三个字段：`outcome`（固定 `unknown`）、`used_ms`、`remaining_ms`——调用方据此知道
+    「结果未知」而不是「确定失败」（需求 04-2 §3.5）。帧形态进 error 帧的 `detail`。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.RPC_DEADLINE_EXCEEDED
+    http_status_: ClassVar[int] = 504
 
 
 class MsgErrorMapper(BaseErrorMapper):

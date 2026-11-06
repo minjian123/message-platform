@@ -54,6 +54,14 @@ class RpcCall(BaseValueObject):
     caller: str | None = None
     """调用方服务标识（HTTP 头优先，见详细设计 §9.2；非鉴权字段）。"""
 
+    deadline_ms: int | None = None
+    """向下游传播的剩余预算（毫秒；任务 04-2）。
+
+    已扣本跳服务端耗时并减去返回余量（`RPC_RETURN_RESERVE_MS`），即详细设计 §6 的 `downstream`：
+    handler 若要继续调下游，应把这个值原样放进下一次调用的 `deadline_ms`。`None` 表示「未给预算」
+    （只有直接构造 `RpcCall` 的单元场景会出现；运行期两形态恒给值）。
+    """
+
 
 def _empty_headers() -> ConcurrentStableDict[str, str]:
     """空结果头（dataclass 默认工厂；显式标注泛型，避免 strict 模式下退化成 Unknown）。"""

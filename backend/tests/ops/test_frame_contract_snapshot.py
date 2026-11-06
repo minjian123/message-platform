@@ -69,7 +69,22 @@ def test_export_contains_rpc_contract(tmp_path: Path) -> None:
     rpc = payload[FRAME_CONTRACT_KEY]["rpc"]
     assert rpc["frame_type"] == 48
     assert rpc["request_required"] == ["request_id"]
-    assert rpc["errors"] == {"method_not_found": 350023}
+    assert rpc["errors"] == {"method_not_found": 350023, "deadline_exceeded": 350004}
+    # 04-2：预算段只写算法与字段（不写死每跳毫秒数），并有响应回传字段。
+    assert rpc["deadline"] == {
+        "header": "deadline_ms",
+        "encoding": "relative-remaining-ms（相对剩余毫秒；跨机不需要时钟同步）",
+        "default_ms": 30000,
+        "range": [0, 600000],
+        "deduction": (
+            "每跳扣实际服务端耗时（收帧 → handler 入口，monotonic），传下游前再减 return_reserve_ms；下游只接收剩余预算"
+        ),
+        "return_reserve_ms": 50,
+        "on_exhausted": 350004,
+        "outcome": "unknown（超时是「结果未知」，不是失败；不得直接重试）",
+    }
+    assert "deadline_ms" in rpc["request_optional"]
+    assert rpc["response_optional"] == ["used_ms", "remaining_ms"]
     assert rpc["methods"] == [
         {"method": "echo", "service": "demo"},
         {"method": "length", "service": "demo"},

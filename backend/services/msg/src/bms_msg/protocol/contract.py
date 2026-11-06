@@ -241,7 +241,7 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                             "default": SUBSCRIBE_MAX_WAIT_MS,
                             "limit": SUBSCRIBE_MAX_WAIT_LIMIT_MS,
                             "zero": "不挂起（立即返回，等价 03-5 之前的行为）",
-                            "on_timeout": "返回空批次（200），不是错误；350004 留给 RPC deadline",
+                            "on_timeout": "返回空批次（200），不是错误；350004 是 RPC 预算耗尽（04-2），与长轮询无关",
                         }
                     ),
                     "inflight": ConcurrentStableDict(

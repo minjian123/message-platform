@@ -2030,6 +2030,20 @@
             "description": "调用方服务标识（非鉴权字段，只透传与记录；与 HTTP 头冲突时以 HTTP 头为准）",
             "title": "Caller"
           },
+          "deadline_ms": {
+            "anyOf": [
+              {
+                "maximum": 600000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "剩余预算（毫秒，相对量；缺省 30000）。与帧头 `deadline_ms` 同名字段同一语义；服务端扣本跳耗时后把剩余值传给下游，耗尽返回 350004",
+            "title": "Deadline Ms"
+          },
           "headers": {
             "additionalProperties": {
               "type": "string"
@@ -5301,7 +5315,7 @@
     },
     "/rpc/{service}/{method}": {
       "post": {
-        "description": "一元调用（JSON 形态）。\n\n需要 `msg:rpc` 权限（当前无 provider 时恒放行）。`service` / `method` 形态非法由契约层拒绝\n（`10001`）；`payload` 非合法 base64 同码。未注册方法返回 `350023`（404，`layer=business`、\n`retryable=false`），不是 500。参数 / 结果超过 1 MiB 返回 `350006`。\n调用方标识与链路标识走「HTTP 头优先」，两者都会回写进响应头。",
+        "description": "一元调用（JSON 形态）。\n\n需要 `msg:rpc` 权限（当前无 provider 时恒放行）。`service` / `method` 形态非法由契约层拒绝\n（`10001`）；`payload` 非合法 base64 同码。未注册方法返回 `350023`（404，`layer=business`、\n`retryable=false`），不是 500。参数 / 结果超过 1 MiB 返回 `350006`。\n调用方标识与链路标识走「HTTP 头优先」，两者都会回写进响应头。\n\n**预算**（04-2）：`deadline_ms` 缺省 30000、区间 0~600000（越界 `10001`）；耗尽返回 `350004`\n（504，`data.outcome=unknown`）。`used_ms` / `remaining_ms` 随响应头回传，供上游核对透传是否生效。\n取消（`RST_STREAM` / 连接断开）由 `ensure_not_cancelled()` 在写响应前复核，取消后不写响应。",
         "operationId": "invoke_rpc__service___method__post",
         "parameters": [
           {
@@ -5420,6 +5434,7 @@
           "msg-rpc"
         ],
         "x-error-codes": [
+          350004,
           350005,
           350006,
           350011,
@@ -5442,7 +5457,7 @@
       "max_wait_ms": {
         "default": 30000,
         "limit": 60000,
-        "on_timeout": "返回空批次（200），不是错误；350004 留给 RPC deadline",
+        "on_timeout": "返回空批次（200），不是错误；350004 是 RPC 预算耗尽（04-2），与长轮询无关",
         "zero": "不挂起（立即返回，等价 03-5 之前的行为）"
       },
       "metrics": [
@@ -5737,7 +5752,21 @@
     ],
     "rpc": {
       "compression": "不支持：flags.compressed 置位或 header.compression 非 none 即 350018",
+      "deadline": {
+        "deduction": "每跳扣实际服务端耗时（收帧 → handler 入口，monotonic），传下游前再减 return_reserve_ms；下游只接收剩余预算",
+        "default_ms": 30000,
+        "encoding": "relative-remaining-ms（相对剩余毫秒；跨机不需要时钟同步）",
+        "header": "deadline_ms",
+        "on_exhausted": 350004,
+        "outcome": "unknown（超时是「结果未知」，不是失败；不得直接重试）",
+        "range": [
+          0,
+          600000
+        ],
+        "return_reserve_ms": 50
+      },
       "errors": {
+        "deadline_exceeded": 350004,
         "method_not_found": 350023
       },
       "frame_type": 48,
@@ -5759,12 +5788,17 @@
         "trace_id",
         "tenant",
         "content_type",
-        "protocol_version"
+        "protocol_version",
+        "deadline_ms"
       ],
       "request_required": [
         "request_id"
       ],
-      "response": "same type + flags.response（与 result_frame / open_frame 同构）"
+      "response": "same type + flags.response（与 result_frame / open_frame 同构）",
+      "response_optional": [
+        "used_ms",
+        "remaining_ms"
+      ]
     },
     "stream": {
       "connection_window": "h2 连接级窗口由同连接所有 stream 共享：一条流停读会占满连接窗口、连带其它 stream 暂停发送；应用层（协程 / CPU / inflight 配额）互不影响。这是协议语义，不是实现缺陷",

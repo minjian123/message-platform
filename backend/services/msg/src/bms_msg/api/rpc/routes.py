@@ -35,10 +35,14 @@ from bms_msg.api.rpc.gate import build_rpc_frame_gate
 from bms_msg.core.config import (
     RPC_METHOD_MAX_LENGTH,
     RPC_METHOD_PATTERN,
+    RPC_REMAINING_MS_HEADER,
     RPC_SERVICE_MAX_LENGTH,
     RPC_SERVICE_PATTERN,
+    RPC_USED_MS_HEADER,
 )
 from bms_msg.errors import MsgErrorCode
+from bms_msg.rpc.cancel import ensure_not_cancelled
+from bms_msg.rpc.deadline import Deadline
 from bms_msg.rpc.service import invoke_rpc
 from bms_msg.schemas.rpc import RpcRequest, RpcResult
 
@@ -49,6 +53,7 @@ RPC_PERMISSION = "msg:rpc"
 
 RPC_ERROR_CODES = ConcurrentStableList(
     [
+        int(MsgErrorCode.RPC_DEADLINE_EXCEEDED),
         int(MsgErrorCode.RATE_LIMITED),
         int(MsgErrorCode.PAYLOAD_TOO_LARGE),
         int(MsgErrorCode.TENANT_SUSPENDED),
@@ -56,7 +61,11 @@ RPC_ERROR_CODES = ConcurrentStableList(
         int(MsgErrorCode.RPC_METHOD_NOT_FOUND),
     ]
 )
-"""RPC 端点声明的错误码（`x-error-codes`；只列本端点可达的业务码，协议层通用码由闸门统一处理）。"""
+"""RPC 端点声明的错误码（`x-error-codes`；只列本端点可达的业务码，协议层通用码由闸门统一处理）。
+
+`350004` 由任务 04-2 启用（预算耗尽 / 504），与 `350023`（方法未注册）同为 business 层、都不重试，
+但一个表示「没时间」、一个表示「没这个方法」。
+"""
 
 router = BaseRouter(
     key="msg_rpc",
@@ -131,7 +140,12 @@ async def invoke(
     （`10001`）；`payload` 非合法 base64 同码。未注册方法返回 `350023`（404，`layer=business`、
     `retryable=false`），不是 500。参数 / 结果超过 1 MiB 返回 `350006`。
     调用方标识与链路标识走「HTTP 头优先」，两者都会回写进响应头。
+
+    **预算**（04-2）：`deadline_ms` 缺省 30000、区间 0~600000（越界 `10001`）；耗尽返回 `350004`
+    （504，`data.outcome=unknown`）。`used_ms` / `remaining_ms` 随响应头回传，供上游核对透传是否生效。
+    取消（`RST_STREAM` / 连接断开）由 `ensure_not_cancelled()` 在写响应前复核，取消后不写响应。
     """
+    deadline = Deadline.start(req.deadline_ms)
     caller = resolve_caller(request, req.caller)
     trace_id = resolve_trace_id(request, req.trace_id)
     reply = await invoke_rpc(
@@ -142,13 +156,19 @@ async def invoke(
         method=method,
         payload=_decode_payload(req.payload),
         headers=req.headers,
+        deadline=deadline,
         trace_id=trace_id,
         caller=caller,
+        disconnected=request.is_disconnected,
     )
+    # 判定必须紧贴「写响应」：handler 若吞掉取消并正常返回，这里把响应丢掉（详细设计 §5.4）。
+    ensure_not_cancelled()
     if caller is not None:
         response.headers[CALLER_HEADER] = caller
     if trace_id is not None:
         response.headers[TRACE_HEADER] = trace_id
+    response.headers[RPC_USED_MS_HEADER] = str(deadline.spent_ms())
+    response.headers[RPC_REMAINING_MS_HEADER] = str(deadline.remaining_ms())
     return ApiResponse.ok(
         RpcResult(
             payload=base64.b64encode(reply.payload).decode("ascii"),
