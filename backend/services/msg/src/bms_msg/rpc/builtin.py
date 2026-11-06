@@ -168,8 +168,10 @@ def default_rpc_registry() -> RpcRegistry:
         RpcRegistry: 已登记的注册表（`demo.echo` / `demo.length` 一元，`demo.ticker` / `demo.idle` 流式）。
     """
     registry = RpcRegistry()
-    registry.register(DEMO_SERVICE, DEMO_ECHO, echo_handler)
-    registry.register(DEMO_SERVICE, DEMO_LENGTH, length_handler)
-    registry.register_stream(DEMO_SERVICE, DEMO_TICKER, ticker_handler)
-    registry.register_stream(DEMO_SERVICE, DEMO_IDLE, idle_handler)
+    # 04-4：四个内置方法都是纯字节计算、无副作用 → 全部声明幂等。
+    # 流式两项只是把声明发布进契约（流式不进重试层，见 04-4 设计 §1.2）。
+    registry.register(DEMO_SERVICE, DEMO_ECHO, echo_handler, idempotent=True)
+    registry.register(DEMO_SERVICE, DEMO_LENGTH, length_handler, idempotent=True)
+    registry.register_stream(DEMO_SERVICE, DEMO_TICKER, ticker_handler, idempotent=True)
+    registry.register_stream(DEMO_SERVICE, DEMO_IDLE, idle_handler, idempotent=True)
     return registry

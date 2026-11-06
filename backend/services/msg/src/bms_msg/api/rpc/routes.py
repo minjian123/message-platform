@@ -26,7 +26,7 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Request, Response
 
-from bms_msg.api.deps import DataPlaneTenantDep, RateLimiterDep, RpcRegistryDep
+from bms_msg.api.deps import DataPlaneTenantDep, IdempotencyStoreDep, RateLimiterDep, RpcRegistryDep
 from bms_msg.api.frame.guard import CONNECTION_GUARD
 from bms_msg.api.rpc.caller import (
     CALLER_HEADER,
@@ -35,6 +35,7 @@ from bms_msg.api.rpc.caller import (
     resolve_trace_id,
 )
 from bms_msg.api.rpc.gate import build_rpc_frame_gate
+from bms_msg.api.rpc.idempotency import idempotency_context
 from bms_msg.core.config import (
     RPC_METHOD_MAX_LENGTH,
     RPC_METHOD_PATTERN,
@@ -136,6 +137,7 @@ async def invoke(
     tenant: DataPlaneTenantDep,
     registry: RpcRegistryDep,
     limiter: RateLimiterDep,
+    store: IdempotencyStoreDep,
 ) -> ApiResponse[RpcResult]:
     """一元调用（JSON 形态）。
 
@@ -163,6 +165,16 @@ async def invoke(
         trace_id=trace_id,
         caller=caller,
         disconnected=request.is_disconnected,
+        idempotency=idempotency_context(
+            store=store,
+            registry=registry,
+            tenant=tenant.code,
+            service=service,
+            method=method,
+            key=req.idempotency_key,
+        ),
+        retry_budget=req.retry_budget,
+        idempotency_key=req.idempotency_key,
     )
     # 判定必须紧贴「写响应」：handler 若吞掉取消并正常返回，这里把响应丢掉（详细设计 §5.4）。
     ensure_not_cancelled()

@@ -41,10 +41,12 @@ from bms_msg.errors import (
     MsgPayloadTooLargeError,
     MsgRateLimitedError,
     MsgRpcDeadlineExceededError,
+    MsgRpcInProgressError,
     MsgRpcMethodNotFoundError,
 )
 from bms_msg.protocol.frame import MAX_FRAME_PAYLOAD_BYTES
 from bms_msg.rpc.deadline import OUTCOME_UNKNOWN, Deadline
+from bms_msg.rpc.idempotency import IdempotencyContext
 from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcCall, RpcHandler, RpcRegistry, RpcReply, RpcStreamHandler
 
@@ -330,7 +332,7 @@ async def _run_handler(
             task.cancel()
 
 
-async def invoke_rpc(
+async def _invoke_once(
     *,
     registry: RpcRegistry,
     limiter: RateLimiter,
@@ -340,12 +342,14 @@ async def invoke_rpc(
     payload: bytes,
     headers: ConcurrentStableDict[str, str],
     deadline: Deadline,
-    trace_id: str | None = None,
-    caller: str | None = None,
-    request_id: str | None = None,
-    disconnected: DisconnectProbe | None = None,
+    trace_id: str | None,
+    caller: str | None,
+    request_id: str | None,
+    disconnected: DisconnectProbe | None,
+    retry_budget: int | None,
+    idempotency_key: str | None,
 ) -> RpcReply:
-    """执行一次一元调用（两种形态共用）。
+    """执行一次一元调用（不含幂等去重；`invoke_rpc` 是带去重的对外入口）。
 
     Args:
         registry: 方法注册表。
@@ -395,6 +399,8 @@ async def invoke_rpc(
                 trace_id=trace_id,
                 caller=caller,
                 deadline_ms=deadline.downstream_ms(),
+                retry_budget=retry_budget,
+                idempotency_key=idempotency_key,
             ),
             deadline,
             disconnected,
@@ -428,4 +434,100 @@ async def invoke_rpc(
         )
         raise
     _log_outcome("ok", service=service, method=method, request_id=request_id, deadline=deadline)
+    return reply
+
+
+async def invoke_rpc(
+    *,
+    registry: RpcRegistry,
+    limiter: RateLimiter,
+    tenant: str,
+    service: str,
+    method: str,
+    payload: bytes,
+    headers: ConcurrentStableDict[str, str],
+    deadline: Deadline,
+    trace_id: str | None = None,
+    caller: str | None = None,
+    request_id: str | None = None,
+    disconnected: DisconnectProbe | None = None,
+    idempotency: IdempotencyContext | None = None,
+    retry_budget: int | None = None,
+    idempotency_key: str | None = None,
+) -> RpcReply:
+    """执行一次一元调用（两种形态共用；带键且方法非幂等时按作用域键去重）。
+
+    **去重只包「执行」不包「预检返回」**：`idempotency` 为 `None` 时整层是零开销透传，
+    一元与流式既有调用链一行不改。
+
+    Args:
+        registry: 方法注册表。
+        limiter: 限流器（RPC 维度独立于生产两级）。
+        tenant: 租户编码（已由数据面解析链判定）。
+        service: 服务标识。
+        method: 方法名。
+        payload: 调用参数原始字节。
+        headers: 结构化头。
+        deadline: 本跳预算视图。
+        trace_id: 链路标识。
+        caller: 调用方服务标识。
+        request_id: 请求标识（帧形态有；只进日志）。
+        disconnected: 断开探测；None 表示不做取消探测（单元场景）。
+        idempotency: 幂等上下文（闸门仅在「带键 + 方法声明非幂等」时构造）。
+        retry_budget: 调用链剩余重试预算（透传给 handler）。
+        idempotency_key: 幂等键业务部分（透传给 handler）。
+
+    Returns:
+        RpcReply: 结果（首次结果或复用结果）。
+
+    Raises:
+        MsgRpcInProgressError: 重复请求且首次仍在执行（`10007`）。
+        MsgError: 预检 / 执行期的业务错误（原样向上）。
+        asyncio.CancelledError: 请求被取消（原样向上，并释放幂等键）。
+    """
+    if idempotency is None:
+        return await _invoke_once(
+            registry=registry,
+            limiter=limiter,
+            tenant=tenant,
+            service=service,
+            method=method,
+            payload=payload,
+            headers=headers,
+            deadline=deadline,
+            trace_id=trace_id,
+            caller=caller,
+            request_id=request_id,
+            disconnected=disconnected,
+            retry_budget=retry_budget,
+            idempotency_key=idempotency_key,
+        )
+    store, key, ttl_ms = idempotency.store, idempotency.key, idempotency.ttl_ms
+    if not await store.begin(key, ttl_ms=ttl_ms):
+        cached = await store.load(key)
+        if cached is not None:
+            return cached
+        raise MsgRpcInProgressError("相同幂等键的请求仍在执行")
+    try:
+        reply = await _invoke_once(
+            registry=registry,
+            limiter=limiter,
+            tenant=tenant,
+            service=service,
+            method=method,
+            payload=payload,
+            headers=headers,
+            deadline=deadline,
+            trace_id=trace_id,
+            caller=caller,
+            request_id=request_id,
+            disconnected=disconnected,
+            retry_budget=retry_budget,
+            idempotency_key=idempotency_key,
+        )
+    except BaseException:
+        # 取消 / GeneratorExit 也算：失败或被取消都释放键，让带键重试能真正重跑业务。
+        await store.release(key)
+        raise
+    await store.save(key, reply, ttl_ms=ttl_ms)
     return reply

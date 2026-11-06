@@ -56,11 +56,15 @@ def _raised() -> ConcurrentStableDict[int, int]:
         ConcurrentStableDict[int, int]: 状态映射。
     """
     statuses: ConcurrentStableDict[int, int] = ConcurrentStableDict()
+    # 04-4：MsgRpcInProgressError 复用 bms 平台码 10007（不新增产品码，见设计 A3），
+    # 它不是 msg 自持声明的一员，不参与本文件的「声明 ↔ 产品码」对账。
+    product_codes = {int(member) for member in MsgErrorCode}
     for _, member in inspect.getmembers(errors_module, lambda item: isinstance(item, type)):
         if not issubclass(member, MsgError) or member is MsgError:
             continue
         error = member()
-        statuses.set(error.code, error.http_status)
+        if error.code in product_codes:
+            statuses.set(error.code, error.http_status)
     return statuses
 
 

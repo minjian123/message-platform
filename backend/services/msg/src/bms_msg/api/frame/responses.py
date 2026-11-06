@@ -16,6 +16,7 @@ from typing import Any
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
+from bms_msg.errors import ErrorCategory
 from bms_msg.protocol.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 from bms_msg.schemas.transport import ConnectionInfo, StreamOpen
@@ -71,22 +72,34 @@ _BUSINESS_CODES = frozenset(
 """
 
 
-def classify(code: int) -> tuple[str, bool]:
-    """按码判定错误层与可重试性（错误帧的 `layer` / `retryable` 唯一出处）。
+def classify(code: int) -> tuple[ErrorCategory, str, bool]:
+    """按码判定类别 / 层 / 可重试性（错误帧的 `category` / `layer` / `retryable` 唯一出处）。
+
+    **04-4**：`layer` 与 `retryable` 的既有判定值一字不变，只新增 `category` 一维——已交付的
+    03-2 / 04-2 语义不回退。类别与层正交：同一 `transient` 既可能是 business（`350005`），
+    也可能是 system（`350022`）。
 
     Args:
         code: 产品码 / 平台码。
 
     Returns:
-        tuple[str, bool]: `(layer, retryable)`。
+        tuple[ErrorCategory, str, bool]: `(category, layer, retryable)`。
     """
     if code == 350018 or code == 10001:  # 帧格式非法（协议层） / 契约层参数非法
-        return "protocol", False
+        return ErrorCategory.PARAM_ERROR, "protocol", False
     if code == 350019 or code == 350006:  # 版本不支持 / 帧或消息体超限：连接不可继续按本协议使用
-        return "transport", False
+        return ErrorCategory.PARAM_ERROR, "transport", False
+    if code == 350004:  # 预算耗尽：结果未知，不是失败
+        return ErrorCategory.UNKNOWN, "business", False
     if code in _BUSINESS_CODES:
-        return "business", code in _RETRYABLE_BUSINESS
-    return "system", code in _RETRYABLE_SYSTEM
+        layer, retryable = "business", code in _RETRYABLE_BUSINESS
+    else:
+        layer, retryable = "system", code in _RETRYABLE_SYSTEM
+    if retryable:
+        return ErrorCategory.TRANSIENT, layer, True
+    if layer == "business":
+        return ErrorCategory.BUSINESS_REJECT, layer, False
+    return ErrorCategory.SERVER_BUG, layer, False
 
 
 def _result_header(request_id: str | None) -> ConcurrentStableDict[str, Any]:
@@ -136,12 +149,13 @@ def error_frame(
     Returns:
         bytes: 完整错误帧。
     """
-    layer, retryable = classify(code)
+    category, layer, retryable = classify(code)
     header = _result_header(request_id)
     header.set("code", code)
     header.set("message", message)
     header.set("retryable", retryable)
     header.set("layer", layer)
+    header.set("category", str(category))
     header.set("detail", detail)
     header.set("retry_after_ms", retry_after_ms)
     return encode_frame(

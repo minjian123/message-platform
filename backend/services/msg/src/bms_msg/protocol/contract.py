@@ -31,7 +31,7 @@ from bms_msg.core.config import (
     SUBSCRIBE_PREFETCH,
     SUBSCRIBE_PREFETCH_LIMIT,
 )
-from bms_msg.errors import MsgErrorCode
+from bms_msg.errors import ErrorCategory, MsgErrorCode
 from bms_msg.protocol.frame import (
     FRAME_CONTENT_TYPE,
     FRAME_HEADER_BYTES,
@@ -179,9 +179,20 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "error_frame": ConcurrentStableDict(
                 {
                     "fields": ConcurrentStableList(
-                        ["code", "message", "retryable", "layer", "request_id", "detail", "retry_after_ms"]
+                        [
+                            "code",
+                            "message",
+                            "retryable",
+                            "layer",
+                            "category",
+                            "request_id",
+                            "detail",
+                            "retry_after_ms",
+                        ]
                     ),
                     "layers": ConcurrentStableList(["transport", "protocol", "business", "system"]),
+                    # 04-4：category 与 layer 正交——前者回答「调用方该怎么办」，后者回答「错在哪一层」。
+                    "categories": ConcurrentStableList([category.value for category in ErrorCategory]),
                     "http_status": "帧可解析失败一律 200（错误在帧内）；magic 不符 / 长度越界为 400 + JSON",
                 }
             ),

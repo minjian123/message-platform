@@ -67,7 +67,8 @@ def test_export_contains_rpc_contract(tmp_path: Path) -> None:
     assert contract_snapshot.export(tmp_path) == 0
     payload = json.loads(contract_snapshot.snapshot_path(tmp_path, "msg").read_text(encoding="utf-8"))
 
-    rpc = payload[FRAME_CONTRACT_KEY]["rpc"]
+    frame = payload[FRAME_CONTRACT_KEY]
+    rpc = frame["rpc"]
     assert rpc["frame_type"] == 48
     assert rpc["request_required"] == ["request_id"]
     assert rpc["errors"] == {"method_not_found": 350023, "deadline_exceeded": 350004}
@@ -85,15 +86,31 @@ def test_export_contains_rpc_contract(tmp_path: Path) -> None:
         "outcome": "unknown（超时是「结果未知」，不是失败；不得直接重试）",
     }
     assert "deadline_ms" in rpc["request_optional"]
+    # 04-4：请求帧头新增两个「只增可选字段」，错误帧新增 category。
+    assert "idempotency_key" in rpc["request_optional"]
+    assert "retry_budget" in rpc["request_optional"]
     assert rpc["response_optional"] == ["used_ms", "remaining_ms"]
     assert rpc["methods"] == [
-        {"method": "echo", "service": "demo"},
-        {"method": "length", "service": "demo"},
+        {"method": "echo", "service": "demo", "idempotent": True, "form": "一元方法"},
+        {"method": "length", "service": "demo", "idempotent": True, "form": "一元方法"},
     ]
     # 与代码里的注册表同源（不是手写清单）。
     assert [{"service": service, "method": method} for service, method in default_rpc_registry().methods()] == [
         {"service": item["service"], "method": item["method"]} for item in rpc["methods"]
     ]
+    # 04-4：错误帧五类清单 + 重试 / 熔断语义段（只写字段与算法，不写死数值）。
+    assert frame["error_frame"]["categories"] == [
+        "param_error",
+        "business_reject",
+        "transient",
+        "unknown",
+        "server_bug",
+    ]
+    assert "category" in frame["error_frame"]["fields"]
+    assert rpc["retry"]["idempotency_key_header"] == "idempotency_key"
+    assert rpc["retry"]["retry_budget_header"] == "retry_budget"
+    assert rpc["retry"]["categories"] == frame["error_frame"]["categories"]
+    assert rpc["circuit"]["states"] == ["closed", "open", "half_open"]
 
 
 def test_export_contains_rpc_stream_contract(tmp_path: Path) -> None:
@@ -112,9 +129,10 @@ def test_export_contains_rpc_stream_contract(tmp_path: Path) -> None:
     assert stream["sequence"] == "header.seq，0 起逐帧 +1（缺帧 / 乱序由客户端判协议错）"
     assert stream["idle_ms"] == RPC_STREAM_IDLE_MS
     assert stream["errors"] == {"method_not_found": 350023, "deadline_exceeded": 350004, "stream_idle": 350024}
+    # 04-4：方法条目统一增 idempotent / form（流式虽不进重试层，声明仍发布供 SDK 查询）。
     assert stream["methods"] == [
-        {"service": "demo", "method": "ticker"},
-        {"service": "demo", "method": "idle"},
+        {"service": "demo", "method": "ticker", "idempotent": True, "form": "流式方法"},
+        {"service": "demo", "method": "idle", "idempotent": True, "form": "流式方法"},
     ]
     # 与代码里的流式注册表同源（不是手写清单），且一元清单不含流式方法。
     assert [{"service": service, "method": method} for service, method in default_rpc_registry().stream_methods()] == [

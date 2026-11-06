@@ -23,14 +23,16 @@ from collections.abc import Awaitable, Callable
 from bms_core.core.exceptions import ParamError
 from fastapi import Request, Response
 
-from bms_msg.api.deps import DataPlaneTenantDep, RateLimiterDep, RpcRegistryDep
+from bms_msg.api.deps import DataPlaneTenantDep, IdempotencyStoreDep, RateLimiterDep, RpcRegistryDep
 from bms_msg.api.frame.gate import FrameHandled, ensure_frame_tenant
 from bms_msg.api.frame.media import is_frame_request
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, error_frame
 from bms_msg.api.rpc.caller import resolve_caller, resolve_trace_id
+from bms_msg.api.rpc.idempotency import idempotency_context
 from bms_msg.api.rpc.request import (
     ensure_request_frame,
     ensure_uncompressed,
+    optional_budget,
     optional_text,
     request_id_of,
     string_map,
@@ -45,6 +47,7 @@ from bms_msg.errors import (
 from bms_msg.protocol.frame import decode_frame
 from bms_msg.rpc.cancel import ensure_not_cancelled
 from bms_msg.rpc.deadline import Deadline
+from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.naming import ensure_rpc_name
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.rpc.service import invoke_rpc
@@ -73,6 +76,7 @@ async def _handle_rpc_frame(
     tenant: CurrentTenant,
     registry: RpcRegistry,
     limiter: RateLimiter,
+    store: InProcessIdempotencyStore,
 ) -> Response:
     """处理一个 RPC 帧请求（解码 → 校验 → 调核心 → 编码）。
 
@@ -83,6 +87,7 @@ async def _handle_rpc_frame(
         tenant: 当前租户。
         registry: 方法注册表。
         limiter: 限流器。
+        store: 幂等去重存储。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -112,6 +117,8 @@ async def _handle_rpc_frame(
         headers = string_map(frame.header)
         caller = resolve_caller(request, optional_text(frame.header, "caller"))
         trace_id = resolve_trace_id(request, optional_text(frame.header, "trace_id"))
+        idempotency_key = optional_text(frame.header, "idempotency_key")
+        retry_budget = optional_budget(frame.header, "retry_budget")
     except ParamError as exc:
         # 形态非法（路径参数 / 头值类型）：契约层，与 JSON 路径同码。
         return _frame_response(error_frame(code=10001, message=str(exc), request_id=request_id))
@@ -131,6 +138,16 @@ async def _handle_rpc_frame(
             caller=caller,
             request_id=request_id,
             disconnected=request.is_disconnected,
+            idempotency=idempotency_context(
+                store=store,
+                registry=registry,
+                tenant=tenant.code,
+                service=service,
+                method=method,
+                key=idempotency_key,
+            ),
+            retry_budget=retry_budget,
+            idempotency_key=idempotency_key,
         )
     except MsgError as exc:
         return _frame_response(
@@ -168,6 +185,7 @@ def build_rpc_frame_gate() -> Callable[..., Awaitable[None]]:
         tenant: DataPlaneTenantDep,
         registry: RpcRegistryDep,
         limiter: RateLimiterDep,
+        store: IdempotencyStoreDep,
     ) -> None:
         """帧形态则整单处理并短路端点。
 
@@ -180,6 +198,7 @@ def build_rpc_frame_gate() -> Callable[..., Awaitable[None]]:
             tenant: 当前租户。
             registry: 方法注册表。
             limiter: 限流器。
+            store: 幂等去重存储。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -194,6 +213,7 @@ def build_rpc_frame_gate() -> Callable[..., Awaitable[None]]:
             tenant=tenant,
             registry=registry,
             limiter=limiter,
+            store=store,
         )
         raise FrameHandled(response)
 

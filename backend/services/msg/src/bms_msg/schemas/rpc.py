@@ -46,6 +46,16 @@ class RpcRequest(BaseSchema):
             "服务端扣本跳耗时后把剩余值传给下游，耗尽返回 350004"
         ),
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=128,
+        description="幂等键（04-4；带键且方法非幂等时服务端按作用域去重，重试全程复用同一键）",
+    )
+    retry_budget: int | None = Field(
+        default=None,
+        ge=0,
+        description="调用链剩余可重试次数（04-4；与帧头 retry_budget 同名同义，逐跳递减防重试风暴）",
+    )
 
 
 class RpcResult(BaseSchema):

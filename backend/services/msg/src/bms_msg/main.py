@@ -66,6 +66,7 @@ from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.errors import register_msg_error_mapper
 from bms_msg.health import register_msg_health_registry
 from bms_msg.rpc.builtin import default_rpc_registry
+from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.tenant_guard import register_msg_tenant_guard
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
@@ -191,6 +192,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.uow_factory = platform_uow_factory(app)
         # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
         app.state.rpc_registry = default_rpc_registry()
+        # 04-4：幂等去重存储（进程内；不跨实例 / 不跨重启，8B_05 换共享存储时只改这一行）。
+        app.state.idempotency_store = InProcessIdempotencyStore()
         app.state.replay_runner = ReplayRunner(
             messages=app.state.message_store,
             uow_factory=app.state.uow_factory,

@@ -2052,11 +2052,37 @@
             "title": "Headers",
             "type": "object"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "幂等键（04-4；带键且方法非幂等时服务端按作用域去重，重试全程复用同一键）",
+            "title": "Idempotency Key"
+          },
           "payload": {
             "default": "",
             "description": "调用参数（base64 编码；空串表示无参数）",
             "title": "Payload",
             "type": "string"
+          },
+          "retry_budget": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "调用链剩余可重试次数（04-4；与帧头 retry_budget 同名同义，逐跳递减防重试风暴）",
+            "title": "Retry Budget"
           },
           "trace_id": {
             "anyOf": [
@@ -5716,11 +5742,19 @@
       ]
     },
     "error_frame": {
+      "categories": [
+        "param_error",
+        "business_reject",
+        "transient",
+        "unknown",
+        "server_bug"
+      ],
       "fields": [
         "code",
         "message",
         "retryable",
         "layer",
+        "category",
         "request_id",
         "detail",
         "retry_after_ms"
@@ -5863,6 +5897,17 @@
       }
     ],
     "rpc": {
+      "circuit": {
+        "algorithm": "窗口内连续失败达阈值即打开；打开到期转半开；半开限流探测，成功闭合 / 失败回打开",
+        "contract": "bms_core.circuit.BaseCircuitBreaker（allow / record_success / record_failure / state）",
+        "default_impl": "NullCircuitBreaker（恒闭合）；生产显式注入 InProcessCircuitBreaker 才启用三态",
+        "dependency": "service:<service>（与 bms service_dependency 同一命名空间）",
+        "states": [
+          "closed",
+          "open",
+          "half_open"
+        ]
+      },
       "compression": "不支持：flags.compressed 置位或 header.compression 非 none 即 350018",
       "deadline": {
         "deduction": "每跳扣实际服务端耗时（收帧 → handler 入口，monotonic），传下游前再减 return_reserve_ms；下游只接收剩余预算",
@@ -5884,10 +5929,14 @@
       "frame_type": 48,
       "methods": [
         {
+          "form": "一元方法",
+          "idempotent": true,
           "method": "echo",
           "service": "demo"
         },
         {
+          "form": "一元方法",
+          "idempotent": true,
           "method": "length",
           "service": "demo"
         }
@@ -5901,7 +5950,9 @@
         "tenant",
         "content_type",
         "protocol_version",
-        "deadline_ms"
+        "deadline_ms",
+        "idempotency_key",
+        "retry_budget"
       ],
       "request_required": [
         "request_id"
@@ -5911,6 +5962,25 @@
         "used_ms",
         "remaining_ms"
       ],
+      "retry": {
+        "backoff": "指数基线 base * multiplier ** (attempt - 1)，full jitter 取 [1, cap]，禁止立即重试",
+        "budget_propagation": "帧头 retry_budget 逐跳递减；进程内 ContextVar 共享；下游取 min(上游值, 本地剩余)",
+        "categories": [
+          "param_error",
+          "business_reject",
+          "transient",
+          "unknown",
+          "server_bug"
+        ],
+        "idempotency_key": "客户端生成、重试全程复用；可显式传入业务键（只增可选帧头字段）",
+        "idempotency_key_header": "idempotency_key",
+        "precondition": "retryable 且（幂等或带幂等键）；熔断打开不进入重试；非幂等无键被阻止",
+        "retry_after": "帧 retry_after_ms 与 HTTP Retry-After(delta-seconds) 双来源，取 max(退避, 建议) 并封顶",
+        "retry_budget_header": "retry_budget",
+        "scope": "(tenant, service, method, key)——同名业务键跨方法不互相误判重复",
+        "stream": "流式不进重试层（重开流 != 重试，需 seq 断点续传契约）",
+        "unknown": "350004 结果未知：仅在带幂等键时谨慎重试（retryable 仍为 false）"
+      },
       "stream": {
         "endpoint": "POST /rpc/{service}/{method}/stream",
         "errors": {
@@ -5921,10 +5991,14 @@
         "idle_ms": 60000,
         "methods": [
           {
+            "form": "流式方法",
+            "idempotent": true,
             "method": "ticker",
             "service": "demo"
           },
           {
+            "form": "流式方法",
+            "idempotent": true,
             "method": "idle",
             "service": "demo"
           }

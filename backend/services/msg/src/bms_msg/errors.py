@@ -25,7 +25,7 @@
 
 """
 
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import ClassVar
 
 from bms_core.core.exceptions import BizError, TenantNotFoundError, TenantSuspendedError
@@ -33,10 +33,11 @@ from bms_core.core.logging import get_logger
 from bms_core.core.plugin import register_plugin
 from bms_core.error_mapper.base import BaseErrorMapper
 
-from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS
+from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS, RPC_IDEMPOTENCY_IN_PROGRESS_MS
 
 __all__ = [
     "MSG_ERROR_MAPPER",
+    "ErrorCategory",
     "MsgConnectionLimitExceededError",
     "MsgDelayQuotaExceededError",
     "MsgDeliveryExhaustedError",
@@ -55,6 +56,7 @@ __all__ = [
     "MsgReplayTaskInvalidStateError",
     "MsgReplayTaskNotFoundError",
     "MsgRpcDeadlineExceededError",
+    "MsgRpcInProgressError",
     "MsgRpcMethodNotFoundError",
     "MsgRpcStreamIdleError",
     "MsgStorageWatermarkExceededError",
@@ -64,6 +66,7 @@ __all__ = [
     "MsgTopicExistsError",
     "MsgTopicNotFoundError",
     "MsgVersionUnsupportedError",
+    "Outcome",
     "register_msg_error_mapper",
 ]
 
@@ -71,6 +74,45 @@ MSG_ERROR_MAPPER = "msg"
 """产品码覆盖实现名（配置 `[error_mapper].provider = "msg"`）。"""
 
 _LOGGER = get_logger("bms_msg.errors")
+
+
+class ErrorCategory(StrEnum):
+    """错误类别（04-4）：`classify()` 三元组的第一维，客户端据此推导动作。
+
+    与 `layer` **正交**：`layer` 回答「错在哪一层」，`category` 回答「调用方该怎么办」。
+    同一类别可跨层（如 `transient` 既有 business 的 `350005`，也有 system 的 `350022`）。
+    """
+
+    PARAM_ERROR = "param_error"
+    """参数错误：改参后放弃，不重试。"""
+
+    BUSINESS_REJECT = "business_reject"
+    """业务拒绝：上抛调用方，不重试。"""
+
+    TRANSIENT = "transient"
+    """瞬时故障：指数退避 + 抖动重试。"""
+
+    UNKNOWN = "unknown"
+    """超时 / 结果未知：`retryable=false`，仅在带幂等键时谨慎重试。"""
+
+    SERVER_BUG = "server_bug"
+    """服务端 bug：上抛 + 告警，不自动重试。"""
+
+
+class Outcome(StrEnum):
+    """调用结果语义（04-2 遗留闭合）：`ok` / `unknown` / `failed`。
+
+    StrEnum 的值就是字符串，04-2 既有的 `detail.outcome == "unknown"` 断言零破坏。
+    """
+
+    OK = "ok"
+    """确定成功。"""
+
+    UNKNOWN = "unknown"
+    """结果未知（超时 / 取消：可能已生效，也可能没跑）。"""
+
+    FAILED = "failed"
+    """确定失败（未产生副作用）。"""
 
 
 class MsgErrorCode(IntEnum):
@@ -393,6 +435,36 @@ class MsgRpcStreamIdleError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.RPC_STREAM_IDLE
     http_status_: ClassVar[int] = 504
+
+
+class MsgRpcInProgressError(MsgError):
+    """重复请求且首次仍在执行（04-4）：`10007` / 503，`classify` 已判 `system` / 可重试。
+
+    **不新增产品码**（决策 A3）：复用 bms `ServiceUnavailableError` 的平台码 `10007`（服务端暂时
+    不可用、稍后重试），因此不进 `MsgErrorCode` 枚举、`deploy/registry/msg.toml` 的 `[[errcodes]]`
+    与 `test_error_codes.py` 对账三处零改动。`data` 带 `reason=in_progress` 便于排障区分；
+    `retry_after_ms` 由帧闸门经 `getattr` 取出写进 error 帧。
+    """
+
+    code_: ClassVar[int] = 10007
+    http_status_: ClassVar[int] = 503
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        retry_after_ms: int = RPC_IDEMPOTENCY_IN_PROGRESS_MS,
+        data: object | None = None,
+    ) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息。
+            retry_after_ms: 建议重试间隔（毫秒）。
+            data: 随附数据（缺省带 `reason`）。
+        """
+        super().__init__(message, data={"reason": "in_progress"} if data is None else data)
+        self.retry_after_ms = retry_after_ms
 
 
 class MsgErrorMapper(BaseErrorMapper):

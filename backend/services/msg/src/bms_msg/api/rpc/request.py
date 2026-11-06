@@ -25,13 +25,14 @@ __all__ = [
     "MAX_HEADER_TEXT",
     "ensure_request_frame",
     "ensure_uncompressed",
+    "optional_budget",
     "optional_text",
     "request_id_of",
     "string_map",
 ]
 
 MAX_HEADER_TEXT = 128
-"""帧头里 `caller` / `trace_id` 的长度上限（与 JSON 体字段同尺；超限即契约层 `10001`）。"""
+"""帧头里 `caller` / `trace_id` / `idempotency_key` 的长度上限（超限即契约层 `10001`）。"""
 
 
 def request_id_of(header: Mapping[str, Any]) -> str | None:
@@ -68,6 +69,31 @@ def optional_text(header: Mapping[str, Any], key: str) -> str | None:
     if len(raw) > MAX_HEADER_TEXT:
         raise ParamError(f"frame header 的 {key} 超过 {MAX_HEADER_TEXT} 字符")
     return raw or None
+
+
+def optional_budget(header: Mapping[str, Any], key: str) -> int | None:
+    """取可选的非负整数头（形态非法即契约层 `10001`，不静默忽略）。
+
+    `bool` 是 `int` 子类，必须单独排掉；重试预算不存在第三态，缺失为 `None`。
+
+    Args:
+        header: 帧头。
+        key: 键名。
+
+    Returns:
+        int | None: 预算值；缺失为 None。
+
+    Raises:
+        ParamError: 不是整数、布尔或为负（`10001`）。
+    """
+    raw = header.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ParamError(f"frame header 的 {key} 必须是非负整数")
+    if raw < 0:
+        raise ParamError(f"frame header 的 {key} 不得为负：{raw}")
+    return raw
 
 
 def string_map(header: Mapping[str, Any]) -> ConcurrentStableDict[str, str]:

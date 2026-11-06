@@ -25,13 +25,15 @@ from bms_msg.core.config import (
     RPC_DEFAULT_TIMEOUT_MS,
     RPC_RETURN_RESERVE_MS,
 )
+from bms_msg.errors import Outcome
 
 __all__ = ["OUTCOME_UNKNOWN", "Deadline", "validate_budget_ms"]
 
-OUTCOME_UNKNOWN = "unknown"
+OUTCOME_UNKNOWN = Outcome.UNKNOWN
 """超时的结果语义：**结果未知**（可能已生效、也可能没跑），不是「失败」。
 
-放进错误 `detail` / `data` 供调用方判断；04-4 把它升为正式枚举（`ok` / `unknown` / `failed`）。
+04-4 已升为 `Outcome` 正式枚举；这里是别名，`Outcome` 是 `StrEnum`，值仍是字符串 `"unknown"`，
+因此 04-2 既有的 `detail.outcome == "unknown"` 断言与响应形状零破坏。
 """
 
 

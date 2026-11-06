@@ -13,6 +13,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, classify, error_frame, result_frame
+from bms_msg.errors import ErrorCategory
 from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 
@@ -152,29 +153,33 @@ def test_error_frame_without_request_id() -> None:
 
 
 @pytest.mark.parametrize(
-    ("code", "layer", "retryable"),
+    ("code", "category", "layer", "retryable"),
     [
-        (350018, "protocol", False),
-        (10001, "protocol", False),
-        (350019, "transport", False),
-        (350006, "transport", False),
-        (350001, "business", False),
-        (350015, "business", True),
-        (350005, "business", True),
-        (10006, "system", True),
-        (10007, "system", True),
-        (99999, "system", False),
+        (350018, ErrorCategory.PARAM_ERROR, "protocol", False),
+        (10001, ErrorCategory.PARAM_ERROR, "protocol", False),
+        (350019, ErrorCategory.PARAM_ERROR, "transport", False),
+        (350006, ErrorCategory.PARAM_ERROR, "transport", False),
+        (350004, ErrorCategory.UNKNOWN, "business", False),
+        (350001, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350023, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350015, ErrorCategory.TRANSIENT, "business", True),
+        (350005, ErrorCategory.TRANSIENT, "business", True),
+        (350022, ErrorCategory.TRANSIENT, "system", True),
+        (10006, ErrorCategory.TRANSIENT, "system", True),
+        (10007, ErrorCategory.TRANSIENT, "system", True),
+        (99999, ErrorCategory.SERVER_BUG, "system", False),
     ],
 )
-def test_classify_table(code: int, layer: str, retryable: bool) -> None:
-    """码 → 层 → 重试 的映射逐条固定（客户端据此决定「断开 / 改参 / 重试 / 放弃」）。
+def test_classify_table(code: int, category: ErrorCategory, layer: str, retryable: bool) -> None:
+    """码 → 类别 → 层 → 重试 的映射逐条固定（04-4 升三元组，既有 layer / retryable 值不变）。
 
     Args:
         code: 错误码。
+        category: 期望错误类别。
         layer: 期望层。
         retryable: 期望可重试性。
     """
-    assert classify(code) == (layer, retryable)
+    assert classify(code) == (category, layer, retryable)
 
 
 def test_frame_media_type_constant() -> None:

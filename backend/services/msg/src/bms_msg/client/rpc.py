@@ -11,10 +11,12 @@
 `client/transport/base.py` 模块说明：精确取消要求拿到单条 stream 并发 `RST_STREAM`，通用 HTTP 客户端
 给不了。生产实现 `H2Transport` 由构造参数缺省注入，用例注入 `AsgiRpcTransport` / `ScriptedRpcTransport`。
 
-**做的**：一元调用、流式入口（`stream()` 返回句柄，实现见 `client/stream.py`）、`request_id` 关联
-（单 stream 一请求）、预算传播（`deadline_ms` 写入帧头）、一元本地超时 = 预算 + 余量、本地超时与服务端
-`350004` 统一异常、错误帧 → `RpcCallError`、地址轮询。
-**不做的**（后续任务）：重试 / 熔断 / 幂等（04-4）、实例选择策略与失败摘除（04-6）。
+**做的**：一元调用（04-4 起带重试中间层：五类分类 + full jitter 退避 + 调用链预算 + 幂等键 +
+熔断 + `Retry-After`）、流式入口（`stream()` 返回句柄，实现见 `client/stream.py`，**不进重试层**）、
+`request_id` 关联（单 stream 一请求；重试每次尝试重新生成，幂等键全程稳定）、预算传播
+（`deadline_ms` 写入帧头）、一元本地超时 = 预算 + 余量、本地超时与服务端 `350004` 统一异常、
+错误帧 → `RpcCallError`、地址轮询。
+**不做的**（后续任务）：实例选择策略与失败摘除（04-6）、流式错误重试（8B_12 / 后续）。
 
 **请求帧组装只写一份**：`call()` 与 `stream()` 共用 `_request_frame()` / `_http_request()`。两份编码
 会在「加一个帧头字段」时悄悄漂移，而漂移只会在跨版本联调时才暴露——那时已经很难说清是哪边旧。
@@ -27,9 +29,23 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 from uuid import uuid4
 
+from bms_core.circuit.base import BaseCircuitBreaker
+from bms_core.circuit.null import NullCircuitBreaker
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.logging import get_logger
 
+from bms_msg.client.circuit import rpc_dependency
+from bms_msg.client.retry import (
+    Clock,
+    JitterSource,
+    RetryPolicy,
+    SystemClock,
+    SystemJitter,
+    acquire_budget,
+    decide_retry,
+    parse_retry_after,
+    release_budget,
+)
 from bms_msg.client.transport import (
     H2Transport,
     RpcHttpRequest,
@@ -46,7 +62,7 @@ from bms_msg.core.config import (
     RPC_DEFAULT_TIMEOUT_MS,
     RPC_TENANT_HEADER,
 )
-from bms_msg.errors import MsgError, MsgErrorCode
+from bms_msg.errors import ErrorCategory, MsgError, MsgErrorCode
 from bms_msg.protocol.frame import (
     FRAME_CONTENT_TYPE,
     PROTOCOL_VERSION,
@@ -64,6 +80,7 @@ if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期
 
 __all__ = [
     "InstanceProvider",
+    "RetryPolicy",
     "RpcCallError",
     "RpcCallTimeoutError",
     "RpcClient",
@@ -89,7 +106,10 @@ class RpcCallError(Exception):
         *,
         retryable: bool = False,
         layer: str = "system",
+        category: ErrorCategory = ErrorCategory.SERVER_BUG,
         retry_after_ms: int | None = None,
+        attempts: int = 1,
+        backoff_ms: tuple[int, ...] = (),
     ) -> None:
         """初始化。
 
@@ -98,14 +118,20 @@ class RpcCallError(Exception):
             message: 可读提示。
             retryable: 服务端判定的可重试性。
             layer: 服务端判定的错误层（`transport` / `protocol` / `business` / `system`）。
+            category: 服务端判定的错误类别（04-4；老服务端缺该字段时保守回落 `server_bug`）。
             retry_after_ms: 建议重试间隔（毫秒；限流 / 连接类错误才给）。
+            attempts: 实际尝试次数（重试层回填；任务 §2.7）。
+            backoff_ms: 已发生的退避序列（重试层回填）。
         """
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
         self.layer = layer
+        self.category = category
         self.retry_after_ms = retry_after_ms
+        self.attempts = attempts
+        self.backoff_ms = backoff_ms
 
 
 class RpcCallTimeoutError(RpcCallError):
@@ -128,6 +154,7 @@ class RpcCallTimeoutError(RpcCallError):
             message,
             retryable=False,
             layer="business",
+            category=ErrorCategory.UNKNOWN,
         )
         self.outcome = OUTCOME_UNKNOWN
         self.budget_ms = budget_ms
@@ -179,16 +206,33 @@ class StaticInstanceProvider:
 def _error_of(response: RpcHttpResponse) -> RpcCallError:
     """把非 200 响应映射为调用错误（只映射有明确含义的两个码）。
 
+    **04-4**：429 补解析 HTTP `Retry-After`（delta-seconds → 毫秒；非法忽略），与帧路径的
+    `retry_after_ms` 汇成同一个字段；`category` 由本层显式给出（HTTP 响应没有帧头可照搬）。
+
     Args:
         response: 传输层响应。
 
     Returns:
         RpcCallError: 待抛出的错误。
     """
+    retry_after_ms = parse_retry_after(response.headers)
     if response.status == 429:
-        return RpcCallError(350005, "RPC 调用被限流（429）", retryable=True, layer="business")
+        return RpcCallError(
+            350005,
+            "RPC 调用被限流（429）",
+            retryable=True,
+            layer="business",
+            category=ErrorCategory.TRANSIENT,
+            retry_after_ms=retry_after_ms,
+        )
     if response.status == 413:
-        return RpcCallError(350006, "RPC 参数或结果超过上限（413）", retryable=False, layer="transport")
+        return RpcCallError(
+            350006,
+            "RPC 参数或结果超过上限（413）",
+            retryable=False,
+            layer="transport",
+            category=ErrorCategory.PARAM_ERROR,
+        )
     return RpcCallError(0, f"RPC 端点返回 HTTP {response.status}", retryable=False, layer="transport")
 
 
@@ -214,11 +258,17 @@ def error_of_frame(header: Mapping[str, Any], *, budget_ms: int | None = None) -
         # 服务端预算耗尽与本地兜底超时对调用方是同一件事：没在预算内拿到结果。
         raise RpcCallTimeoutError(message or "RPC 预算耗尽", budget_ms=budget_ms)
     retry_after = header.get("retry_after_ms")
+    # 老服务端没有 category / 取值不认识：保守回落 server_bug（不重试），不猜测码值。
+    try:
+        category = ErrorCategory(str(header.get("category")))
+    except ValueError:
+        category = ErrorCategory.SERVER_BUG
     return RpcCallError(
         code,
         message,
         retryable=bool(header.get("retryable")),
         layer=str(header.get("layer") or "system"),
+        category=category,
         retry_after_ms=retry_after if isinstance(retry_after, int) else None,
     )
 
@@ -289,6 +339,8 @@ def _request_header(
     trace_id: str | None,
     caller: str | None,
     deadline_ms: int,
+    idempotency_key: str | None = None,
+    retry_budget: int | None = None,
 ) -> ConcurrentStableDict[str, Any]:
     """构造请求帧头（只放 `rpc/contract.py` 声明过的可选字段）。
 
@@ -300,6 +352,8 @@ def _request_header(
         trace_id: 链路标识。
         caller: 调用方服务标识。
         deadline_ms: 本次预算（毫秒；进帧头供逐跳扣减）。
+        idempotency_key: 幂等键（04-4；重试全程稳定）。
+        retry_budget: 调用链剩余重试次数（04-4）。
 
     Returns:
         ConcurrentStableDict[str, Any]: 帧头。
@@ -316,6 +370,10 @@ def _request_header(
         header.set("trace_id", trace_id)
     if caller is not None:
         header.set("caller", caller)
+    if idempotency_key is not None:
+        header.set("idempotency_key", idempotency_key)
+    if retry_budget is not None:
+        header.set("retry_budget", retry_budget)
     return header
 
 
@@ -329,6 +387,8 @@ def _request_frame(
     trace_id: str | None,
     caller: str | None,
     deadline_ms: int,
+    idempotency_key: str | None = None,
+    retry_budget: int | None = None,
 ) -> bytes:
     """编码请求帧（`call()` 与 `stream()` 共用，避免两份编码漂移）。
 
@@ -341,6 +401,8 @@ def _request_frame(
         trace_id: 链路标识。
         caller: 调用方服务标识。
         deadline_ms: 本次预算（毫秒）。
+        idempotency_key: 幂等键（04-4）。
+        retry_budget: 调用链剩余重试次数（04-4）。
 
     Returns:
         bytes: 完整帧字节。
@@ -356,6 +418,8 @@ def _request_frame(
             trace_id=trace_id,
             caller=caller,
             deadline_ms=deadline_ms,
+            idempotency_key=idempotency_key,
+            retry_budget=retry_budget,
         ),
         payload=payload,
     )
@@ -371,6 +435,10 @@ class RpcClient:
         tenant: str | None = None,
         deadline_ms: int | None = None,
         transport: RpcTransport | None = None,
+        retry_policy: RetryPolicy | None = None,
+        circuit: BaseCircuitBreaker | None = None,
+        clock: Clock | None = None,
+        jitter: JitterSource | None = None,
     ) -> None:
         """初始化。
 
@@ -380,6 +448,10 @@ class RpcClient:
                 用 `call(tenant=...)` 覆盖。
             deadline_ms: 单次调用缺省预算（毫秒；None 取 `RPC_DEFAULT_TIMEOUT_MS`）。
             transport: 传输层（用例注入 `AsgiRpcTransport` / `ScriptedRpcTransport`；生产留 None 走 h2）。
+            retry_policy: 重试策略（缺省 `RetryPolicy()`）。
+            circuit: 熔断器（缺省 `NullCircuitBreaker()` 恒闭合，首期行为等价现状、零回归）。
+            clock: 时钟（缺省 `SystemClock()`；用例注入 fake clock）。
+            jitter: 抖动随机源（缺省 `SystemJitter()`；用例注入固定序列）。
 
         Raises:
             ParamError: 预算取值非法（`10001`）。
@@ -388,6 +460,73 @@ class RpcClient:
         self._tenant = tenant
         self._deadline_ms = validate_budget_ms(deadline_ms, default=RPC_DEFAULT_TIMEOUT_MS)
         self._transport: RpcTransport = transport if transport is not None else H2Transport()
+        self._retry_policy = retry_policy if retry_policy is not None else RetryPolicy()
+        self._circuit = circuit if circuit is not None else NullCircuitBreaker()
+        self._clock = clock if clock is not None else SystemClock()
+        self._jitter = jitter if jitter is not None else SystemJitter()
+
+    async def _attempt(
+        self,
+        *,
+        service: str,
+        method: str,
+        payload: bytes,
+        headers: Mapping[str, str] | None,
+        trace_id: str | None,
+        caller: str | None,
+        budget: int,
+        tenant: str | None,
+        idempotency_key: str | None,
+        retry_budget: int | None,
+    ) -> RpcReply:
+        """发一次请求并解释响应（不含重试；`call()` 的重试循环唯一调用点）。
+
+        Args:
+            service: 服务标识。
+            method: 方法名。
+            payload: 调用参数原始字节。
+            headers: 结构化头。
+            trace_id: 链路标识。
+            caller: 调用方服务标识。
+            budget: 本次预算（毫秒）。
+            tenant: 本次调用的租户编码。
+            idempotency_key: 幂等键（重试全程稳定）。
+            retry_budget: 调用链剩余重试次数。
+
+        Returns:
+            RpcReply: 结果。
+
+        Raises:
+            RpcCallTimeoutError: 本地兜底超时 / 服务端 `350004`。
+            RpcCallError: 错误帧 / 非 200 / 响应不可解析。
+        """
+        request = self._http_request(
+            request_id=uuid4().hex,
+            service=service,
+            method=method,
+            payload=payload,
+            headers=headers,
+            trace_id=trace_id,
+            caller=caller,
+            budget=budget,
+            tenant=tenant,
+            suffix="",
+            idempotency_key=idempotency_key,
+            retry_budget=retry_budget,
+        )
+        try:
+            response = await self._transport.send(request)
+        except RpcTransportTimeoutError as exc:
+            raise RpcCallTimeoutError(f"RPC 调用超时（{budget} ms）：{service}.{method}", budget_ms=budget) from exc
+        except RpcTransportProtocolError as exc:
+            raise RpcCallError(0, f"RPC 响应不可解析：{exc}", layer="protocol") from exc
+        except RpcTransportError as exc:
+            raise RpcCallError(
+                0, f"RPC 连接失败：{exc}", layer="transport", retryable=True, category=ErrorCategory.TRANSIENT
+            ) from exc
+        if response.status != 200:
+            raise _error_of(response)
+        return _reply_of(response.body, budget_ms=budget)
 
     async def call(
         self,
@@ -400,8 +539,14 @@ class RpcClient:
         caller: str | None = None,
         deadline_ms: int | None = None,
         tenant: str | None = None,
+        idempotency_key: str | None = None,
+        idempotent: bool = False,
+        retry_budget: int | None = None,
+        policy: RetryPolicy | None = None,
     ) -> RpcReply:
-        """一元调用（发帧形态，收结果帧）。
+        """一元调用（发帧形态，收结果帧；04-4 起带重试中间层）。
+
+        **重试只包 `call()`**：`stream()` / `RpcStream` 完全不进这一层（决策 E1）。
 
         Args:
             service: 服务标识。
@@ -412,43 +557,99 @@ class RpcClient:
             caller: 调用方服务标识（进帧头；服务端仍以 HTTP 头优先）。
             deadline_ms: 本次预算（毫秒；缺省取构造时的值）。写进帧头 `deadline_ms` 供逐跳传播。
             tenant: 本次调用的租户编码（缺省取构造时的值；服务端以解析链结果为准）。
+            idempotency_key: 幂等键（显式给则用之；未给且策略允许则生成 `uuid4().hex`，
+                重试全程复用同一键）。
+            idempotent: 显式声明方法幂等（无需键即可重试）。
+            retry_budget: 上游给的剩余重试次数（缺省取调用链共享预算）。
+            policy: 本次调用覆盖的重试策略（缺省取构造注入的策略）。
 
         Returns:
             RpcReply: 结果。
 
         Raises:
-            ParamError: `service` / `method` 形态非法（本地先拦，省一次往返）或预算参数非法。
+            ParamError: `service` / `method` 形态非法（本地先拦）或预算参数非法。
+            RpcRetryBlockedError: 非幂等且无幂等键，重试被阻止。
             RpcCallTimeoutError: 本地兜底超时 / 服务端 `350004`（都带 `code=350004`）。
-            RpcCallError: 错误帧 / 非 200 / 响应不可解析。
-            asyncio.CancelledError: 调用方取消（取消协程即取消请求，无需额外句柄；传输层随后发
-                `RST_STREAM(CANCEL)` 让服务端停下，并记 `msg_rpc_client_cancel`）。
+            RpcCallError: 错误帧 / 非 200 / 响应不可解析 / 熔断打开快速失败 / 重试耗尽。
+            asyncio.CancelledError: 调用方取消（原样穿透，不重试）。
         """
         ensure_rpc_name(service, method)
         budget = validate_budget_ms(deadline_ms, default=self._deadline_ms)
-        request_id = uuid4().hex
-        request = self._http_request(
-            request_id=request_id,
-            service=service,
-            method=method,
-            payload=payload,
-            headers=headers,
-            trace_id=trace_id,
-            caller=caller,
-            budget=budget,
-            tenant=tenant,
-            suffix="",
-        )
+        active = policy if policy is not None else self._retry_policy
+        key = idempotency_key
+        if key is None and active.auto_idempotency_key and not idempotent:
+            key = uuid4().hex
+        chain_budget, token = acquire_budget(active)
+        # 上游显式给了更小的预算就收紧本跳：每跳都受同一上限约束，A→B→C 不会各重试 2 次。
+        if retry_budget is not None:
+            chain_budget.remaining = min(chain_budget.remaining, retry_budget)
+        attempts = 0
+        backoff_ms: list[int] = []
+        dependency = rpc_dependency(service)
         try:
-            response = await self._transport.send(request)
-        except RpcTransportTimeoutError as exc:
-            raise RpcCallTimeoutError(f"RPC 调用超时（{budget} ms）：{service}.{method}", budget_ms=budget) from exc
-        except RpcTransportProtocolError as exc:
-            raise RpcCallError(0, f"RPC 响应不可解析：{exc}", layer="protocol") from exc
-        except RpcTransportError as exc:
-            raise RpcCallError(0, f"RPC 连接失败：{exc}", layer="transport") from exc
-        if response.status != 200:
-            raise _error_of(response)
-        return _reply_of(response.body, budget_ms=budget)
+            if not await self._circuit.allow(dependency):
+                raise RpcCallError(
+                    0,
+                    f"RPC 熔断打开，快速失败：{service}.{method}",
+                    layer="system",
+                    category=ErrorCategory.TRANSIENT,
+                )
+            while True:
+                try:
+                    reply = await self._attempt(
+                        service=service,
+                        method=method,
+                        payload=payload,
+                        headers=headers,
+                        trace_id=trace_id,
+                        caller=caller,
+                        budget=budget,
+                        tenant=tenant,
+                        idempotency_key=key,
+                        retry_budget=chain_budget.remaining,
+                    )
+                except RpcCallError as exc:
+                    await self._circuit.record_failure(dependency)
+                    exc.attempts = attempts + 1
+                    exc.backoff_ms = tuple(backoff_ms)
+                    decision = decide_retry(
+                        exc,
+                        attempts=attempts,
+                        policy=active,
+                        budget=chain_budget,
+                        idempotency_key=key,
+                        idempotent=idempotent,
+                        retry_after_ms=exc.retry_after_ms,
+                        jitter=self._jitter,
+                    )
+                    if decision is None:
+                        _LOGGER.info(
+                            "msg_rpc_retry_stopped",
+                            service=service,
+                            method=method,
+                            attempts=exc.attempts,
+                            category=str(exc.category),
+                            code=exc.code,
+                        )
+                        raise
+                    _LOGGER.info(
+                        "msg_rpc_retry",
+                        service=service,
+                        method=method,
+                        attempt=attempts + 1,
+                        delay_ms=decision.delay_ms,
+                        category=str(exc.category),
+                        budget_remaining=chain_budget.remaining,
+                    )
+                    backoff_ms.append(decision.delay_ms)
+                    chain_budget.consume()
+                    await self._clock.sleep_ms(decision.delay_ms)
+                    attempts += 1
+                    continue
+                await self._circuit.record_success(dependency)
+                return reply
+        finally:
+            release_budget(token)
 
     def stream(
         self,
@@ -534,6 +735,8 @@ class RpcClient:
         budget: int,
         tenant: str | None,
         suffix: str,
+        idempotency_key: str | None = None,
+        retry_budget: int | None = None,
     ) -> RpcHttpRequest:
         """构造传输层请求（一元与流式共用；`suffix` 决定走哪个端点）。
 
@@ -548,6 +751,8 @@ class RpcClient:
             budget: 本次预算（毫秒）。
             tenant: 本次调用的租户编码。
             suffix: 端点后缀（一元为空串、流式为 `/stream`）。
+            idempotency_key: 幂等键（04-4；流式不传）。
+            retry_budget: 调用链剩余重试次数（04-4；流式不传）。
 
         Returns:
             RpcHttpRequest: 传输层入参。
@@ -571,6 +776,8 @@ class RpcClient:
                 trace_id=trace_id,
                 caller=caller,
                 deadline_ms=budget,
+                idempotency_key=idempotency_key,
+                retry_budget=retry_budget,
             ),
             # 一元：超时包住整次调用；流式：只约束「打开阶段」（见 `open_stream` 的说明）。
             timeout_ms=budget + RPC_CLIENT_TIMEOUT_SLACK_MS,

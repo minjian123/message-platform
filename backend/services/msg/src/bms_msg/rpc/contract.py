@@ -24,9 +24,10 @@ from bms_msg.core.config import (
     RPC_RETURN_RESERVE_MS,
     RPC_STREAM_IDLE_MS,
 )
-from bms_msg.errors import MsgErrorCode
+from bms_msg.errors import ErrorCategory, MsgErrorCode
 from bms_msg.protocol.frame import FrameType
 from bms_msg.rpc.builtin import default_rpc_registry
+from bms_msg.rpc.registry import RpcDeclaration
 
 __all__ = ["rpc_contract"]
 
@@ -52,45 +53,55 @@ def _request_fields() -> tuple[ConcurrentStableList[str], ConcurrentStableList[s
                 "content_type",
                 "protocol_version",
                 "deadline_ms",
+                "idempotency_key",
+                "retry_budget",
             ]
         ),
     )
 
 
-def _method_entries(methods: tuple[tuple[str, str], ...]) -> ConcurrentStableList[ConcurrentStableDict[str, str]]:
-    """把 `(service, method)` 序列编成契约里的对象数组（后续加字段不破坏形状）。
+def _method_entries(
+    declarations: tuple[RpcDeclaration, ...],
+) -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
+    """把方法声明编成契约里的对象数组（04-4 增 `idempotent`）。
 
     Args:
-        methods: `(service, method)` 序列（插入序）。
+        declarations: 方法声明序列（插入序）。
 
     Returns:
-        ConcurrentStableList[ConcurrentStableDict[str, str]]: 方法条目。
+        ConcurrentStableList: 方法条目（含 `service` / `method` / `idempotent` / `form`）。
     """
-    entries: ConcurrentStableList[ConcurrentStableDict[str, str]] = ConcurrentStableList()
-    for service, method in methods:
-        entry: ConcurrentStableDict[str, str] = ConcurrentStableDict()
-        entry.set("service", service)
-        entry.set("method", method)
+    entries: ConcurrentStableList[ConcurrentStableDict[str, Any]] = ConcurrentStableList()
+    for declaration in declarations:
+        entry: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+        entry.set("service", declaration.service)
+        entry.set("method", declaration.method)
+        entry.set("idempotent", declaration.idempotent)
+        entry.set("form", declaration.form)
         entries.add(entry)
     return entries
 
 
-def _methods() -> ConcurrentStableList[ConcurrentStableDict[str, str]]:
-    """一元方法清单（`default_rpc_registry().methods()` 同源）。
+def _methods() -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
+    """一元方法清单（`default_rpc_registry().declarations()` 同源，按形态过滤）。
 
     Returns:
-        ConcurrentStableList[ConcurrentStableDict[str, str]]: 方法条目（插入序）。
+        ConcurrentStableList: 一元方法条目（插入序）。
     """
-    return _method_entries(default_rpc_registry().methods())
+    registry = default_rpc_registry()
+    unary = tuple(item for item in registry.declarations() if (item.service, item.method) in registry.methods())
+    return _method_entries(unary)
 
 
-def _stream_methods() -> ConcurrentStableList[ConcurrentStableDict[str, str]]:
-    """流式方法清单（`default_rpc_registry().stream_methods()` 同源）。
+def _stream_methods() -> ConcurrentStableList[ConcurrentStableDict[str, Any]]:
+    """流式方法清单（同源，按形态过滤）。
 
     Returns:
-        ConcurrentStableList[ConcurrentStableDict[str, str]]: 方法条目（插入序）。
+        ConcurrentStableList: 流式方法条目（插入序）。
     """
-    return _method_entries(default_rpc_registry().stream_methods())
+    registry = default_rpc_registry()
+    stream = tuple(item for item in registry.declarations() if (item.service, item.method) in registry.stream_methods())
+    return _method_entries(stream)
 
 
 def _stream_segment() -> ConcurrentStableDict[str, Any]:
@@ -118,12 +129,52 @@ def _stream_segment() -> ConcurrentStableDict[str, Any]:
     )
 
 
+def _retry_segment() -> ConcurrentStableDict[str, Any]:
+    """构造 `rpc.retry` 段（04-4：只写字段与算法，不写死数值）。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 重试语义段。
+    """
+    return ConcurrentStableDict(
+        {
+            "idempotency_key_header": "idempotency_key",
+            "retry_budget_header": "retry_budget",
+            "idempotency_key": "客户端生成、重试全程复用；可显式传入业务键（只增可选帧头字段）",
+            "scope": "(tenant, service, method, key)——同名业务键跨方法不互相误判重复",
+            "budget_propagation": ("帧头 retry_budget 逐跳递减；进程内 ContextVar 共享；下游取 min(上游值, 本地剩余)"),
+            "backoff": "指数基线 base * multiplier ** (attempt - 1)，full jitter 取 [1, cap]，禁止立即重试",
+            "retry_after": "帧 retry_after_ms 与 HTTP Retry-After(delta-seconds) 双来源，取 max(退避, 建议) 并封顶",
+            "precondition": "retryable 且（幂等或带幂等键）；熔断打开不进入重试；非幂等无键被阻止",
+            "unknown": "350004 结果未知：仅在带幂等键时谨慎重试（retryable 仍为 false）",
+            "stream": "流式不进重试层（重开流 != 重试，需 seq 断点续传契约）",
+            "categories": ConcurrentStableList([category.value for category in ErrorCategory]),
+        }
+    )
+
+
+def _circuit_segment() -> ConcurrentStableDict[str, Any]:
+    """构造 `rpc.circuit` 段（04-4：三态语义，不写死阈值）。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 熔断语义段。
+    """
+    return ConcurrentStableDict(
+        {
+            "contract": "bms_core.circuit.BaseCircuitBreaker（allow / record_success / record_failure / state）",
+            "states": ConcurrentStableList(["closed", "open", "half_open"]),
+            "dependency": "service:<service>（与 bms service_dependency 同一命名空间）",
+            "algorithm": "窗口内连续失败达阈值即打开；打开到期转半开；半开限流探测，成功闭合 / 失败回打开",
+            "default_impl": "NullCircuitBreaker（恒闭合）；生产显式注入 InProcessCircuitBreaker 才启用三态",
+        }
+    )
+
+
 def rpc_contract() -> ConcurrentStableDict[str, Any]:
     """构造 RPC 契约片段（供 `frame_contract()` 摊平）。
 
     Returns:
         ConcurrentStableDict[str, Any]: 单键 `rpc`，内含帧类型 / 响应约定 / 字段 / payload 规则 /
-        错误码 / 方法清单 / 流式段。
+        错误码 / 方法清单 / 流式段 / 重试段 / 熔断段。
     """
     required, optional = _request_fields()
     return ConcurrentStableDict(
@@ -160,6 +211,8 @@ def rpc_contract() -> ConcurrentStableDict[str, Any]:
                     ),
                     "methods": _methods(),
                     "stream": _stream_segment(),
+                    "retry": _retry_segment(),
+                    "circuit": _circuit_segment(),
                 }
             )
         }

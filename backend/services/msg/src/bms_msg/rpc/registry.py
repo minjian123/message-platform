@@ -28,6 +28,7 @@ from bms_core.core.roots import BaseFrameworkObject, BaseValueObject
 
 __all__ = [
     "RpcCall",
+    "RpcDeclaration",
     "RpcHandler",
     "RpcRegistrationError",
     "RpcRegistry",
@@ -40,6 +41,27 @@ UNARY_FORM = "一元方法"
 
 STREAM_FORM = "流式方法"
 """形态名（流式）：同上。"""
+
+
+@dataclass(frozen=True)
+class RpcDeclaration(BaseValueObject):
+    """一个方法的契约声明（04-4）：幂等性 + 形态，供 `rpc_contract()` 发布。
+
+    **单独一个类型而不是改 `methods()` 的返回**：既有用例与调用点都按 `(service, method)`
+    二元组消费 `methods()`，改形状会让它们全体跟着改；声明是新增的查询面，不该动旧面。
+    """
+
+    service: str
+    """服务标识。"""
+
+    method: str
+    """方法名。"""
+
+    idempotent: bool
+    """是否幂等（默认 `False` = 保守；带幂等键的非幂等调用才可安全重试）。"""
+
+    form: str
+    """形态名（一元 / 流式）。"""
 
 
 @dataclass(frozen=True)
@@ -77,6 +99,16 @@ class RpcCall(BaseValueObject):
     **流式下每帧重算**（04-3-1）：处理器若在迭代中途继续调下游，取到的必须是当下剩余预算，
     否则一条跑了两分钟的长流会把「开局时的剩余」当成还能用两分钟。
     """
+
+    retry_budget: int | None = None
+    """调用链剩余可重试次数（04-4）：从请求帧头 `retry_budget` 透传。
+
+    handler 继续调下游时应把它原样放进下一次 `call(retry_budget=...)`，与 `deadline_ms` 的
+    逐跳扣减同构——每跳都受同一上限约束，A→B→C 不会各重试 2 次凑成 8 次。
+    """
+
+    idempotency_key: str | None = None
+    """本次调用的幂等键业务部分（04-4；服务端已按作用域拼接去重，handler 只读）。"""
 
 
 def _empty_headers() -> ConcurrentStableDict[str, str]:
@@ -152,14 +184,16 @@ class RpcRegistry(BaseFrameworkObject):
         """初始化空注册表。"""
         self._handlers: ConcurrentStableDict[tuple[str, str], RpcHandler] = ConcurrentStableDict()
         self._stream_handlers: ConcurrentStableDict[tuple[str, str], RpcStreamHandler] = ConcurrentStableDict()
+        self._idempotent: ConcurrentStableDict[tuple[str, str], bool] = ConcurrentStableDict()
 
-    def register(self, service: str, method: str, handler: RpcHandler) -> None:
+    def register(self, service: str, method: str, handler: RpcHandler, *, idempotent: bool = False) -> None:
         """登记一个一元处理器（重复 / 形态冲突即拒）。
 
         Args:
             service: 服务标识。
             method: 方法名。
             handler: 处理器。
+            idempotent: 方法是否幂等（04-4；缺省 `False` 是保守值：写操作漏声明不会被自动重试）。
 
         Raises:
             RpcRegistrationError: 同一 `(service, method)` 已登记（同形态重复或另一形态占用）。
@@ -169,14 +203,18 @@ class RpcRegistry(BaseFrameworkObject):
         if self._handlers.get(key) is not None:
             raise RpcRegistrationError(f"RPC 方法重复登记：{service}.{method}")
         self._handlers.set(key, handler)
+        self._idempotent.set(key, idempotent)
 
-    def register_stream(self, service: str, method: str, handler: RpcStreamHandler) -> None:
+    def register_stream(
+        self, service: str, method: str, handler: RpcStreamHandler, *, idempotent: bool = False
+    ) -> None:
         """登记一个流式处理器（重复 / 形态冲突即拒）。
 
         Args:
             service: 服务标识。
             method: 方法名。
             handler: 流式处理器（返回异步迭代器）。
+            idempotent: 方法是否幂等（流式不进重试层，仅进契约供 SDK 查询）。
 
         Raises:
             RpcRegistrationError: 同一 `(service, method)` 已登记（同形态重复或另一形态占用）。
@@ -186,6 +224,7 @@ class RpcRegistry(BaseFrameworkObject):
         if self._stream_handlers.get(key) is not None:
             raise RpcRegistrationError(f"RPC 流式方法重复登记：{service}.{method}")
         self._stream_handlers.set(key, handler)
+        self._idempotent.set(key, idempotent)
 
     def _reject_conflict(self, key: tuple[str, str], occupied: str | None) -> None:
         """形态冲突即拒（同一 `(service, method)` 只能一种形态）。
@@ -227,6 +266,37 @@ class RpcRegistry(BaseFrameworkObject):
             RpcStreamHandler | None: 流式处理器；不可流式调用时为 None。
         """
         return self._stream_handlers.get((service, method))
+
+    def idempotent(self, service: str, method: str) -> bool:
+        """取方法的幂等声明（未登记按缺省保守值 `False`）。
+
+        Args:
+            service: 服务标识。
+            method: 方法名。
+
+        Returns:
+            bool: 幂等为 True。
+        """
+        return bool(self._idempotent.get((service, method), False))
+
+    def declarations(self) -> tuple[RpcDeclaration, ...]:
+        """全部方法的契约声明（一元在前、流式补充，各自插入序）。
+
+        Returns:
+            tuple[RpcDeclaration, ...]: 含 `idempotent` 与形态的声明序列。
+        """
+        entries: ConcurrentStableList[RpcDeclaration] = ConcurrentStableList()
+        for table, form in ((self._handlers, UNARY_FORM), (self._stream_handlers, STREAM_FORM)):
+            for service, method in table:
+                entries.add(
+                    RpcDeclaration(
+                        service=service,
+                        method=method,
+                        idempotent=self.idempotent(service, method),
+                        form=form,
+                    )
+                )
+        return tuple(entries)
 
     def methods(self) -> tuple[tuple[str, str], ...]:
         """全部一元方法（插入序）。

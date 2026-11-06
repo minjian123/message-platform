@@ -8,6 +8,8 @@ bms 适配只拿这一包就能发调用。
 返回类型就在这一层出现，入口与类型同处一处，SDK 封装（8B_03）只需依赖 `bms_msg.client`。
 """
 
+from bms_msg.client.circuit import InProcessCircuitBreaker
+from bms_msg.client.retry import CircuitPolicy, RetryBudget, RetryPolicy
 from bms_msg.client.rpc import (
     InstanceProvider,
     RpcCallError,
@@ -16,9 +18,16 @@ from bms_msg.client.rpc import (
     StaticInstanceProvider,
 )
 from bms_msg.client.stream import RpcStream
+from bms_msg.errors import ErrorCategory, Outcome
 
 __all__ = [
+    "CircuitPolicy",
+    "ErrorCategory",
+    "InProcessCircuitBreaker",
     "InstanceProvider",
+    "Outcome",
+    "RetryBudget",
+    "RetryPolicy",
     "RpcCallError",
     "RpcCallTimeoutError",
     "RpcClient",

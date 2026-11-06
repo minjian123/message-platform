@@ -30,6 +30,7 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
+from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
@@ -47,6 +48,7 @@ __all__ = [
     "DelayStoreDep",
     "DeliveryStateDep",
     "GroupStoreDep",
+    "IdempotencyStoreDep",
     "MessageStoreDep",
     "OffsetEnumeratorDep",
     "OffsetPurgerDep",
@@ -75,6 +77,7 @@ __all__ = [
     "get_delay_store",
     "get_delivery_state",
     "get_group_store",
+    "get_idempotency_store",
     "get_message_store",
     "get_offset_enumerator",
     "get_offset_purger",
@@ -533,3 +536,28 @@ def get_rpc_registry(request: Request) -> RpcRegistry:
 
 RpcRegistryDep = Annotated[RpcRegistry, Depends(get_rpc_registry)]
 """路由参数写法：`registry: RpcRegistryDep`（RPC 方法注册表）。"""
+
+
+def get_idempotency_store(request: Request) -> InProcessIdempotencyStore:
+    """取进程级幂等去重存储（04-4；生产由 `main.py` 装配期注入 `app.state`）。
+
+    **惰性装配**：用例自建的最小 app 不带 `idempotency_store`，这里补一份挂回 `app.state`——
+    每个 app 各持一份、多 app 实例互不串扰（与仓内其它进程级状态同口径），且不要求测试辅助
+    跟着改装配。生产路径已在 `create_app()` 里显式赋值，不会走这条分支。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        InProcessIdempotencyStore: 去重存储单例。
+    """
+    state = request.app.state
+    store = getattr(state, "idempotency_store", None)
+    if store is None:
+        store = InProcessIdempotencyStore()
+        state.idempotency_store = store
+    return cast("InProcessIdempotencyStore", store)
+
+
+IdempotencyStoreDep = Annotated[InProcessIdempotencyStore, Depends(get_idempotency_store)]
+"""路由参数写法：`store: IdempotencyStoreDep`（进程内幂等去重）。"""
