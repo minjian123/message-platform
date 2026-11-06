@@ -1,28 +1,37 @@
-"""最小 RPC 客户端（任务 04-1；Kiwi 2433）：一元调用闭环 + 错误映射 + 实例轮询。
+"""最小 RPC 客户端（任务 04-1 / 04-7-1；Kiwi 2433）：一元调用闭环 + 错误映射 + 实例轮询。
 
 判据：
 
 1. **闭环**：客户端发帧、服务端回帧，`demo.echo` 原样回字节、`demo.length` 回长度；
 2. **错误映射**：错误帧 → `RpcCallError`（码 / `layer` / `retryable` 照搬服务端，不自行分类）；
    非 200（429 / 413 / 其它）→ 对应码；响应不是合法帧 → protocol 层；
-3. **超时与连接失败**：`RpcCallTimeoutError` / transport 层 `RpcCallError`；
-4. **实例来源**：`StaticInstanceProvider` 轮询、空列表拒建；客户端可作上下文管理器释放连接池。
+3. **超时与连接失败**：`RpcTransportTimeoutError` → `RpcCallTimeoutError`、
+   `RpcTransportClosedError` / `RpcTransportProtocolError` → 对应层的 `RpcCallError`；
+4. **实例来源**：`StaticInstanceProvider` 轮询、空列表拒建；客户端可作上下文管理器释放传输。
+
+注入面（04-7-1 换血）：真 app 走 `AsgiRpcTransport`（进程内），错误分支走 `ScriptedRpcTransport`；
+两者与生产 `H2Transport` 同属一份 `RpcTransport` 契约，`RpcClient` 里没有「测试才走的分支」。
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Any
+from collections.abc import AsyncIterator
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
 from fastapi import FastAPI
-from httpx import ASGITransport, ConnectError, MockTransport, ReadTimeout, Request, Response
 
 from bms_msg.client.rpc import (
     RpcCallError,
     RpcCallTimeoutError,
     RpcClient,
     StaticInstanceProvider,
+)
+from bms_msg.client.transport import (
+    RpcHttpRequest,
+    RpcHttpResponse,
+    RpcTransportClosedError,
+    RpcTransportProtocolError,
+    RpcTransportTimeoutError,
 )
 from bms_msg.protocol.frame import (
     PROTOCOL_VERSION,
@@ -32,6 +41,7 @@ from bms_msg.protocol.frame import (
     encode_frame,
 )
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
+from tests_support.rpc_transport import AsgiRpcTransport, ScriptedRpcTransport
 
 pytestmark = pytest.mark.kiwi_id(2433)
 
@@ -39,9 +49,6 @@ __all__ = ["msg_app", "msg_declared_codes", "msg_plugins"]
 
 BASE_URL = "http://test"
 """实例基址（ASGI 直连，host 不真正解析）。"""
-
-Handler = Callable[[Request], Coroutine[Any, Any, Response]]
-"""MockTransport 的异步处理器类型（`httpx.AsyncHandler` 的等价形状）。"""
 
 
 @pytest.fixture
@@ -57,21 +64,34 @@ async def client(msg_app: FastAPI) -> AsyncIterator[RpcClient]:
     async with RpcClient(
         StaticInstanceProvider([BASE_URL]),
         tenant="demo",
-        transport=ASGITransport(app=msg_app),
+        transport=AsgiRpcTransport(msg_app),
     ) as opened:
         yield opened
 
 
-def _client_with(handler: Handler) -> RpcClient:
-    """构造走 MockTransport 的客户端（用于错误 / 超时分支）。
+def _client_with(transport: ScriptedRpcTransport) -> RpcClient:
+    """构造走脚本传输的客户端（用于错误 / 超时分支）。
 
     Args:
-        handler: 请求处理器。
+        transport: 脚本传输。
 
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=MockTransport(handler))
+    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=transport)
+
+
+def _response(status: int = 200, body: bytes = b"") -> RpcHttpResponse:
+    """构造传输层响应。
+
+    Args:
+        status: 状态码。
+        body: 响应体。
+
+    Returns:
+        RpcHttpResponse: 响应。
+    """
+    return RpcHttpResponse(status=status, headers=(), body=body, stream_id=1)
 
 
 def _result_frame(payload: bytes = b"", *, headers: object = None) -> bytes:
@@ -150,19 +170,19 @@ async def test_invalid_name_rejected_locally(client: RpcClient) -> None:
 async def test_rate_limited_status_mapped() -> None:
     """429 → `350005` + `retryable=True`。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """恒回 429。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 429。
+            RpcHttpResponse: 429。
         """
         del request
-        return Response(429)
+        return _response(429)
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -175,19 +195,19 @@ async def test_rate_limited_status_mapped() -> None:
 async def test_payload_too_large_status_mapped() -> None:
     """413 → `350006`。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """恒回 413。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 413。
+            RpcHttpResponse: 413。
         """
         del request
-        return Response(413)
+        return _response(413)
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -199,19 +219,19 @@ async def test_payload_too_large_status_mapped() -> None:
 async def test_other_status_mapped_to_transport() -> None:
     """其它非 200 → code 0 / transport 层（无法映射时不臆造产品码）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """恒回 500。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 500。
+            RpcHttpResponse: 500。
         """
         del request
-        return Response(500)
+        return _response(500)
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -222,24 +242,24 @@ async def test_other_status_mapped_to_transport() -> None:
 
 
 async def test_timeout_raises_typed_error() -> None:
-    """读超时 → `RpcCallTimeoutError`（不是「失败」，码化归 04-2）。"""
+    """传输层超时 → `RpcCallTimeoutError`（不是「失败」，码化归 04-2）。"""
 
-    async def handler(request: Request) -> Response:
-        """抛读超时。
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """抛传输层超时。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Raises:
-            ReadTimeout: 恒定超时。
+            RpcTransportTimeoutError: 恒定超时。
         """
         del request
-        raise ReadTimeout("slow")
+        raise RpcTransportTimeoutError("slow")
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallTimeoutError):
-            await client.call("demo", "echo", timeout_ms=1)
+            await client.call("demo", "echo", deadline_ms=1)
     finally:
         await client.aclose()
 
@@ -247,19 +267,19 @@ async def test_timeout_raises_typed_error() -> None:
 async def test_connection_error_mapped_to_transport() -> None:
     """连接失败 → transport 层 `RpcCallError`。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """抛连接失败。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Raises:
-            ConnectError: 恒定失败。
+            RpcTransportClosedError: 恒定失败。
         """
         del request
-        raise ConnectError("refused")
+        raise RpcTransportClosedError("refused")
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -268,22 +288,47 @@ async def test_connection_error_mapped_to_transport() -> None:
     assert caught.value.layer == "transport"
 
 
+async def test_transport_protocol_error_maps_to_protocol_layer() -> None:
+    """传输层协议错（如 ALPN 未协商到 `h2`）→ protocol 层 `RpcCallError`。"""
+
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """抛协议错。
+
+        Args:
+            request: 传输层请求（未使用）。
+
+        Raises:
+            RpcTransportProtocolError: 恒定协议错。
+        """
+        del request
+        raise RpcTransportProtocolError("alpn")
+
+    client = _client_with(ScriptedRpcTransport(handler))
+    try:
+        with pytest.raises(RpcCallError) as caught:
+            await client.call("demo", "echo")
+    finally:
+        await client.aclose()
+    assert caught.value.layer == "protocol"
+    assert caught.value.code == 0
+
+
 async def test_unparsable_response_is_protocol_error() -> None:
     """响应不是合法帧 → protocol 层（带解析得到的码）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回一段垃圾字节。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 非帧内容。
+            RpcHttpResponse: 非帧内容。
         """
         del request
-        return Response(200, content=b"not-a-frame")
+        return _response(200, b"not-a-frame")
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -296,20 +341,20 @@ async def test_unparsable_response_is_protocol_error() -> None:
 async def test_wrong_response_type_is_protocol_error() -> None:
     """响应帧类型既不是 ERROR 也不是 RPC+response → protocol 层。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回一个 publish 帧。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 类型不符的帧。
+            RpcHttpResponse: 类型不符的帧。
         """
         del request
         body = encode_frame(frame_type=int(FrameType.PUBLISH), flags=FrameFlags.RESPONSE, header={"request_id": "r"})
-        return Response(200, content=body)
+        return _response(200, body)
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -322,19 +367,19 @@ async def test_wrong_response_type_is_protocol_error() -> None:
 async def test_error_frame_without_code_yields_zero() -> None:
     """错误帧缺 `code` 时给 0（错误路径不再抛错）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回一个缺 code 的错误帧。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 错误帧。
+            RpcHttpResponse: 错误帧。
         """
         del request
-        return Response(200, content=_error_frame(None))
+        return _response(200, _error_frame(None))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         with pytest.raises(RpcCallError) as caught:
             await client.call("demo", "echo")
@@ -346,19 +391,19 @@ async def test_error_frame_without_code_yields_zero() -> None:
 async def test_non_map_result_headers_yield_empty() -> None:
     """结果帧 `headers` 不是映射 → 空头（不抛，结果本身有效）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回一个头形态非法的结果帧。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 结果帧。
+            RpcHttpResponse: 结果帧。
         """
         del request
-        return Response(200, content=_result_frame(b"ok", headers="not-a-map"))
+        return _response(200, _result_frame(b"ok", headers="not-a-map"))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         reply = await client.call("demo", "echo")
     finally:
@@ -370,19 +415,19 @@ async def test_non_map_result_headers_yield_empty() -> None:
 async def test_non_string_header_entries_dropped() -> None:
     """结果帧头里非字符串的项被丢弃（不整包失败）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回一个混入非字符串项的结果帧。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 结果帧。
+            RpcHttpResponse: 结果帧。
         """
         del request
-        return Response(200, content=_result_frame(b"ok", headers={"k": 1, "good": "v"}))
+        return _response(200, _result_frame(b"ok", headers={"k": 1, "good": "v"}))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         reply = await client.call("demo", "echo")
     finally:
@@ -394,20 +439,20 @@ async def test_request_frame_carries_trace_and_caller() -> None:
     """`trace_id` / `caller` 进请求帧头（服务端据此写日志与响应头）。"""
     captured: ConcurrentStableDict[str, object] = ConcurrentStableDict()
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """截获请求帧头。
 
         Args:
-            request: 请求。
+            request: 传输层请求。
 
         Returns:
-            Response: 固定结果帧。
+            RpcHttpResponse: 固定结果帧。
         """
-        for key, value in decode_frame(request.content).header.items():
+        for key, value in decode_frame(request.body).header.items():
             captured.set(key, value)
-        return Response(200, content=_result_frame(b"ok"))
+        return _response(200, _result_frame(b"ok"))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         await client.call("demo", "echo", trace_id="t1", caller="identity")
     finally:
@@ -423,20 +468,20 @@ async def test_request_without_optional_headers_stays_minimal() -> None:
     """不传可选头时请求帧里也不出现这些键（不为空值占位）。"""
     captured: ConcurrentStableDict[str, object] = ConcurrentStableDict()
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """截获请求帧头。
 
         Args:
-            request: 请求。
+            request: 传输层请求。
 
         Returns:
-            Response: 固定结果帧。
+            RpcHttpResponse: 固定结果帧。
         """
-        for key, value in decode_frame(request.content).header.items():
+        for key, value in decode_frame(request.body).header.items():
             captured.set(key, value)
-        return Response(200, content=_result_frame(b"ok"))
+        return _response(200, _result_frame(b"ok"))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     try:
         await client.call("demo", "echo")
     finally:
@@ -445,6 +490,63 @@ async def test_request_without_optional_headers_stays_minimal() -> None:
     assert "trace_id" not in captured
     assert "caller" not in captured
     assert "headers" not in captured
+
+
+async def test_trace_reaches_transport() -> None:
+    """传输层拿得到日志关联信息（04-7-2 的取消事件靠它对账 `msg_rpc`）。"""
+    seen: list[RpcHttpRequest] = []
+
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """记录请求。
+
+        Args:
+            request: 传输层请求。
+
+        Returns:
+            RpcHttpResponse: 固定结果帧。
+        """
+        seen.append(request)
+        return _response(200, _result_frame(b"ok"))
+
+    client = _client_with(ScriptedRpcTransport(handler))
+    try:
+        await client.call("demo", "echo")
+    finally:
+        await client.aclose()
+
+    trace = seen[0].trace
+    assert trace is not None
+    assert (trace.service, trace.method) == ("demo", "echo")
+    assert trace.request_id
+
+
+async def test_tenant_header_is_forwarded() -> None:
+    """租户头随请求发出（服务端解析不到租户会 `350012`）。"""
+    seen: list[RpcHttpRequest] = []
+
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """记录请求。
+
+        Args:
+            request: 传输层请求。
+
+        Returns:
+            RpcHttpResponse: 固定结果帧。
+        """
+        seen.append(request)
+        return _response(200, _result_frame(b"ok"))
+
+    client = RpcClient(
+        StaticInstanceProvider([BASE_URL]),
+        tenant="demo",
+        transport=ScriptedRpcTransport(handler),
+    )
+    try:
+        await client.call("demo", "echo")
+    finally:
+        await client.aclose()
+
+    assert ("X-Tenant-ID", "demo") in seen[0].headers
 
 
 async def test_static_provider_round_robins() -> None:
@@ -465,19 +567,20 @@ def test_static_provider_requires_endpoint() -> None:
 async def test_client_can_be_reused_and_closed() -> None:
     """同一客户端可连续调用；`aclose()` 可重复调用不炸。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
         """回固定结果帧。
 
         Args:
-            request: 请求（未使用）。
+            request: 传输层请求（未使用）。
 
         Returns:
-            Response: 结果帧。
+            RpcHttpResponse: 结果帧。
         """
         del request
-        return Response(200, content=_result_frame(b"x"))
+        return _response(200, _result_frame(b"x"))
 
-    client = _client_with(handler)
+    client = _client_with(ScriptedRpcTransport(handler))
     assert (await client.call("demo", "echo")).payload == b"x"
     assert (await client.call("demo", "echo")).payload == b"x"
+    await client.aclose()
     await client.aclose()

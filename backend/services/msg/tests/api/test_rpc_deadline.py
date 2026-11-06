@@ -36,6 +36,7 @@ from bms_msg.rpc.service import invoke_rpc
 from tests_support.frame_app import build_frame_app
 from tests_support.frame_client import DEMO_HEADERS, frame_bytes, header, post_frame
 from tests_support.msg_fixtures import msg_app, msg_declared_codes, msg_plugins
+from tests_support.rpc_transport import AsgiRpcTransport
 
 pytestmark = pytest.mark.kiwi_id(2434)
 
@@ -274,7 +275,7 @@ async def _call_down(frames_app: FastAPI, service: str, method: str, call: RpcCa
         StaticInstanceProvider([BASE_URL]),
         tenant="demo",
         deadline_ms=call.deadline_ms,
-        transport=ASGITransport(app=frames_app),
+        transport=AsgiRpcTransport(frames_app),
     ) as downstream:
         try:
             return await downstream.call(service, method)

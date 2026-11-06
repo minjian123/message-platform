@@ -187,7 +187,7 @@ source = { editable = "services/msg" }
 dependencies = [
     { name = "bms-core" },
     { name = "fastapi" },
-    { name = "httpx", extra = ["http2"] },
+    { name = "h2" },
     { name = "msgpack" },
 ]
 
@@ -195,7 +195,7 @@ dependencies = [
 requires-dist = [
     { name = "bms-core", editable = "../../bms/backend/libs/bms_core" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
+    { name = "h2", specifier = ">=4.1" },
     { name = "msgpack", specifier = ">=1.1" },
 ]
 
@@ -769,11 +769,6 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad" },
-]
-
-[package.optional-dependencies]
-http2 = [
-    { name = "h2" },
 ]
 
 [[package]]

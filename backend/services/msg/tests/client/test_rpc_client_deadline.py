@@ -1,69 +1,64 @@
-"""RPC 客户端预算与超时（任务 04-2；Kiwi 2434）：`deadline_ms` 传播 / 别名 / 本地超时统一 `350004`。
+"""RPC 客户端预算与超时（任务 04-2 / 04-7-1；Kiwi 2434）：`deadline_ms` 传播 / 本地超时 / 取消。
 
 判据：
 
 1. **预算写进帧头**：`deadline_ms`（构造缺省 + 每次调用覆盖）落在 `header.deadline_ms`，逐跳可扣；
-2. **别名**：`timeout_ms` 仍可用（内部等价）、两个都给即 `10001`、越界即 `10001`；
-3. **本地超时**：`httpx` 超时 = 预算 + 200ms 冗余（守住「客户端超时 > 服务端预算」），抛
+2. **本地超时**：传输层超时 = 预算 + 200ms 冗余（守住「客户端超时 > 服务端预算」），映射为
    `RpcCallTimeoutError(code=350004)`；
-4. **服务端 350004**：错误帧按码映射成同一个异常类（一个语义一种异常）；
+3. **服务端 350004**：错误帧按码映射成同一个异常类（一个语义一种异常）；
+4. **`timeout_ms` 已删**（04-7-1）：构造与调用传它即 `TypeError`，不再有第二套预算语义；
 5. **取消**：取消调用方协程即以 `CancelledError` 结束（不新增句柄）。
 """
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any, cast
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
-from httpx import MockTransport, ReadTimeout, Request, Response
 
 from bms_msg.api.frame.responses import error_frame
 from bms_msg.client.rpc import RpcCallError, RpcCallTimeoutError, RpcClient, StaticInstanceProvider
-from bms_msg.core.config import (
-    MS_PER_SECOND,
-    RPC_CLIENT_TIMEOUT_SLACK_MS,
-    RPC_DEADLINE_MAX_MS,
+from bms_msg.client.transport import (
+    RpcHttpRequest,
+    RpcHttpResponse,
+    RpcTransportTimeoutError,
 )
+from bms_msg.core.config import RPC_CLIENT_TIMEOUT_SLACK_MS, RPC_DEADLINE_MAX_MS
 from bms_msg.errors import MsgErrorCode
 from bms_msg.protocol.frame import FrameFlags, FrameType, decode_frame, encode_frame
-from tests_support.msg_fixtures import msg_declared_codes, msg_plugins
+from tests_support.rpc_transport import ScriptedRpcTransport
 
 pytestmark = pytest.mark.kiwi_id(2434)
 
-__all__ = ["msg_declared_codes", "msg_plugins"]
-
 BASE_URL = "http://test"
-"""实例基址（MockTransport 不真正解析 host）。"""
+"""实例基址（脚本传输不真正解析 host）。"""
 
 
-def _client(handler: Any, **kwargs: Any) -> RpcClient:
-    """构造走 MockTransport 的客户端。
+def _client(handler: object, **kwargs: object) -> RpcClient:
+    """构造走脚本传输的客户端。
 
     Args:
-        handler: 请求处理器。
-        **kwargs: 透传给 `RpcClient`（预算 / 别名）。
+        handler: 传输层处理器。
+        **kwargs: 透传给 `RpcClient`（预算）。
 
     Returns:
         RpcClient: 客户端。
     """
-    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=MockTransport(handler), **kwargs)
+    return RpcClient(StaticInstanceProvider([BASE_URL]), transport=ScriptedRpcTransport(handler), **kwargs)  # type: ignore[arg-type]
 
 
-async def _read_deadline(request: Request) -> int:
-    """从请求帧头取预算。
+def _response(status: int = 200, body: bytes = b"") -> RpcHttpResponse:
+    """构造传输层响应。
 
     Args:
-        request: 请求。
+        status: 状态码。
+        body: 响应体。
 
     Returns:
-        int: 帧头里的 `deadline_ms`。
+        RpcHttpResponse: 响应。
     """
-    frame = decode_frame(request.content)
-    value = frame.header["deadline_ms"]
-    assert isinstance(value, int)
-    return value
+    return RpcHttpResponse(status=status, headers=(), body=body, stream_id=1)
 
 
 def _result(content: bytes = b"", *, request_id: str = "r1") -> bytes:
@@ -86,21 +81,30 @@ def _result(content: bytes = b"", *, request_id: str = "r1") -> bytes:
 
 @pytest.fixture
 async def captured() -> AsyncIterator[ConcurrentStableDict[str, int]]:
-    """捕获每次请求的预算与超时（`deadline_ms` 与 `extensions["timeout"]`）。
+    """捕获每次请求的预算与本地超时。
 
     Yields:
-        ConcurrentStableDict[str, int]: 最近一次请求的 `deadline_ms` 与 `read_timeout_ms`。
+        ConcurrentStableDict[str, int]: 最近一次请求的 `deadline_ms` 与 `timeout_ms`。
     """
-    seen: ConcurrentStableDict[str, int] = ConcurrentStableDict()
-    yield seen
+    yield ConcurrentStableDict()
 
 
 async def test_deadline_is_written_into_frame_header(captured: ConcurrentStableDict[str, int]) -> None:
     """每次调用的 `deadline_ms` 进帧头（下游据此继续扣减）。"""
 
-    async def handler(request: Request) -> Response:
-        captured.set("deadline", await _read_deadline(request))
-        return Response(200, content=_result(b"ok"))
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """截获帧头预算。
+
+        Args:
+            request: 传输层请求。
+
+        Returns:
+            RpcHttpResponse: 结果帧。
+        """
+        value = decode_frame(request.body).header["deadline_ms"]
+        assert isinstance(value, int)
+        captured.set("deadline", value)
+        return _response(200, _result(b"ok"))
 
     client = _client(handler)
     try:
@@ -114,9 +118,19 @@ async def test_deadline_is_written_into_frame_header(captured: ConcurrentStableD
 async def test_constructor_budget_is_default(captured: ConcurrentStableDict[str, int]) -> None:
     """构造期预算作为缺省；单次调用不传即用它。"""
 
-    async def handler(request: Request) -> Response:
-        captured.set("deadline", await _read_deadline(request))
-        return Response(200, content=_result())
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """截获帧头预算。
+
+        Args:
+            request: 传输层请求。
+
+        Returns:
+            RpcHttpResponse: 结果帧。
+        """
+        value = decode_frame(request.body).header["deadline_ms"]
+        assert isinstance(value, int)
+        captured.set("deadline", value)
+        return _response(200, _result())
 
     client = _client(handler, deadline_ms=4321)
     try:
@@ -127,49 +141,23 @@ async def test_constructor_budget_is_default(captured: ConcurrentStableDict[str,
     assert captured["deadline"] == 4321
 
 
-async def test_timeout_ms_alias_still_works(captured: ConcurrentStableDict[str, int]) -> None:
-    """`timeout_ms` 是弃用别名：等价 `deadline_ms`（并记一条弃用日志）。"""
-
-    async def handler(request: Request) -> Response:
-        captured.set("deadline", await _read_deadline(request))
-        return Response(200, content=_result())
-
-    client = _client(handler)
-    try:
-        await client.call("demo", "echo", timeout_ms=2000)
-    finally:
-        await client.aclose()
-
-    assert captured["deadline"] == 2000
+def test_timeout_ms_removed_from_constructor() -> None:
+    """`timeout_ms` 已删：构造期传入即 `TypeError`（不留两套预算语义）。"""
+    with pytest.raises(TypeError):
+        RpcClient(StaticInstanceProvider([BASE_URL]), timeout_ms=1000)  # type: ignore[call-arg]
 
 
-async def test_constructor_alias_still_works(captured: ConcurrentStableDict[str, int]) -> None:
-    """构造期别名同样生效（04-1 的调用方不改就能跑）。"""
+async def test_timeout_ms_removed_from_call() -> None:
+    """`timeout_ms` 已删：调用期传入即 `TypeError`。"""
 
-    async def handler(request: Request) -> Response:
-        captured.set("deadline", await _read_deadline(request))
-        return Response(200, content=_result())
-
-    client = _client(handler, timeout_ms=1500)
-    try:
-        await client.call("demo", "echo")
-    finally:
-        await client.aclose()
-
-    assert captured["deadline"] == 1500
-
-
-async def test_both_budgets_rejected() -> None:
-    """两个都给 → `10001`（不猜优先序）。"""
-
-    async def handler(request: Request) -> Response:  # pragma: no cover - 不会发请求
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:  # pragma: no cover - 不会发请求
         del request
-        return Response(200, content=_result())
+        return _response(200, _result())
 
     client = _client(handler)
     try:
-        with pytest.raises(ParamError):
-            await client.call("demo", "echo", deadline_ms=1000, timeout_ms=1000)
+        with pytest.raises(TypeError):
+            await client.call("demo", "echo", timeout_ms=1000)  # type: ignore[call-arg]
     finally:
         await client.aclose()
 
@@ -177,9 +165,9 @@ async def test_both_budgets_rejected() -> None:
 async def test_out_of_range_budget_rejected() -> None:
     """越界预算本地先拦（与服务端同一判据）。"""
 
-    async def handler(request: Request) -> Response:  # pragma: no cover - 不会发请求
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:  # pragma: no cover - 不会发请求
         del request
-        return Response(200, content=_result())
+        return _response(200, _result())
 
     client = _client(handler)
     try:
@@ -192,9 +180,17 @@ async def test_out_of_range_budget_rejected() -> None:
 async def test_local_timeout_carries_350004() -> None:
     """本地兜底超时 = `350004` / business / 不重试 / `outcome=unknown`。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """抛传输层超时。
+
+        Args:
+            request: 传输层请求（未使用）。
+
+        Raises:
+            RpcTransportTimeoutError: 恒定超时。
+        """
         del request
-        raise ReadTimeout("slow")
+        raise RpcTransportTimeoutError("slow")
 
     client = _client(handler)
     try:
@@ -213,9 +209,17 @@ async def test_local_timeout_carries_350004() -> None:
 async def test_server_deadline_maps_to_timeout_error() -> None:
     """服务端 `350004` 错误帧 → 同一个异常类（一个语义一种异常）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """回服务端预算耗尽错误帧。
+
+        Args:
+            request: 传输层请求（未使用）。
+
+        Returns:
+            RpcHttpResponse: 错误帧。
+        """
         del request
-        return Response(200, content=error_frame(code=350004, message="预算耗尽", request_id="r1"))
+        return _response(200, error_frame(code=350004, message="预算耗尽", request_id="r1"))
 
     client = _client(handler)
     try:
@@ -231,9 +235,17 @@ async def test_server_deadline_maps_to_timeout_error() -> None:
 async def test_other_error_codes_stay_generic() -> None:
     """非超时错误仍走 `RpcCallError`（不被超时分支吞掉）。"""
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """回未注册方法错误帧。
+
+        Args:
+            request: 传输层请求（未使用）。
+
+        Returns:
+            RpcHttpResponse: 错误帧。
+        """
         del request
-        return Response(200, content=error_frame(code=350023, message="未注册", request_id="r1"))
+        return _response(200, error_frame(code=350023, message="未注册", request_id="r1"))
 
     client = _client(handler)
     try:
@@ -249,12 +261,18 @@ async def test_other_error_codes_stay_generic() -> None:
 async def test_local_timeout_adds_slack_over_budget(captured: ConcurrentStableDict[str, int]) -> None:
     """本地超时 = 预算 + 200ms：服务端先到点，调用方才有机会看到 `350004`。"""
 
-    async def handler(request: Request) -> Response:
-        timeout = cast("dict[str, object]", request.extensions["timeout"])
-        read = timeout["read"]
-        assert isinstance(read, float)
-        captured.set("read_ms", int(read * MS_PER_SECOND))
-        return Response(200, content=_result())
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """截获传输层预算与本地超时。
+
+        Args:
+            request: 传输层请求。
+
+        Returns:
+            RpcHttpResponse: 结果帧。
+        """
+        captured.set("timeout_ms", request.timeout_ms)
+        captured.set("deadline", decode_frame(request.body).header["deadline_ms"])  # type: ignore[arg-type]
+        return _response(200, _result())
 
     client = _client(handler)
     try:
@@ -262,18 +280,26 @@ async def test_local_timeout_adds_slack_over_budget(captured: ConcurrentStableDi
     finally:
         await client.aclose()
 
-    assert captured["read_ms"] == 800 + RPC_CLIENT_TIMEOUT_SLACK_MS
+    assert captured["timeout_ms"] == 800 + RPC_CLIENT_TIMEOUT_SLACK_MS
 
 
 async def test_cancel_ends_with_cancelled_error() -> None:
     """取消调用方协程 → 以 `CancelledError` 结束（取消令牌即 `Task.cancel()`）。"""
     entered = asyncio.Event()
 
-    async def handler(request: Request) -> Response:
+    async def handler(request: RpcHttpRequest) -> RpcHttpResponse:
+        """挂起等取消。
+
+        Args:
+            request: 传输层请求（未使用）。
+
+        Returns:
+            RpcHttpResponse: 不会走到。
+        """
         del request
         entered.set()
         await asyncio.sleep(5)
-        return Response(200, content=_result())
+        return _response(200, _result())
 
     client = _client(handler)
     try:

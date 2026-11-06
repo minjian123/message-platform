@@ -1,4 +1,4 @@
-"""最小 RPC 客户端（任务 04-1 / 04-2）：一元调用、帧编解码、预算传播、错误映射骨架。
+"""最小 RPC 客户端（任务 04-1 / 04-2 / 04-7-1）：一元调用、帧编解码、预算传播、错误映射骨架。
 
 **为什么单独一个 `client/` 包**：`protocol/` 是 broker 侧编解码（明确「不碰连接、不碰业务语义」），
 客户端要发网络请求；`rpc/` 是服务端域（注册表 / 分发）。三者分开后，04-5 的 bms 适配只 import
@@ -7,9 +7,12 @@
 **发帧形态而不是 JSON**：帧是 SDK 的常态路径（省一次 base64 与 JSON 解析），且与 `/msg/*` 的
 「JSON 为默认识别、帧为可选」口径一致——JSON 路径留给 curl / 网关 / 浏览器。
 
+**传输层自持（04-7-1）**：本模块只认 `RpcTransport` 协议，不认识 `h2` / socket / `httpx`。原因见
+`client/transport/base.py` 模块说明：精确取消要求拿到单条 stream 并发 `RST_STREAM`，通用 HTTP 客户端
+给不了。生产实现 `H2Transport` 由构造参数缺省注入，用例注入 `AsgiRpcTransport` / `ScriptedRpcTransport`。
+
 **做的**：一元调用、`request_id` 关联（单 stream 一请求）、预算传播（`deadline_ms` 写入帧头）、
-本地超时 = 预算 + 冗余、本地超时与服务端 `350004` 统一异常、错误帧 → `RpcCallError`、地址轮询、
-取消（asyncio 原生：取消调用方协程即取消请求）。
+本地超时 = 预算 + 余量、本地超时与服务端 `350004` 统一异常、错误帧 → `RpcCallError`、地址轮询。
 **不做的**（后续任务）：流式（04-3）、重试 / 熔断 / 幂等（04-4）、实例选择策略与失败摘除（04-6）。
 """
 
@@ -20,13 +23,20 @@ from types import TracebackType
 from typing import Any, Protocol, Self, cast
 from uuid import uuid4
 
-import httpx
 from bms_core.core.concurrent import ConcurrentStableDict
-from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 
+from bms_msg.client.transport import (
+    H2Transport,
+    RpcHttpRequest,
+    RpcHttpResponse,
+    RpcRequestTrace,
+    RpcTransport,
+    RpcTransportError,
+    RpcTransportProtocolError,
+    RpcTransportTimeoutError,
+)
 from bms_msg.core.config import (
-    MS_PER_SECOND,
     RPC_CLIENT_TIMEOUT_SLACK_MS,
     RPC_DEADLINE_HEADER,
     RPC_DEFAULT_TIMEOUT_MS,
@@ -157,42 +167,20 @@ class StaticInstanceProvider:
         return endpoint
 
 
-def _resolve_budget(primary: int | None, alias: int | None, *, default: int) -> int:
-    """解析预算参数（`deadline_ms` 为主，`timeout_ms` 是弃用别名）。
-
-    Args:
-        primary: `deadline_ms` 取值（None 表示未给）。
-        alias: `timeout_ms` 取值（None 表示未给）。
-        default: 两者都未给时的缺省预算。
-
-    Returns:
-        int: 合法预算（毫秒）。
-
-    Raises:
-        ParamError: 两个都给（拒绝猜优先序）或取值非法（`10001`）。
-    """
-    if primary is not None and alias is not None:
-        raise ParamError("deadline_ms 与 timeout_ms 不能同时给（timeout_ms 是 deprecated 别名）")
-    if alias is not None:
-        _LOGGER.warning("rpc_client_deprecated_param", param="timeout_ms", replaced_by="deadline_ms")
-        return validate_budget_ms(alias, default=default)
-    return validate_budget_ms(primary, default=default)
-
-
-def _error_of(response: httpx.Response) -> RpcCallError:
+def _error_of(response: RpcHttpResponse) -> RpcCallError:
     """把非 200 响应映射为调用错误（只映射有明确含义的两个码）。
 
     Args:
-        response: HTTP 响应。
+        response: 传输层响应。
 
     Returns:
         RpcCallError: 待抛出的错误。
     """
-    if response.status_code == 429:
+    if response.status == 429:
         return RpcCallError(350005, "RPC 调用被限流（429）", retryable=True, layer="business")
-    if response.status_code == 413:
+    if response.status == 413:
         return RpcCallError(350006, "RPC 参数或结果超过上限（413）", retryable=False, layer="transport")
-    return RpcCallError(0, f"RPC 端点返回 HTTP {response.status_code}", retryable=False, layer="transport")
+    return RpcCallError(0, f"RPC 端点返回 HTTP {response.status}", retryable=False, layer="transport")
 
 
 def _reply_of(content: bytes, *, budget_ms: int | None = None) -> RpcReply:
@@ -263,7 +251,7 @@ def _headers_of(raw: Any) -> ConcurrentStableDict[str, str]:
 
 
 class RpcClient:
-    """最小 RPC 客户端（一元调用；HTTP/2 连接复用由 `httpx` 承担）。"""
+    """最小 RPC 客户端（一元调用；连接复用由传输层承担）。"""
 
     def __init__(
         self,
@@ -271,8 +259,7 @@ class RpcClient:
         *,
         tenant: str | None = None,
         deadline_ms: int | None = None,
-        transport: httpx.AsyncBaseTransport | None = None,
-        timeout_ms: int | None = None,
+        transport: RpcTransport | None = None,
     ) -> None:
         """初始化。
 
@@ -281,21 +268,15 @@ class RpcClient:
             tenant: 缺省租户编码（写进 `X-Tenant-ID`；服务端仍以解析链结果为准）。跨租户调用时
                 用 `call(tenant=...)` 覆盖。
             deadline_ms: 单次调用缺省预算（毫秒；None 取 `RPC_DEFAULT_TIMEOUT_MS`）。
-            transport: 传输层（用例注入 `ASGITransport`；生产留 None 走真实 h2）。
-            timeout_ms: **deprecated 别名**，等价 `deadline_ms`（保留一个版本后删）。
+            transport: 传输层（用例注入 `AsgiRpcTransport` / `ScriptedRpcTransport`；生产留 None 走 h2）。
 
         Raises:
-            ParamError: `deadline_ms` 与 `timeout_ms` 同时给，或取值非法（`10001`）。
+            ParamError: 预算取值非法（`10001`）。
         """
-        budget = _resolve_budget(deadline_ms, timeout_ms, default=RPC_DEFAULT_TIMEOUT_MS)
         self._instances = instances
         self._tenant = tenant
-        self._deadline_ms = budget
-        self._client = httpx.AsyncClient(
-            http2=True,
-            transport=transport,
-            timeout=_local_timeout_s(budget),
-        )
+        self._deadline_ms = validate_budget_ms(deadline_ms, default=RPC_DEFAULT_TIMEOUT_MS)
+        self._transport: RpcTransport = transport if transport is not None else H2Transport()
 
     async def call(
         self,
@@ -308,7 +289,6 @@ class RpcClient:
         caller: str | None = None,
         deadline_ms: int | None = None,
         tenant: str | None = None,
-        timeout_ms: int | None = None,
     ) -> RpcReply:
         """一元调用（发帧形态，收结果帧）。
 
@@ -321,7 +301,6 @@ class RpcClient:
             caller: 调用方服务标识（进帧头；服务端仍以 HTTP 头优先）。
             deadline_ms: 本次预算（毫秒；缺省取构造时的值）。写进帧头 `deadline_ms` 供逐跳传播。
             tenant: 本次调用的租户编码（缺省取构造时的值；服务端以解析链结果为准）。
-            timeout_ms: **deprecated 别名**，等价 `deadline_ms`。
 
         Returns:
             RpcReply: 结果。
@@ -333,7 +312,7 @@ class RpcClient:
             asyncio.CancelledError: 调用方取消（取消协程即取消请求，无需额外句柄）。
         """
         ensure_rpc_name(service, method)
-        budget = _resolve_budget(deadline_ms, timeout_ms, default=self._deadline_ms)
+        budget = validate_budget_ms(deadline_ms, default=self._deadline_ms)
         request_id = uuid4().hex
         frame = encode_frame(
             frame_type=int(FrameType.RPC),
@@ -349,27 +328,31 @@ class RpcClient:
             ),
             payload=payload,
         )
-        url = f"{self._instances.next()}/rpc/{service}/{method}"
         effective_tenant = self._tenant if tenant is None else tenant
         # `content-type` 与租户头一起给：只带帧媒体类型时服务端解析不到租户（`350012`），
         # 这条链路正是「RPC 与 `/msg/*` 共用同一中间件」的落点。
-        request_headers = {"content-type": FRAME_CONTENT_TYPE}
+        request_headers: list[tuple[str, str]] = [("content-type", FRAME_CONTENT_TYPE)]
         if effective_tenant:
-            request_headers[RPC_TENANT_HEADER] = effective_tenant
+            request_headers.append((RPC_TENANT_HEADER, effective_tenant))
+        request = RpcHttpRequest(
+            origin=self._instances.next(),
+            target=f"/rpc/{service}/{method}",
+            headers=tuple(request_headers),
+            body=frame,
+            timeout_ms=budget + RPC_CLIENT_TIMEOUT_SLACK_MS,
+            trace=RpcRequestTrace(request_id=request_id, service=service, method=method),
+        )
         try:
-            response = await self._client.post(
-                url,
-                content=frame,
-                headers=request_headers,
-                timeout=_local_timeout_s(budget),
-            )
-        except httpx.TimeoutException as exc:
+            response = await self._transport.send(request)
+        except RpcTransportTimeoutError as exc:
             raise RpcCallTimeoutError(f"RPC 调用超时（{budget} ms）：{service}.{method}", budget_ms=budget) from exc
-        except httpx.HTTPError as exc:
+        except RpcTransportProtocolError as exc:
+            raise RpcCallError(0, f"RPC 响应不可解析：{exc}", layer="protocol") from exc
+        except RpcTransportError as exc:
             raise RpcCallError(0, f"RPC 连接失败：{exc}", layer="transport") from exc
-        if response.status_code != 200:
+        if response.status != 200:
             raise _error_of(response)
-        return _reply_of(response.content, budget_ms=budget)
+        return _reply_of(response.body, budget_ms=budget)
 
     def _request_header(
         self,
@@ -411,8 +394,8 @@ class RpcClient:
         return header
 
     async def aclose(self) -> None:
-        """释放底层连接池。"""
-        await self._client.aclose()
+        """释放底层传输（连接池 / 后台任务）。"""
+        await self._transport.aclose()
 
     async def __aenter__(self) -> Self:
         """进入上下文（便于 `async with RpcClient(...) as client`）。
@@ -428,7 +411,7 @@ class RpcClient:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """退出上下文（关闭连接池）。
+        """退出上下文（关闭传输）。
 
         Args:
             exc_type: 异常类型（未使用）。
@@ -436,18 +419,3 @@ class RpcClient:
             traceback: 栈（未使用）。
         """
         await self.aclose()
-
-
-def _local_timeout_s(budget_ms: int) -> float:
-    """本地 `httpx` 超时（秒）= 预算 + 冗余。
-
-    守住「客户端超时 > 服务端处理超时」：服务端先到点、先回 `350004`，调用方才能看到「结果未知」；
-    反过来是客户端先放弃、服务端白跑，且调用方只看到本地超时。
-
-    Args:
-        budget_ms: 本次预算（毫秒）。
-
-    Returns:
-        float: 本地超时秒数。
-    """
-    return (budget_ms + RPC_CLIENT_TIMEOUT_SLACK_MS) / MS_PER_SECOND
