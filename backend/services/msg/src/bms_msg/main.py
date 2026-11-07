@@ -22,6 +22,7 @@
 > 转投走 `durable=file_store`（append 后显式 fsync 再清），并按关闭偏序登记 `DelayCloser`
 > （`OffsetFlusher` → `DelayCloser` → `StorageCloser`，逆序释放即刷日志 → 刷 `.delay` → 刷位点）。
 > 04-1 接入 RPC 一元调用（方法注册表 + `/rpc/{service}/{method}` 双形态端点 + 客户端 stub），
+> 05-1 接入租户用量表单登记（`form_records()` 注入 + `tenant.created` 消费 + usage/quota 双端点），
 > 其余控制面路由随对应任务追加。
 """
 
@@ -39,7 +40,9 @@ from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import SessionFactory, session_scope
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
+from bms_core.events.consumer_records import EventConsumerRecord
 from bms_core.extension import SCOPE_RULE_KEY, ExtensionRequirement
+from bms_core.registry.forms import FormRecord
 from bms_core.services.module_registry import ModuleRecord
 from bms_core.services.table_registry import TableRecord
 from fastapi import APIRouter, FastAPI
@@ -68,7 +71,9 @@ from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.health import register_msg_health_registry
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
 from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE
+from services.form_registry import form_records as msg_form_records
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
 
@@ -90,6 +95,26 @@ class ApplicationFactory(BaseServiceApplicationFactory):
     def table_records(self) -> ConcurrentStableList[TableRecord]:
         """本产品表归属清单（元数据三表：`msg_topic` / `msg_partition` / `msg_replay_task`）。"""
         return ConcurrentStableList(MSG_TABLE_RECORDS)
+
+    def form_records(self) -> ConcurrentStableList[FormRecord]:
+        """本产品 `form_key` 登记清单（05-1；产品自持）。
+
+        基座装配期把本清单与 `FORM_CATALOG` 经 `merge_form_records()` 拼为**应用级视图**
+        `app.state.form_registry`；平台 `/api/v1/form-keys` 聚合产品表单需 bms 侧产品清单
+        下发 / 聚合通道（mdm 已登记同项），本任务只保证 msg 应用级视图可见。
+
+        Returns:
+            ConcurrentStableList[FormRecord]: 本产品表单标识记录（插入序）。
+        """
+        return msg_form_records()
+
+    def event_consumer_records(self) -> ConcurrentStableList[EventConsumerRecord]:
+        """本服务自持的事件消费组声明（05-1：`tenant.created` → 租户目录 + 幂等账本）。
+
+        Returns:
+            ConcurrentStableList[EventConsumerRecord]: 消费组声明（插入序）。
+        """
+        return tenant_lifecycle_records()
 
     def service_routers(self) -> ConcurrentStableList[APIRouter]:
         """业务路由：`/api/v1` 聚合（管理面 + 既有数据面）与根路径聚合（`/msg/*` 帧入口）。

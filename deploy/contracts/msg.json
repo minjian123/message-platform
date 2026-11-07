@@ -4485,8 +4485,82 @@
     },
     "/api/v1/msg/tenant-usage": {
       "get": {
+        "description": "返回消息平台用量板块（本期四列元数据 + 空数据）。\n\nReturns:\n    JSONResponse: `{\"columns\": [{key, label}...], \"items\": [], \"total\": 0}`。",
+        "operationId": "tenant_usage_api_v1_msg_tenant_usage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Tenant Usage",
+        "tags": [
+          "msg-tenant-usage"
+        ],
+        "x-error-codes": [
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/tenant-usage/quota": {
+      "get": {
         "description": "返回产品配额投影条目（本期空清单）。\n\nReturns:\n    JSONResponse: `{\"items\": []}`，结构合配额投影读取器契约。",
-        "operationId": "quota_projection_api_v1_msg_tenant_usage_get",
+        "operationId": "quota_projection_api_v1_msg_tenant_usage_quota_get",
         "responses": {
           "200": {
             "content": {
@@ -4549,7 +4623,7 @@
         },
         "summary": "Quota Projection",
         "tags": [
-          "msg-quota-projection"
+          "msg-tenant-usage"
         ],
         "x-error-codes": [
           350011,

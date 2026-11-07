@@ -37,6 +37,7 @@ def test_form_and_quota_sources_coexist() -> None:
     assert quota["origin"] == "product"
     assert quota["product_key"] == "msg"
     assert str(quota["path"]).startswith("/api/v1/")
+    assert quota["path"] == "/api/v1/msg/tenant-usage/quota"
     assert len(set(quota["quota_dimensions"])) == 4
     assert quota["quota_unit"] == "count"
     assert quota["quota_period"] == "none"

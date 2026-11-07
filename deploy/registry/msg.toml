@@ -50,6 +50,7 @@ data_source = "msg.msg.tenant_usage"
 origin = "product"
 product_key = "msg"
 path = "/tenant-usage"
+allowlist = ["topic_count", "partition_count", "storage_bytes", "delivered_today"]
 status = "enabled"
 
 # ---- 配额只读投影（07D 任务 03 附录 C；与上面的 form 声明并存，不互相取代）----
@@ -63,11 +64,30 @@ kind = "quota"
 data_source = "msg.msg.quota_projection"
 origin = "product"
 product_key = "msg"
-path = "/api/v1/msg/tenant-usage"
+path = "/api/v1/msg/tenant-usage/quota"
 quota_dimensions = ["topic_count", "storage_bytes", "throughput", "connections"]
 quota_unit = "count"
 quota_period = "none"
 status = "enabled"
+
+# ---- 种子（第六类记录；平台统一编排，一个 XA 全局事务内执行）----
+# 写平台服务库（sys_business / sys_form / sys_field）；不建菜单关联（sys_menu_form）、
+# 不建按钮 / 权限码。入口在平台编排的 XA 分支内只 flush、不自行 commit。
+# 种子名须以产品键 `msg-` 开头（平台装载期校验）；module 取服务包 `bms_msg`，不是顶层 `msg`。
+[[seeds]]
+name = "msg-usage-forms"
+service = "msg"
+db_key = "platform_platform"
+module = "bms_msg.seeds.forms"
+entry = "seed_usage_forms"
+after = []
+description = "消息平台用量表单与字段（业务码 msg_usage + 表单 + 四字段）"
+status = "enabled"
+
+[seeds.tables]
+sys_business = "code"
+sys_form = "business_id"
+sys_field = "form_id,field_key"
 
 # ---- 错误码（第七类记录；段位取自本文件服务行 errcode_segment = "35"）----
 # 6 位码 = 2 位段 + 4 位序号；与 `backend/services/msg/src/bms_msg/errors.py` 的 `MsgErrorCode`
