@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Annotated, Self
 
 from bms_core.core.concurrent import ConcurrentStableList
-from bms_core.schemas.base import CONTRACT_COLLECTION, BaseSchema
+from bms_core.schemas.base import CONTRACT_COLLECTION, BaseSchema, SnowflakeIdStr
 from pydantic import Field, model_validator
 from pydantic_core import PydanticCustomError
 
@@ -78,7 +78,7 @@ class ReplayRequest(BaseSchema):
 class ReplayTaskItem(BaseSchema):
     """重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消的响应主体）。"""
 
-    task_id: int = Field(description="任务 ID（雪花，JSON 输出为字符串）")
+    task_id: SnowflakeIdStr = Field(description="任务 ID（雪花，JSON 输出为字符串）")
     namespace: str = Field(description="命名空间")
     topic: str = Field(description="主题名（创建时快照，主题停用后仍可展示）")
     partitions: Annotated[ConcurrentStableList[int], CONTRACT_COLLECTION] = Field(

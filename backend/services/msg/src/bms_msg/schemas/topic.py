@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Annotated
 
 from bms_core.core.concurrent import ConcurrentStableList
-from bms_core.schemas.base import CONTRACT_COLLECTION, CONTRACT_STABLE_LIST, BaseSchema
+from bms_core.schemas.base import CONTRACT_COLLECTION, CONTRACT_STABLE_LIST, BaseSchema, SnowflakeIdStr
 from pydantic import Field
 
 from bms_msg.core.config import DEFAULT_RETENTION_MS
@@ -46,8 +46,8 @@ class PartitionItem(BaseSchema):
 class TopicItem(BaseSchema):
     """主题明细（列表行 / 创建与查询响应的主体）。"""
 
-    id: int = Field(description="主题 ID（雪花，JSON 输出为字符串）")
-    tenant_id: int = Field(description="租户内部身份（雪花，JSON 输出为字符串）")
+    id: SnowflakeIdStr = Field(description="主题 ID（雪花，JSON 输出为字符串）")
+    tenant_id: SnowflakeIdStr = Field(description="租户内部身份（雪花，JSON 输出为字符串）")
     namespace: str = Field(description="命名空间")
     name: str = Field(description="主题名")
     partition_count: int = Field(description="分区数")
