@@ -1,0 +1,8 @@
+# 统一行尾符：文本文件按 LF 检出（Windows / Linux 双端一致）
+* text=auto eol=lf
+
+# Shell 脚本必须 LF（Git Bash / Linux 均按 LF 执行）
+*.sh text eol=lf
+
+# Windows 脚本按 CRLF 检出（cmd / PowerShell 兼容）
+*.bat text eol=crlf
