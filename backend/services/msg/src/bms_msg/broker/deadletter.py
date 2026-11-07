@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
-from bms_core.core.objects import BaseValueObject
+from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 
 __all__ = [
     "DEAD_LETTER_EXHAUSTED",
@@ -74,7 +74,7 @@ class DeadLetter(BaseValueObject):
     """失败详情（字段名 → 说明；消费端上报时原样保存，broker 判定时为空）。"""
 
 
-class DeadLetterQueue(ABC):
+class DeadLetterQueue(BaseFrameworkObject, ABC):
     """死信队列端口：转入 / 全量列出 / 判定是否已死信。"""
 
     @abstractmethod

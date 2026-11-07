@@ -95,6 +95,10 @@ cwd = "backend"
 # cwd = "backend"
 
 [[preflight.steps]]
+label = "基座：check_backend_base（继承链 / 清单 / 直继承 / 形态 / 错误码段位 / 迁移链）"
+cmd = ["{python}", "-m", "engkit", "base", "backend-base"]
+
+[[preflight.steps]]
 label = "后端测试：定向（选测 + 覆盖率门禁 + 扩圈）"
 type = "scoped_tests"
 preset = "scoped"
@@ -145,3 +149,21 @@ done_status = "已完成"
 req_id_pattern = '^\d{2}-\d+$'
 task_id_pattern = '^\d{2}-\d+-\d+$'
 plan_id_pattern = '^\d{2}_\d{2}$'
+
+[rules.backend_base]
+# 产品仓形态：清单 / 契约自持（只登记本仓继承类与链），父类经 bms 的基座源码面解析，
+# 链必须接到平台体系根；错误码按产品码（6 位，段位取自服务行 errcode_segment）判定。
+profile = "product"
+manifest = "msg文档/后端基类清单.md"
+chain_doc = "msg文档/设计/基类体系/后端基类实现契约.md"
+source_dirs = ["backend/services/msg/src"]
+base_source_dirs = ["../bms/backend/libs/bms_core/src"]
+error_codes = "backend/services/msg/src/bms_msg/errors.py"
+versions_dir = "backend/alembic/versions"
+direct_baseline = "deploy/boundaries/direct_base_object_baseline.json"
+root_bases_marker = "体系根清单"
+value_object_root = "BaseValueObject"
+framework_object_root = "BaseFrameworkObject"
+datasources = ["platform", "tenant"]
+default_chain = "platform:tenant"
+error_code_segment = "35"

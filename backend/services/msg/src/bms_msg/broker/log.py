@@ -20,7 +20,7 @@ from datetime import datetime
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
-from bms_core.core.objects import BaseValueObject
+from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
@@ -112,7 +112,7 @@ class SegmentMeta(BaseValueObject):
     """段内字节合计（容量维度判据；内存实现为近似值，真实值由文件大小给）。"""
 
 
-class MessageStore(ABC):
+class MessageStore(BaseFrameworkObject, ABC):
     """消息存储端口（数据面对存储的全部要求；实现可替换，端口不变）。"""
 
     @abstractmethod

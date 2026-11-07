@@ -386,7 +386,7 @@ class DelayedRow(BaseValueObject):
     """剩余时间（毫秒；已到期未转投为 0）。"""
 
 
-class DelayStore(ABC):
+class DelayStore(BaseFrameworkObject, ABC):
     """延迟区存储端口（存 / 数 / 列 / 删；02-7 换 `.delay` 文件段实现，签名不变）。
 
     **实现义务**：`enqueue` 必须先调 `ensure_delay_span()`（跨度上限 `10001` 对所有实现一致）与

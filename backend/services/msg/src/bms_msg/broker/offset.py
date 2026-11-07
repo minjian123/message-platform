@@ -38,7 +38,7 @@ from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
-from bms_core.core.objects import BaseValueObject
+from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.events.base import EventEnvelope
 
 from bms_msg.broker.log import PartitionNotBoundError
@@ -269,7 +269,7 @@ class OffsetFileReadout(BaseValueObject):
     """上一版（另一可用槽；只有一槽可用时为 None）。"""
 
 
-class OffsetStore(ABC):
+class OffsetStore(BaseFrameworkObject, ABC):
     """消费位点端口（读写分离；只前进不后退）。"""
 
     @abstractmethod

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
-from bms_core.core.objects import BaseValueObject
+from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 
 from bms_msg.core.config import ASSIGNMENT_STRATEGY_RANGE
 
@@ -156,7 +156,7 @@ def assign_range(members: ConcurrentStableList[str], partition_count: int) -> Ac
     return assignment
 
 
-class GroupStore(ABC):
+class GroupStore(BaseFrameworkObject, ABC):
     """消费组存储端口（快照读写；8B_02 换 DB 实现，签名不变）。"""
 
     @abstractmethod
