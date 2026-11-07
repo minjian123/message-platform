@@ -99,6 +99,22 @@ label = "基座：check_backend_base（继承链 / 清单 / 直继承 / 形态 /
 cmd = ["{python}", "-m", "engkit", "base", "backend-base"]
 
 [[preflight.steps]]
+label = "文档：engkit links（链接与锚点）"
+cmd = ["{python}", "-m", "engkit", "links"]
+
+[[preflight.steps]]
+label = "文档：engkit docs-scope（进度类字段落点）"
+cmd = ["{python}", "-m", "engkit", "docs-scope"]
+
+[[preflight.steps]]
+label = "基座：check_bare_collections（裸无序集合护栏）"
+cmd = ["{python}", "-m", "engkit", "base", "bare-collections"]
+
+[[preflight.steps]]
+label = "基座：check_snowflake_ids（裸 BigInteger 雪花 ID 列 / schema 残留）"
+cmd = ["{python}", "-m", "engkit", "base", "snowflake-ids"]
+
+[[preflight.steps]]
 label = "后端测试：定向（选测 + 覆盖率门禁 + 扩圈）"
 type = "scoped_tests"
 preset = "scoped"
@@ -167,3 +183,85 @@ framework_object_root = "BaseFrameworkObject"
 datasources = ["platform", "tenant"]
 default_chain = "platform:tenant"
 error_code_segment = "35"
+
+# ---- 基座护栏：裸无序集合（07D 收口接入；形态定义与 bms 同源，扫描根本仓自持）----
+[rules.bare_collections]
+scan_targets = ["backend/services/msg/src"]
+exclude_parts = ["__pycache__", ".venv", "node_modules", ".git"]
+whitelist = [
+  "ConcurrentStableList",
+  "ConcurrentStableSet",
+  "ConcurrentStableDict",
+  "ConcurrentStableFrozenList",
+  "ConcurrentStableFrozenSet",
+  "ConcurrentStableFrozenDict",
+]
+unregistered = [
+  "deque",
+  "Deque",
+  "Counter",
+  "OrderedDict",
+  "ChainMap",
+  "defaultdict",
+  "UserDict",
+  "UserList",
+  "UserString",
+  "KeysView",
+  "ItemsView",
+  "ValuesView",
+  "MappingView",
+]
+tuple_forms = ["tuple", "Tuple"]
+protocol_forms = [
+  "Iterable",
+  "Iterator",
+  "Generator",
+  "AsyncIterator",
+  "AsyncIterable",
+  "AsyncGenerator",
+  "Callable",
+  "Awaitable",
+  "Coroutine",
+  "Reversible",
+  "Container",
+  "Sized",
+  "Hashable",
+]
+# 本仓无集合体系实现文件（实现全在平台 bms_core），故为空
+implementation_files = []
+allow_marker = "# bare-collections:allow"
+baseline = "deploy/boundaries/bare_collections_baseline.json"
+
+[rules.bare_collections.banned]
+bare = ["dict", "list", "set", "frozenset", "Dict", "List", "Set", "FrozenSet", "DefaultDict"]
+readonly = [
+  "Sequence",
+  "Mapping",
+  "AbstractSet",
+  "Collection",
+  "MutableSequence",
+  "MutableMapping",
+  "MutableSet",
+]
+ascending = [
+  "SortedList",
+  "SortedDict",
+  "SortedSet",
+  "ConcurrentSortedList",
+  "ConcurrentSortedSet",
+  "ConcurrentSortedDict",
+]
+
+[rules.bare_collections.reasons]
+tuple = "同构 tuple 视为集合声明，请落 ConcurrentStableList（值对象字段落 ConcurrentStableFrozenList）"
+bare_tuple = "裸 tuple 无元素类型信息，请写明元素类型后按同构 / 固定元数判定"
+banned = "集合声明须命中白名单（插入序 ConcurrentStable* / 不可变 ConcurrentStableFrozen*）"
+unregistered = "未登记的集合形态：请先登记护栏白名单与《后端基类清单》，或改用插入序集合类"
+
+# ---- 基座护栏：雪花 ID（口径同 bms：ID 列一律 SnowflakeId，BigInteger 仅计数 / 度量）----
+[rules.snowflake_ids]
+scan_targets = ["backend/services/msg/src"]
+id_names = ["id", "tenant_scope", "rolled_back_from"]
+id_suffixes = ["_id", "_by"]
+# 本仓暂无计数 / 度量列的 BigInteger 例外；新增须逐条写明用途
+whitelist = []

@@ -1,0 +1,1049 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-07",
+  "entries": [
+    {
+      "file": "backend/services/msg/src/bms_msg/api/data/messages.py",
+      "line": "dependencies: Sequence[params.Depends]",
+      "container": "Sequence",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/data/messages.py",
+      "line": "dependencies: list[params.Depends] = list(spec.dependencies)",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "allowed: frozenset[str],",
+      "container": "frozenset",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _ensure_required(header: Mapping[str, Any], required: tuple[str, ...]) -> None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _ensure_required(header: Mapping[str, Any], required: tuple[str, ...]) -> None:",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: bytes) -> dict[str, Any]:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: bytes) -> dict[str, Any]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: bytes) -> dict[str, Any]:",
+      "container": "frozenset",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def _request_id(header: Mapping[str, Any]) -> str | None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "def ensure_frame_tenant(header: Mapping[str, Any], tenant: CurrentTenant) -> None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/frame/gate.py",
+      "line": "required: tuple[str, ...],",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/rpc/request.py",
+      "line": "def optional_budget(header: Mapping[str, Any], key: str) -> int | None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/rpc/request.py",
+      "line": "def optional_text(header: Mapping[str, Any], key: str) -> str | None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/rpc/request.py",
+      "line": "def request_id_of(header: Mapping[str, Any]) -> str | None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/api/rpc/request.py",
+      "line": "def string_map(header: Mapping[str, Any]) -> ConcurrentStableDict[str, str]:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/backpressure.py",
+      "line": "self._rpc_buckets: dict[RpcKey, TokenBucket] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/backpressure.py",
+      "line": "self._tenant_buckets: dict[str, TokenBucket] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/backpressure.py",
+      "line": "self._topic_buckets: dict[TopicKey, TokenBucket] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay.py",
+      "line": "def _quota_payload(*, scope: str, count: int, limit: int, tenant_limit: int) -> dict[str, object]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay.py",
+      "line": "self._pending: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay.py",
+      "line": "self._records: dict[str, DelayRecord] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay.py",
+      "line": "self._rejected: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay.py",
+      "line": "self._tenant_keys: set[str] = set()",
+      "container": "set",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "async def log_ids_since(self, *, topic_id: int, partition_no: int, since_us: int, candidates: set[str]) -> set[str]:",
+      "container": "set",
+      "position": "signature_return",
+      "count": 2
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "counts: dict[int, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "def _discover(self) -> list[tuple[TopicLocation, int, list[int]]]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "def _load_segments(self, counters: _RebuildCounters) -> dict[tuple[int, int], _PartitionRecovery]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "def _record_ledger(self, recoveries: dict[tuple[int, int], _PartitionRecovery]) -> None:",
+      "container": "dict",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "def recount(self, entries: dict[str, _DelayEntry]) -> None:",
+      "container": "dict",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "found: list[tuple[TopicLocation, int, list[int]]] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "isolated_seqs: tuple[int, ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "kept: list[DelaySegment] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "recoveries: dict[tuple[int, int], _PartitionRecovery] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "self._effective: dict[int, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "self._entries: dict[str, _DelayEntry] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "self._logs: dict[tuple[int, int], _PartitionDelayLog] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "self._segments: list[DelaySegment] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "self._tenant_counts: dict[int, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "since_by_partition: dict[tuple[int, int], tuple[int, set[str]]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_file.py",
+      "line": "since_by_partition: dict[tuple[int, int], tuple[int, set[str]]] = {}",
+      "container": "set",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_segment.py",
+      "line": "def list_delay_segment_seqs(directory: Path) -> list[int]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_segment.py",
+      "line": "entries: list[DelayEntry] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_segment.py",
+      "line": "entries: tuple[DelayEntry, ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delay_segment.py",
+      "line": "seqs: list[int] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delivery.py",
+      "line": "self._acked: dict[PartitionKey, ConcurrentStableSet[int]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delivery.py",
+      "line": "self._inflight: dict[PartitionKey, dict[int, InflightDelivery]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/delivery.py",
+      "line": "self._sizes: dict[PartitionKey, dict[int, int]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "async def corrupted_segments(self, *, topic_id: int, partition_no: int) -> tuple[int, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "async def log_ids_since(self, *, topic_id: int, partition_no: int, since_us: int, candidates: set[str]) -> set[str]:",
+      "container": "set",
+      "position": "signature_return",
+      "count": 2
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "candidates: list[tuple[int, int]] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "corrupted: list[int] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "def _verify_stamps(self, point: RecoveryPoint | None) -> tuple[int, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "def corrupted_segments(self) -> tuple[int, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "def log_ids_since(self, *, since_us: int, candidates: set[str]) -> set[str]:",
+      "container": "set",
+      "position": "signature_return",
+      "count": 2
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "def segment_ends(self) -> list[int]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "ends: list[int] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "found: set[str] = set()",
+      "container": "set",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._corrupted: dict[int, str] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._locations: dict[int, TopicLocation] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._log_ids: OrderedDict[str, tuple[int, int, int]] = OrderedDict()",
+      "container": "OrderedDict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._partitions: dict[tuple[int, int], _PartitionLog] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._pending_alignment: dict[tuple[int, int], int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._segments: list[SegmentFile] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "self._stamps: dict[int, SegmentStamp] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/file_store.py",
+      "line": "stamps: list[SegmentStamp] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/group.py",
+      "line": "self._groups: dict[GroupKey, ConsumerGroup] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/log.py",
+      "line": "self._logs: dict[PartitionKey, list[StoredMessage]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/log.py",
+      "line": "self._logs: dict[PartitionKey, list[StoredMessage]] = {}",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/log.py",
+      "line": "self._starts: dict[PartitionKey, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "def _with_total(values: dict[str, int]) -> ConcurrentStableDict[str, int]:",
+      "container": "dict",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._inflight_bytes: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._inflight_messages: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._rate_rejected: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._topic_keys: set[str] = set()",
+      "container": "set",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._wait_outcomes: dict[str, int] = {",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/metrics.py",
+      "line": "self._window_stalls: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/offset.py",
+      "line": "def encode_offset_file(*, group: str, topic_id: int, partition_no: int, slots: tuple[OffsetSlot, ...]) -> bytes:",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/offset.py",
+      "line": "entries: list[OffsetEntry] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/offset.py",
+      "line": "self._entries: dict[OffsetKey, _Entry] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/offset.py",
+      "line": "self._offsets: dict[OffsetKey, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/offset.py",
+      "line": "slots: list[OffsetSlot] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "def _pack_delay(stamp: DelayStamp) -> dict[str, Any]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "headers: tuple[tuple[str, str], ...]",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "headers_map: dict[str, Any] = cast(\"dict[str, Any]\", headers_raw) if isinstance(headers_raw, dict) else {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "raw: dict[str, Any] = {",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "replicas: tuple[int, ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/record.py",
+      "line": "replicas_list: list[Any] = cast(\"list[Any]\", replicas_raw) if isinstance(replicas_raw, list) else []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "corrupted_segments: tuple[int, ...]",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "corrupted_segments: tuple[int, ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def _as_mapping(value: object) -> dict[str, Any] | None:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def _decode_payload(payload: dict[str, Any], *, topic_id: int, partition_no: int) -> RecoveryPointReadout:",
+      "container": "dict",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def _decode_stamps(value: object) -> tuple[SegmentStamp, ...] | None:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def _payload_bytes(payload: dict[str, Any]) -> bytes:",
+      "container": "dict",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def degraded(self) -> tuple[RecoverySummary, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def entries(self) -> tuple[RecoverySummary, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def to_payload(self) -> dict[str, Any]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "def to_payload(self) -> dict[str, int]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "delay_isolated_segments: tuple[int, ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "isolated_segments: tuple[int, ...],",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "segments: tuple[SegmentStamp, ...]",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "self._entries: dict[tuple[int, int], RecoverySummary] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/recovery.py",
+      "line": "stamps: list[SegmentStamp] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/replay.py",
+      "line": "self, *, tenant: CurrentTenant, task_id: int, allowed: tuple[str, ...], target: str",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/replay.py",
+      "line": "self._last: dict[int, datetime] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/replay.py",
+      "line": "self._tokens: dict[int, float] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/retention.py",
+      "line": "self._windows: dict[tuple[int, int], int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/scheduler.py",
+      "line": "self._failure_logged: dict[tuple[int, int, str], float] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/scheduler.py",
+      "line": "self._hours: dict[int, ConcurrentStableList[DelayRecord]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/scheduler.py",
+      "line": "self._minutes: dict[int, ConcurrentStableList[DelayRecord]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/scheduler.py",
+      "line": "self._seconds: dict[int, ConcurrentStableList[DelayRecord]] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "bases: list[int] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "def _read_entries(path: Path, layout: struct.Struct) -> list[tuple[int, int]]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "def _rewrite_entries(path: Path, layout: struct.Struct, entries: list[tuple[int, int]]) -> None:",
+      "container": "list",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "def backfill_index(self, entries: tuple[tuple[int, int, RecordHeader], ...]) -> int:",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "def list_segment_bases(directory: Path) -> list[int]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "def time_index_entries(self) -> list[tuple[int, int]]:",
+      "container": "list",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "entries: list[tuple[int, int, RecordHeader]] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "entries: list[tuple[int, int]] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "entries: tuple[tuple[int, int, RecordHeader], ...] = ()",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "self._index: list[tuple[int, int]] | None = None",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/segment.py",
+      "line": "self._time_index: list[tuple[int, int]] | None = None",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/topic_cache.py",
+      "line": "self._entries: dict[TopicKey, TopicSnapshot] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/transport.py",
+      "line": "def _client_address(scope: Mapping[str, object]) -> tuple[str, int]:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/transport.py",
+      "line": "def connection_meta(scope: Mapping[str, object]) -> ConnectionMeta:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/transport.py",
+      "line": "def sse_event(event: str, data: Mapping[str, Any]) -> bytes:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/waiter.py",
+      "line": "self._events: dict[WaitKey, asyncio.Event] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/waiter.py",
+      "line": "self._versions: dict[WaitKey, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/watermark.py",
+      "line": "self._free_bytes: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/watermark.py",
+      "line": "self._rejected: dict[str, int] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/watermark.py",
+      "line": "self._used_ratio: dict[str, float] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/broker/watermark.py",
+      "line": "self._volume_keys: set[str] = set()",
+      "container": "set",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/core/config.py",
+      "line": "DELAY_LEVEL_MS: Mapping[str, int] = MappingProxyType(",
+      "container": "Mapping",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/models/__init__.py",
+      "line": "MODEL_MODULES: tuple[str, ...] = (",
+      "container": "tuple",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/models/replay.py",
+      "line": "TASK_TERMINAL_STATUSES: tuple[str, ...] = (TASK_CANCELLED, TASK_COMPLETED, TASK_FAILED)",
+      "container": "tuple",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/protocol/validation.py",
+      "line": "def __init__(self, message: str, detail: Mapping[str, str] | None = None) -> None:",
+      "container": "Mapping",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/protocol/validation.py",
+      "line": "def content_types(self) -> tuple[str, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/protocol/validation.py",
+      "line": "self._validators: dict[str, PayloadValidator] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/protocol/validation.py",
+      "line": "self.detail: Mapping[str, str] = dict(detail) if detail is not None else {}",
+      "container": "Mapping",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/repositories/topic.py",
+      "line": "def _filters(self, namespace: str | None, keyword: str | None) -> tuple[ColumnElement[bool], ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/contract.py",
+      "line": "declarations: tuple[RpcDeclaration, ...],",
+      "container": "tuple",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/idempotency.py",
+      "line": "self._records: dict[str, _Record] = {}",
+      "container": "dict",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/registry.py",
+      "line": "def declarations(self) -> tuple[RpcDeclaration, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/registry.py",
+      "line": "def methods(self) -> tuple[tuple[str, str], ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/registry.py",
+      "line": "def services(self) -> tuple[str, ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/registry.py",
+      "line": "def stream_methods(self) -> tuple[tuple[str, str], ...]:",
+      "container": "tuple",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/service.py",
+      "line": "def _deadline_detail(deadline: Deadline) -> dict[str, object]:",
+      "container": "dict",
+      "position": "signature_return",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/stream.py",
+      "line": "def _flush_due(pending: list[RpcReply], pending_bytes: int, tuning: BackpressureTuning) -> bool:",
+      "container": "list",
+      "position": "signature_param",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/stream.py",
+      "line": "pending: list[RpcReply] = []",
+      "container": "list",
+      "position": "local",
+      "count": 1
+    },
+    {
+      "file": "backend/services/msg/src/bms_msg/rpc/stream.py",
+      "line": "replies: tuple[RpcReply, ...]",
+      "container": "tuple",
+      "position": "class_field",
+      "count": 1
+    }
+  ]
+}
