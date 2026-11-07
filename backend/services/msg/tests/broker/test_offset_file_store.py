@@ -82,7 +82,7 @@ class _AuditStub:
         self.accepted = accepted
         self.error = error
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """记录并回传配置的结果。
 
         Args:

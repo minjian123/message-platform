@@ -25,6 +25,7 @@
 > 其余控制面路由随对应任务追加。
 """
 
+import importlib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import cast
@@ -38,6 +39,7 @@ from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import SessionFactory, session_scope
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
+from bms_core.extension import SCOPE_RULE_KEY, ExtensionRequirement
 from bms_core.services.module_registry import ModuleRecord
 from bms_core.services.table_registry import TableRecord
 from fastapi import APIRouter, FastAPI
@@ -63,11 +65,10 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
-from bms_msg.errors import register_msg_error_mapper
 from bms_msg.health import register_msg_health_registry
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
-from bms_msg.tenant_guard import register_msg_tenant_guard
+from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
 
@@ -201,16 +202,30 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         )
         register_frame_handlers(app)
 
+    def extension_requirements(self) -> ConcurrentStableList[ExtensionRequirement]:
+        """本产品声明的扩展点需求（07D 任务 03）：命名空间规则必需，缺失即拒启。
+
+        Returns:
+            ConcurrentStableList[ExtensionRequirement]: 有序需求清单。
+        """
+        return ConcurrentStableList(
+            (ExtensionRequirement(plugin_key=SCOPE_RULE_KEY, plugin_name=MSG_NAMESPACE_RULE, required=True),)
+        )
+
     def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
-        """服务侧插件登记：租户守卫 `tenant_guard:msg`、产品码覆盖 `error_mapper:msg`
-        与健康检查注册表 `health_check_registry:msg`。
+        """服务侧插件登记：命名空间规则 `scope_rule:msg.namespace` 与健康检查注册表
+        `health_check_registry:msg`。
+
+        租户守卫回落基座默认（`[tenant_guard].provider = "source"`）、产品码改由
+        `[[errcodes]].maps_from` 声明装载（`[error_mapper].provider` 置空），两者不再登记产品实现
+        （07D 任务 03 附录 A / B）。
 
         Args:
-            app: 应用实例（守卫工厂惰性读取 `app.state.tenant_source`；注册表工厂读 `app.state`）。
-            settings: 应用配置（三个 `provider = "msg"` 生效，且注册表工厂取 `[health]` 两档超时）。
+            app: 应用实例（注册表工厂读 `app.state`）。
+            settings: 应用配置（注册表工厂取 `[health]` 两档超时）。
         """
-        register_msg_tenant_guard(app)
-        register_msg_error_mapper()
+        # 命名空间规则靠 `BasePluggable` 导入期自动收集，这里只需保证模块已导入（不显式登记，避免撞名）。
+        importlib.import_module("bms_msg.tenant.scope_rule")
         # 02-6：`/readyz` 的检查项来自 msg 自持注册表（基座缺省 provider 为空 → 空注册表，探针空转）。
         register_msg_health_registry(app, settings)
 

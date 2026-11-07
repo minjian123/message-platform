@@ -15,8 +15,8 @@
 - **声明**：`deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，与本模块枚举逐条对账
   （用例 `tests/test_error_codes.py`）。
 - **覆盖**：基座中间件在进入业务前就按平台码拒绝（停用 `80002` / 不存在 `80001`），msg 无改写点；
-  故由 `MsgErrorMapper` 经基座 `[error_mapper].provider = "msg"` 在**统一错误响应单点**
-  （`build_error_response`）把这两码改写为 msg 码，管理面与数据面口径一致（详细设计 §3.2、§3.4）。
+  改由 `deploy/registry/msg.toml` 的 `[[errcodes]].maps_from` 声明在**统一错误响应单点**
+  （`build_error_response`）改写为 msg 码，管理面与数据面同码（07D 任务 03 附录 B）。
 - **判定顺序**：租户（`350012` / `350011`）→ 命名空间（`350010`）→ 主题（`350001` / `350008` / `350009`）
   → 组（`350013`）→ 分区号（`350009`）→ 成员与分区归属（`350014`）→ 位点 / 消息（`350002` / `350003` / `350007`）
   → 延迟区容量（`350015`，发布侧排在主题与档位判定之后）→ 存储水位（`350022`，排在主题与分区判定之后、
@@ -28,10 +28,6 @@
 from enum import IntEnum
 from typing import ClassVar
 
-from bms_core.core.exceptions import BizError, TenantNotFoundError, TenantSuspendedError
-from bms_core.core.logging import get_logger
-from bms_core.core.plugin import register_plugin
-from bms_core.error_mapper.base import BaseErrorMapper
 from bms_core.msgclient.errors import (
     ErrorCategory,
     MsgError,
@@ -44,14 +40,12 @@ from bms_core.msgclient.errors import (
 from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS, RPC_IDEMPOTENCY_IN_PROGRESS_MS
 
 __all__ = [
-    "MSG_ERROR_MAPPER",
     "ErrorCategory",
     "MsgConnectionLimitExceededError",
     "MsgDelayQuotaExceededError",
     "MsgDeliveryExhaustedError",
     "MsgError",
     "MsgErrorCode",
-    "MsgErrorMapper",
     "MsgFrameInvalidError",
     "MsgGroupNotFoundError",
     "MsgMemberInvalidError",
@@ -75,13 +69,7 @@ __all__ = [
     "MsgTopicNotFoundError",
     "MsgVersionUnsupportedError",
     "Outcome",
-    "register_msg_error_mapper",
 ]
-
-MSG_ERROR_MAPPER = "msg"
-"""产品码覆盖实现名（配置 `[error_mapper].provider = "msg"`）。"""
-
-_LOGGER = get_logger("bms_msg.errors")
 
 
 class MsgErrorCode(IntEnum):
@@ -394,48 +382,3 @@ class MsgRpcInProgressError(MsgError):
         """
         super().__init__(message, data={"reason": "in_progress"} if data is None else data)
         self.retry_after_ms = retry_after_ms
-
-
-class MsgErrorMapper(BaseErrorMapper):
-    """msg 产品码覆盖：把基座租户判定码改写为 msg 段位码。
-
-    只映射两个「入口即拒绝」的码（停用 / 不存在）；其余异常原样返回，避免把基座其他能力域的
-    码也纳入 msg 口径（越权改写会让调用方无法按基座文档定位问题）。
-
-    **不透传基座文案**：基座文案可能含租户编码 / 内部原因，且与产品文案键冲突；对外一律按
-    `msg.error.*` 文案键输出（不泄露租户是否存在），原始文案落日志供定位。
-    """
-
-    def map(self, exc: BizError) -> BizError:
-        """按异常类型改写（未命中即原样返回）。
-
-        Args:
-            exc: 原始业务异常。
-
-        Returns:
-            BizError: 停用 → `350011`；不存在 → `350012`；其余原样。
-        """
-        if isinstance(exc, MsgError):
-            return exc
-        if isinstance(exc, TenantSuspendedError):
-            _LOGGER.warning(
-                "msg_error_code_mapped",
-                source=exc.code,
-                target=MsgErrorCode.TENANT_SUSPENDED,
-                detail=exc.message,
-            )
-            return MsgTenantSuspendedError()
-        if isinstance(exc, TenantNotFoundError):
-            _LOGGER.warning(
-                "msg_error_code_mapped",
-                source=exc.code,
-                target=MsgErrorCode.TENANT_NOT_FOUND,
-                detail=exc.message,
-            )
-            return MsgTenantNotFoundError()
-        return exc
-
-
-def register_msg_error_mapper() -> None:
-    """登记 msg 产品码覆盖实现（服务装配钩子内调用，须在插件注册表冻结前）。"""
-    register_plugin("error_mapper", MSG_ERROR_MAPPER, MsgErrorMapper)

@@ -29,13 +29,12 @@ name_prefix = "msg"
 resolve_cache_ttl = 60
 
 [tenant_guard]
-# 租户可用性守卫（bms 任务 04_02）：msg 继承默认实现补命名空间校验，经 configure_plugins 登记为 msg
-provider = "msg"
+# 租户可用性守卫回落基座默认：命名空间判定已迁到 scope_rule 规则链（07D 任务 03 附录 A）
+provider = "source"
 
 [error_mapper]
-# 产品码覆盖（bms 能力域 error_mapper）：统一错误响应单点把基座租户判定码改写成 msg 段位码
-# 80002（停用）→ 350011、80001（不存在）→ 350012；空串表示不覆盖（出基座码）
-provider = "msg"
+# 产品码映射改由 [[errcodes]].maps_from 声明装载（07D 任务 03 附录 B）；置空避免双重改写告警
+provider = ""
 
 # 健康检查注册表：msg 自持实现（02-6）。基座缺省 provider 为空 → NullHealthCheckRegistry（空检查项），
 # 即 /readyz 只判「启动完成 + 未摘流」；切到 msg 后由 msg_storage（必需：目录可写 + 水位）、

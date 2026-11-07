@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
 
+from bms_core.audit.base import RecordRef
 from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import ParamError
@@ -460,11 +461,12 @@ class OffsetDirectory(Protocol):
 class OffsetAuditSink(Protocol):
     """审计出口（最小协议）：基座 `AuditEventEmitter` 结构上即满足，用例可注入替身。"""
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """写一条审计事件。
 
         Args:
             event: 事件信封。
+            required: 强审计（写入失败即抛，不放行业务）。
 
         Returns:
             bool: 写入成功 True。
@@ -1562,6 +1564,7 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
             actor_id=actor_id,
             ip=ip,
             trace_id=trace_id,
+            record_ref=RecordRef(type="msg.offset", id=f"{int(entry.topic_id)}:{entry.partition_no}"),
         )
 
     async def _emit_purge_audit(self, *, scope: str, tenant_id: int, key: str, files: int) -> None:
@@ -1597,6 +1600,7 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
         actor_id: int | None,
         ip: str | None,
         trace_id: str | None,
+        record_ref: RecordRef | None = None,
     ) -> None:
         """发射一条操作审计（复用 `sys.operation.logged`）。
 
@@ -1608,6 +1612,7 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
             actor_id: 操作人主键。
             ip: 来源 IP。
             trace_id: 链路标识。
+            record_ref: 记录级定位（涉及具体记录的操作才给；07D 任务 03 附录 D）。
 
         Raises:
             OffsetAuditError: 审计写入失败或被拒。
@@ -1628,9 +1633,11 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
             status=200,
             error_msg=None,
             trace_id=trace_id,
+            record_ref=record_ref,
         )
         try:
-            accepted = await self._audit.emit(event)
+            # 记录级操作按强审计写入（07D 任务 03 附录 D）；失败一律转成拒绝执行。
+            accepted = await self._audit.emit(event, required=True)
         except Exception as exc:  # 审计出口异常一律转成「拒绝执行」
             _LOGGER.warning("msg_offset_audit_failed", action=action, error=repr(exc))
             raise OffsetAuditError(f"审计写入失败：{action}") from exc

@@ -15,7 +15,7 @@ import pytest
 from bms_core.api.middleware import TenantMiddleware
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import TenantNotFoundError, TenantSuspendedError
-from bms_core.core.plugin import default_plugin_registry, register_plugin
+from bms_core.core.plugin import default_plugin_registry
 from bms_core.db.tenant import TenantContext
 from bms_core.registry.products import load_product_manifest
 from bms_core.services.module_registry import register_error_code_records, reset_error_code_records
@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from bms_msg.api.deps import CurrentTenantDep
-from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, MsgErrorMapper
+from bms_msg.errors import MsgErrorCode
 
 pytestmark = pytest.mark.kiwi_id(2411)
 
@@ -86,7 +86,6 @@ def _mapper_registered() -> Iterator[None]:
     registry = default_plugin_registry()
     registry.reset()
     try:
-        register_plugin("error_mapper", MSG_ERROR_MAPPER, MsgErrorMapper)
         yield
     finally:
         registry.reset()
@@ -108,7 +107,7 @@ def _app(source: _TenantSource) -> FastAPI:
             deferred_paths=ConcurrentStableList(),
             allow_demo_fallback=False,
         ),
-        error_mapper=types.SimpleNamespace(provider=MSG_ERROR_MAPPER),
+        error_mapper=types.SimpleNamespace(provider=""),
     )
     app.state.tenant_source = source
     app.add_middleware(TenantMiddleware)

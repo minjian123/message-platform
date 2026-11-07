@@ -33,7 +33,6 @@ from bms_core.services.module_registry import register_error_code_records, reset
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from bms_msg.errors import register_msg_error_mapper
 from tests_support.frame_app import build_frame_app
 from tests_support.frame_client import (
     CONSUMER,
@@ -63,7 +62,6 @@ def _plugins() -> Iterator[None]:
     """
     registry = default_plugin_registry()
     registry.reset()
-    register_msg_error_mapper()
     importlib.import_module("bms_core.permission.null")
     importlib.import_module("bms_core.tenant_module.null")
     yield

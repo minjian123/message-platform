@@ -14,7 +14,8 @@
 
 **审计两条**：建任务一条、终态一条（`cancelled` 由请求侧记，`completed` / `failed` 由执行器记），
 载荷带范围、结果与**首末 `log_id`**——能一次寻址到具体记录，又不因逐条 `log_id` 产生审计洪泛。
-审计失败只告警、不影响重放结果（与基座 `AuditEventEmitter` 同口径）。
+记录级操作按强审计写入（`required=True` + `record_ref`），写入失败即上抛使业务失败
+（07D 任务 03 附录 D 已确认的行为变更）。
 """
 
 import asyncio
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from bms_core.audit.base import RecordRef
 from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.logging import get_logger
@@ -85,14 +87,15 @@ UowFactory = Callable[[], AbstractAsyncContextManager[UnitOfWork]]
 class AuditSink(Protocol):
     """审计出口（最小协议）：基座 `AuditEventEmitter` 结构上即满足，用例可注入替身。"""
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """写一条审计事件。
 
         Args:
             event: 事件信封。
+            required: 强审计（写入失败即抛，不放行业务）。
 
         Returns:
-            bool: 写入成功 True（失败只告警）。
+            bool: 写入成功 True。
         """
         ...
 
@@ -758,7 +761,7 @@ class ReplayRunner:
 
 
 class ReplayAuditor:
-    """重放审计记录器（两条：建任务 / 终态；失败只告警，不影响重放结果）。"""
+    """重放审计记录器（两条：建任务 / 终态；记录级强审计，写入失败即上抛）。"""
 
     def __init__(self, *, sink: AuditSink) -> None:
         """初始化。
@@ -780,7 +783,7 @@ class ReplayAuditor:
             trace_id: 链路标识。
 
         Returns:
-            bool: 写入成功 True（失败只告警）。
+            bool: 写入成功 True（失败上抛）。
         """
         return await self._emit(
             task=task, actor_id=actor_id if actor_id is not None else task.created_by, ip=ip, trace_id=trace_id
@@ -798,7 +801,7 @@ class ReplayAuditor:
             trace_id: 链路标识。
 
         Returns:
-            bool: 写入成功 True（失败只告警）。
+            bool: 写入成功 True（失败上抛）。
         """
         return await self._emit(
             task=task, actor_id=actor_id if actor_id is not None else task.created_by, ip=ip, trace_id=trace_id
@@ -811,7 +814,7 @@ class ReplayAuditor:
             task: 终态任务。
 
         Returns:
-            bool: 写入成功 True（失败只告警）。
+            bool: 写入成功 True（失败上抛）。
         """
         return await self._emit(task=task, actor_id=task.created_by, ip=None, trace_id=None)
 
@@ -825,7 +828,7 @@ class ReplayAuditor:
             trace_id: 链路标识（执行器触发时为空）。
 
         Returns:
-            bool: 写入成功 True（异常一律吞掉并告警）。
+            bool: 写入成功 True（异常记日志后上抛，使业务失败）。
         """
         event = build_operation_event(
             tenant_id=str(task.tenant_id),
@@ -843,12 +846,14 @@ class ReplayAuditor:
             status=200,
             error_msg=task.error_msg,
             trace_id=trace_id,
+            record_ref=RecordRef(type="msg.replay", id=str(task.id)),
         )
         try:
-            return await self._sink.emit(event)
-        except Exception as exc:  # 审计出口实现异常不得影响重放结果（与基座同口径）
+            # 记录级操作按强审计写入：失败即上抛使业务失败（07D 任务 03 附录 D）。
+            return await self._sink.emit(event, required=True)
+        except Exception as exc:
             _LOGGER.warning("replay_audit_failed", task_id=str(task.id), error=repr(exc))
-            return False
+            raise
 
 
 def _scope_payload(task: MsgReplayTask) -> str:

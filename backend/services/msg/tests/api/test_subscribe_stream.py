@@ -30,7 +30,6 @@ from bms_msg.api.deps import get_stream_tuning
 from bms_msg.api.frame.routes import stream_events
 from bms_msg.broker.backpressure import default_backpressure_tuning
 from bms_msg.broker.transport import StreamTuning, connection_meta
-from bms_msg.errors import register_msg_error_mapper
 from bms_msg.schemas.transport import SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
 from tests_support.frame_app import build_frame_app
@@ -54,7 +53,6 @@ def _plugins() -> Iterator[None]:
     """登记产品码覆盖并导入占位权限 / 租户模块门禁。"""
     registry = default_plugin_registry()
     registry.reset()
-    register_msg_error_mapper()
     importlib.import_module("bms_core.permission.null")
     importlib.import_module("bms_core.tenant_module.null")
     yield

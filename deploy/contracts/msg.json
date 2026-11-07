@@ -4483,6 +4483,80 @@
         ]
       }
     },
+    "/api/v1/msg/tenant-usage": {
+      "get": {
+        "description": "返回产品配额投影条目（本期空清单）。\n\nReturns:\n    JSONResponse: `{\"items\": []}`，结构合配额投影读取器契约。",
+        "operationId": "quota_projection_api_v1_msg_tenant_usage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Quota Projection",
+        "tags": [
+          "msg-quota-projection"
+        ],
+        "x-error-codes": [
+          350011,
+          350012
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "description": "存活检查端点。\n\nArgs:\n    request: 当前请求（取服务身份）。\n\nReturns:\n    dict: 服务状态与身份，固定返回 {\"status\": \"ok\", \"service\": 名, \"version\": 版}。",

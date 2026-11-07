@@ -12,7 +12,7 @@
 - **P8** 单批异常 → `failed` + `error_msg`（不静默重试）；
 - **P9** 生命周期（`ensure_started` 幂等、`stop` 幂等）；
 - **P10** 单轮异常不终止推进（下一轮照常）；
-- **P11** 审计出口抛异常不影响重放结果。
+- **P11** 记录级强审计写入失败即上抛、业务失败（07D 任务 03 附录 D 的行为变更）。
 
 时钟用 `ManualClock` 精确驱动 `run_once`（不 sleep）；只有 P10 的生命周期用例用短周期真实等待。
 """
@@ -507,7 +507,7 @@ async def test_loop_survives_single_round_failure(
         await runner.stop()
 
 
-async def test_audit_failure_does_not_break_replay(
+async def test_audit_failure_breaks_replay(
     replay_service: ReplayService,
     message_store: InMemoryMessageStore,
     current_tenant: CurrentTenant,
@@ -516,15 +516,13 @@ async def test_audit_failure_does_not_break_replay(
     exploding_auditor: ReplayAuditor,
     db_session: AsyncSession,
 ) -> None:
-    """P11：审计出口抛异常 → 记日志返回 False，重放结果不受影响。"""
+    """P11：记录级强审计写入失败 → 异常上抛使业务失败（附录 D 已确认的行为变更）。"""
     await _seed(message_store, topic=topic, count=1)
-    task = await replay_service.create(tenant=current_tenant, request=_request())
+    await replay_service.create(tenant=current_tenant, request=_request())
     runner = _runner(store=message_store, db_session=db_session, auditor=exploding_auditor, now=clock)
 
-    written = await runner.run_once()
-
-    finished = await replay_service.get(tenant=current_tenant, task_id=int(task.id))
-    assert (written, finished.status, finished.replayed) == (1, TASK_COMPLETED, 1)
+    with pytest.raises(RuntimeError, match="审计出口不可用"):
+        await runner.run_once()
 
 
 async def test_runner_skips_records_outside_key_filter(

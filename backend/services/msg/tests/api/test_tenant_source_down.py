@@ -14,13 +14,12 @@ import pytest
 from bms_core.api.middleware import TenantMiddleware
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ServiceUnavailableError
-from bms_core.core.plugin import default_plugin_registry, register_plugin
+from bms_core.core.plugin import default_plugin_registry
 from bms_core.db.tenant import TenantContext
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from bms_msg.api.deps import CurrentTenantDep
-from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorMapper
 from bms_msg.tenant.resolve import frame_tenant
 
 pytestmark = pytest.mark.kiwi_id(2411)
@@ -59,7 +58,6 @@ def _mapper_registered() -> Iterator[None]:
     registry = default_plugin_registry()
     registry.reset()
     try:
-        register_plugin("error_mapper", MSG_ERROR_MAPPER, MsgErrorMapper)
         yield
     finally:
         registry.reset()
@@ -78,7 +76,7 @@ def _app() -> FastAPI:
             deferred_paths=ConcurrentStableList(),
             allow_demo_fallback=False,
         ),
-        error_mapper=types.SimpleNamespace(provider=MSG_ERROR_MAPPER),
+        error_mapper=types.SimpleNamespace(provider=""),
     )
     app.state.tenant_source = _UnavailableSource()
     app.add_middleware(TenantMiddleware)

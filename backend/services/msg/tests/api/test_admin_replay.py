@@ -45,7 +45,7 @@ from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner
-from bms_msg.errors import MSG_ERROR_MAPPER, MsgErrorCode, register_msg_error_mapper
+from bms_msg.errors import MsgErrorCode
 from tests_support.frame_app import install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2418)
@@ -77,7 +77,7 @@ class RecordingSink:
         self.events: ConcurrentStableList[EventEnvelope] = ConcurrentStableList()
         self.result = True
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """记录事件并返回当前设定结果。
 
         Args:
@@ -125,7 +125,6 @@ def _plugins() -> Iterator[None]:
     """
     registry = default_plugin_registry()
     registry.reset()
-    register_msg_error_mapper()
     importlib.import_module("bms_core.permission.null")
     importlib.import_module("bms_core.tenant_module.null")
     yield
@@ -161,7 +160,7 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     app.state.settings = SimpleNamespace(
         permission=SimpleNamespace(provider=""),
         tenant_module=SimpleNamespace(provider=""),
-        error_mapper=SimpleNamespace(provider=MSG_ERROR_MAPPER),
+        error_mapper=SimpleNamespace(provider=""),
         tenant=SimpleNamespace(
             exempt_paths=ConcurrentStableList(),
             deferred_paths=ConcurrentStableList(),

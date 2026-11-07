@@ -2,7 +2,8 @@
 
 `deploy/registry/msg.toml` 的 `[[errcodes]]` 是对外承诺的唯一声明，须与 `bms_msg/errors.py` 的
 `MsgErrorCode` 枚举及异常类 `http_status_` 逐条一致：码集合相同、`http_status` 相同、
-`message_key` 形如 `msg.error.<snake>`、描述与级别齐备；并验证装配钩子登记了产品码覆盖。
+`message_key` 形如 `msg.error.<snake>`、描述与级别齐备；并验证声明式映射与装配声明已就位
+（07D 任务 03 附录 A / B）。
 """
 
 import inspect
@@ -12,20 +13,15 @@ from typing import cast
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
-from bms_core.core.exceptions import BizError
 from bms_core.core.plugin import default_plugin_registry, resolve_plugin
-from bms_core.error_mapper.base import BaseErrorMapper
+from bms_core.extension import SCOPE_RULE_KEY
+from bms_core.resource_scope.rules import BaseScopeRule
 from fastapi import FastAPI
 
 from bms_msg import errors as errors_module
-from bms_msg.errors import (
-    MSG_ERROR_MAPPER,
-    MsgError,
-    MsgErrorCode,
-    MsgErrorMapper,
-    MsgNamespaceInvalidError,
-)
+from bms_msg.errors import MsgError, MsgErrorCode
 from bms_msg.main import ApplicationFactory
+from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE, MsgNamespaceRule
 
 pytestmark = pytest.mark.kiwi_id(2411)
 
@@ -88,22 +84,31 @@ def test_declared_message_keys_and_severity() -> None:
         assert str(item["description"]).strip(), code
 
 
-def test_mapper_keeps_other_errors() -> None:
-    """覆盖只针对租户两个码：msg 自有异常与其他基座异常一律原样返回（不越权改写）。"""
-    mapper = MsgErrorMapper()
-    own = MsgNamespaceInvalidError()
-    other = BizError(10001)
-    assert mapper.map(own) is own
-    assert mapper.map(other) is other
+def test_declared_maps_from() -> None:
+    """声明式映射：两条租户码各映射到本段位产品码，状态语义与基座码一致（附录 B）。"""
+    declared = _declared()
+    assert list(cast("list[int]", declared[350011]["maps_from"])) == [80002]
+    assert list(cast("list[int]", declared[350012]["maps_from"])) == [80001]
+    assert int(cast("int", declared[350011]["http_status"])) == 403
+    assert int(cast("int", declared[350012]["http_status"])) == 404
 
 
-def test_configure_plugins_registers_error_mapper() -> None:
-    """装配钩子登记产品码覆盖：`configure_plugins()` 后可按 `error_mapper:msg` 解析。"""
+def test_extension_requirements_declares_scope_rule() -> None:
+    """装配声明：只声明命名空间规则一项，且为必需（缺失即拒启，附录 A）。"""
+    requirements = list(ApplicationFactory().extension_requirements())
+    assert len(requirements) == 1
+    assert requirements[0].plugin_key == SCOPE_RULE_KEY
+    assert requirements[0].plugin_name == MSG_NAMESPACE_RULE
+    assert requirements[0].required is True
+
+
+def test_configure_plugins_exposes_scope_rule() -> None:
+    """装配钩子导入规则模块后，自动候选可按 `scope_rule:msg.namespace` 解析。"""
     registry = default_plugin_registry()
     registry.reset()
     try:
         ApplicationFactory().configure_plugins(FastAPI(), settings=cast("object", None))  # type: ignore[arg-type]
-        resolved = resolve_plugin("error_mapper", MSG_ERROR_MAPPER, expected_version=BaseErrorMapper.contract_version)
-        assert isinstance(resolved, MsgErrorMapper)
+        resolved = resolve_plugin(SCOPE_RULE_KEY, MSG_NAMESPACE_RULE, expected_version=BaseScopeRule.contract_version)
+        assert isinstance(resolved, MsgNamespaceRule)
     finally:
         registry.reset()

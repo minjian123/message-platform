@@ -596,7 +596,7 @@ class FakeAuditSink:
         self.events: ConcurrentStableList[EventEnvelope] = ConcurrentStableList()
         self.result = True
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """记录事件并返回当前设定的结果。
 
         Args:
@@ -610,9 +610,9 @@ class FakeAuditSink:
 
 
 class ExplodingAuditSink:
-    """审计出口替身：发射即抛异常（验证「审计出口实现异常也不影响重放」）。"""
+    """审计出口替身：发射即抛异常（验证记录级强审计写入失败即上抛）。"""
 
-    async def emit(self, event: EventEnvelope) -> bool:
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """恒抛异常。
 
         Args:
@@ -689,7 +689,7 @@ def replay_auditor(audit_sink: FakeAuditSink) -> ReplayAuditor:
 
 @pytest.fixture
 def exploding_auditor() -> ReplayAuditor:
-    """重放审计记录器（出口恒抛异常：验证「审计失败不影响重放结果」）。
+    """重放审计记录器（出口恒抛异常：验证强审计写入失败即上抛，业务失败）。
 
     Returns:
         ReplayAuditor: 审计记录器。

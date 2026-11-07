@@ -51,7 +51,6 @@ from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
-from bms_msg.errors import MSG_ERROR_MAPPER
 from bms_msg.rpc.builtin import default_rpc_registry
 
 __all__ = ["build_frame_app", "install_backpressure_state"]
@@ -123,7 +122,7 @@ def build_frame_app(
     app.state.settings = SimpleNamespace(
         permission=SimpleNamespace(provider=""),
         tenant_module=SimpleNamespace(provider=""),
-        error_mapper=SimpleNamespace(provider=MSG_ERROR_MAPPER),
+        error_mapper=SimpleNamespace(provider=""),
         tenant=SimpleNamespace(
             exempt_paths=ConcurrentStableList(),
             deferred_paths=ConcurrentStableList(),

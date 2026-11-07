@@ -4,7 +4,7 @@
 
 **两条聚合（任务 03-1 / 03-4）**：
 
-- `api_router`（`/api/v1`）：管理面主题 / 组 / 延迟 / 重放路由 + 数据面消息路由 + 成员路由；
+- `api_router`（`/api/v1`）：管理面主题 / 组 / 延迟 / 重放 / 配额投影路由 + 数据面消息路由 + 成员路由；
 - `frame_router`（根路径）：数据面三端点（复用同一规格）+ SSE 长驻流 `/msg/subscribe` +
   连接自报 `/msg/connection` + 连接心跳 `/msg/connection/heartbeat`——HTTP/2 帧入口的固定位置。
 
@@ -18,6 +18,7 @@ from bms_core.core.concurrent import ConcurrentStableList
 
 from bms_msg.api.admin import delayed as admin_delayed
 from bms_msg.api.admin import groups as admin_groups
+from bms_msg.api.admin import quota as admin_quota
 from bms_msg.api.admin import replay as admin_replay
 from bms_msg.api.admin import topics
 from bms_msg.api.data import groups as data_groups
@@ -36,6 +37,7 @@ api_router = mount_service_routers(
             admin_groups.router,
             admin_delayed.router,
             admin_replay.router,
+            admin_quota.router,
         ]
     )
 )

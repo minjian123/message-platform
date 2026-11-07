@@ -35,7 +35,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from bms_msg.api.deps import get_backpressure_tuning, get_stream_tuning
 from bms_msg.broker.backpressure import BackpressureTuning
 from bms_msg.broker.transport import StreamTuning
-from bms_msg.errors import register_msg_error_mapper
 from tests_support.frame_app import build_frame_app
 
 pytestmark = [pytest.mark.kiwi_id(2425), pytest.mark.own_db]
@@ -75,7 +74,6 @@ def _plugins() -> Iterator[None]:
     """
     registry = default_plugin_registry()
     registry.reset()
-    register_msg_error_mapper()
     importlib.import_module("bms_core.permission.null")
     importlib.import_module("bms_core.tenant_module.null")
     yield

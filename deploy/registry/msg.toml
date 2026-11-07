@@ -52,6 +52,23 @@ product_key = "msg"
 path = "/tenant-usage"
 status = "enabled"
 
+# ---- 配额只读投影（07D 任务 03 附录 C；与上面的 form 声明并存，不互相取代）----
+# 单一事实源在 msg 侧；平台经配额投影读取器实时只读取数，不双写、不落库。
+# path 为内部公开契约完整路径（从 /api/v1 起），端点由 msg 最小实现返回 {items: []}。
+# quota_unit 为声明级单值，四维度单位不统一属 02-3 契约现状，见实施记录「偏差与遗留」。
+[[data_sources]]
+data_source_key = "msg_quota_projection"
+name = "消息平台配额投影"
+kind = "quota"
+data_source = "msg.msg.quota_projection"
+origin = "product"
+product_key = "msg"
+path = "/api/v1/msg/tenant-usage"
+quota_dimensions = ["topic_count", "storage_bytes", "throughput", "connections"]
+quota_unit = "count"
+quota_period = "none"
+status = "enabled"
+
 # ---- 错误码（第七类记录；段位取自本文件服务行 errcode_segment = "35"）----
 # 6 位码 = 2 位段 + 4 位序号；与 `backend/services/msg/src/bms_msg/errors.py` 的 `MsgErrorCode`
 # 及异常类 `http_status_` 逐条对齐（对账断言见 `backend/services/msg/tests/test_error_codes.py`）。
@@ -71,6 +88,8 @@ http_status = 403
 message_key = "msg.error.tenant_suspended"
 severity = "warning"
 description = "租户已停用（拒绝生产与消费，数据保留）"
+# 声明式映射：基座停用码 80002 → 350011（403 → 403）；统一渲染单点声明优先
+maps_from = [80002]
 
 [[errcodes]]
 code = 350012
@@ -79,6 +98,8 @@ http_status = 404
 message_key = "msg.error.tenant_not_found"
 severity = "warning"
 description = "租户不存在（不泄露租户是否存在）"
+# 声明式映射：基座租户不存在码 80001 → 350012（404 → 404）
+maps_from = [80001]
 
 # ---- 主题与分区（任务 01-1；判定顺序：租户 → 命名空间 → 主题）----
 [[errcodes]]
