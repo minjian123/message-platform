@@ -25,11 +25,11 @@
 | --- | --- | --- | --- | --- |
 | `id` | DECIMAL(38,0) | 否 | 主键，雪花 ID | 主键（ID） |
 | `tenant_id` | DECIMAL(38,0) | 否 | 与 `action` 复合唯一 | 租户内部身份（雪花主键，不可变；取自事件载荷） |
-| `action` | VARCHAR(16) | 否 | 同上 | 生命周期动作（`created` / `suspended` / `activated` / `deleted`） |
+| `action` | VARCHAR(16) | 否 | 同上 | 生命周期动作（`created` / `suspended` / `activated` / `deleted` / `purged`） |
 | `applied_version` | INT | 否 | 默认 0 | 已成功处理的事件版本戳（`sys_tenant.version`；旧事件按 0） |
 | `deleted_event_at` | DATETIME | 是 | — | 删除事件生效时刻（UTC；仅 `deleted` 行） |
-| `purge_after` | DATETIME | 是 | — | 下一次到期清理时刻（UTC；取该租户未清理主题的最早到期点；NULL = 无待清理） |
-| `purged_at` | DATETIME | 是 | — | 该租户全部主题清理完成时刻（UTC；NULL = 未完成） |
+| `purge_after` | DATETIME | 是 | — | **存量兼容位**：两步删除口径下 `tenant.deleted` 不再自算清理时点（由平台 `tenant.purged` 触发），仅 05-5 旧数据行有值供存量收敛；新行恒 NULL |
+| `purged_at` | DATETIME | 是 | — | 收到 `tenant.purged` 后物理清理完成时刻（UTC；NULL = 未完成；幂等判据） |
 | `failure_count` | INT | 否 | 默认 0 | 连续清理失败次数（成功清零） |
 | `last_error` | VARCHAR(512) | 是 | — | 最近一次清理失败原因（截断 512） |
 | `last_event_id` | VARCHAR(128) | 是 | — | 最近处理的事件 ID（排障用） |
@@ -45,11 +45,13 @@
 | 名称 | 类型 | 列 | 说明 |
 | --- | --- | --- | --- |
 | `uq_msg_tenant_lifecycle_tenant_action` | 唯一 | `(tenant_id, action)` | 同一租户同一动作只有一条账本行；**不带 `deleted_at`**（本表不软删） |
-| `idx_msg_tenant_lifecycle_purge` | 普通 | `(purge_after, purged_at)` | 到期清扫按 `purge_after <= now` 且 `purged_at IS NULL` 取待清理行 |
+| `idx_msg_tenant_lifecycle_purge` | 普通 | `(purge_after, purged_at)` | **仅存量收敛用**：按 `purge_after <= now` 且 `purged_at IS NULL` 取旧数据行；两步口径下新行 `purge_after` 恒 NULL，不进此查询 |
 
 - 无物理外键；`tenant_id` 为逻辑引用（基座租户主键同库不同表，不建外键）。
 - 公共软删除索引 `idx_msg_tenant_lifecycle_deleted_at` 由基类命名约定生成（`deleted_at` 恒建索引），此处不重复登记。
 - 每表业务索引 2 个，未超每表 ≤5 个的口径。
+
+**行语义（五动作）**：`created` / `suspended` / `activated` 各一条纯版本行；`deleted` 行承载删除进度（`deleted_event_at` / `purged_at` / 失败计数）；`purged` 行为 `tenant.purged` 的业务级幂等版本行（该事件无 `version` 字段，按 0 处理）。若 `tenant.purged` 先于 `deleted` 到达，清理完成后补建 `deleted` 行（`applied_version = -1`）以留 `purged_at` 证据。
 
 ## 4. 分片 / 归档 / 建表 <a id="storage"></a>
 
@@ -63,5 +65,6 @@
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-11-07 | v1 | 新建表结构（平台库；05-5 生命周期动作账本，替代 05-1 的租户目录 `.lifecycle.json` 生产路径，后者仅保留兼容读） | minjian |
+| 2026-11-09 | v2 | 语义变更（**无字段 / 索引结构变更**）：动作集合补 `purged`（五动作）；`purge_after` 降为存量兼容位（`tenant.deleted` 不再自算清理时点，改由 `tenant.purged` 触发一次性物理清理）；`purged_at` 语义定为准入 `tenant.purged` 后的完成时刻兼幂等判据 | minjian |
 
 > 数据表设计 · 与 bms《[数据库开发规范](../../../../bms文档/规范/数据库开发规范.md)》「数据表文件规范」节配套
