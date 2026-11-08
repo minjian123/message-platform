@@ -208,7 +208,7 @@ def test_manifest_declares_seed_and_allowlist() -> None:
     assert sources["msg_quota_rate"]["quota_unit"] == "qps"
 
     seeds = payload["seeds"]
-    assert len(seeds) == 1
+    assert [seed["name"] for seed in seeds] == ["msg-usage-forms", "msg-permissions"]
     seed = seeds[0]
     assert seed["name"] == "msg-usage-forms"
     assert seed["service"] == "msg"
@@ -225,7 +225,7 @@ def test_manifest_declares_seed_and_allowlist() -> None:
 def test_manifest_loads_and_seed_entry_is_importable() -> None:
     """装载期校验通过：清单可解析、种子入口可导入、`[seeds.tables]` 自然键可解析。"""
     manifest = load_product_manifest(_MANIFEST)
-    assert [seed.name for seed in manifest.seeds] == ["msg-usage-forms"]
+    assert [seed.name for seed in manifest.seeds] == ["msg-usage-forms", "msg-permissions"]
     module = importlib.import_module("bms_msg.seeds.forms")
     assert callable(module.__dict__.get("seed_usage_forms"))
 

@@ -17,7 +17,8 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
-from bms_msg.api.deps import CurrentTenantDep, GroupStoreDep, MessageStoreDep, OffsetStoreDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
+from bms_msg.api.deps import CurrentTenantDep, GroupStoreDep, MessageStoreDep, OffsetStoreDep, TopicAclServiceDep
 from bms_msg.broker.group import GroupMember, GroupStore
 from bms_msg.broker.inspector import GroupInspector, GroupRow, PartitionLag
 from bms_msg.broker.log import MessageStore
@@ -138,6 +139,34 @@ def _partition(lag: PartitionLag) -> GroupPartitionItem:
     )
 
 
+async def _filter_rows(
+    acl: TopicAclServiceDep,
+    tenant: CurrentTenantDep,
+    rows: ConcurrentStableList[GroupRow],
+) -> ConcurrentStableList[GroupRow]:
+    """按 `describe` ACL 过滤组列表（无权限主题不返回）。
+
+    Args:
+        acl: ACL 守卫。
+        tenant: 当前租户。
+        rows: 候选组行。
+
+    Returns:
+        ConcurrentStableList[GroupRow]: 允许查看的组行（保持入参顺序）。
+    """
+    visible: ConcurrentStableList[GroupRow] = ConcurrentStableList()
+    for row in rows:
+        allowed = await acl.filter_allowed(
+            tenant_id=int(tenant.tenant_id),
+            namespace=row.namespace,
+            topics=ConcurrentStableList([row.topic]),
+            action=ACL_ACTION_DESCRIBE,
+        )
+        if allowed:
+            visible.add(row)
+    return visible
+
+
 @router.get("", dependencies=[_QUERY], openapi_extra={"x-error-codes": _QUERY_ERRORS})
 async def list_groups(
     tenant: CurrentTenantDep,
@@ -145,6 +174,7 @@ async def list_groups(
     groups: GroupStoreDep,
     messages: MessageStoreDep,
     offsets: OffsetStoreDep,
+    acl: TopicAclServiceDep,
     namespace: Annotated[str | None, Query(max_length=64, description="命名空间过滤")] = None,
     topic: Annotated[str | None, Query(max_length=200, description="主题名过滤")] = None,
     page: Annotated[int, Query(ge=1, description="页码（从 1 起）")] = 1,
@@ -157,9 +187,10 @@ async def list_groups(
     rows, total = await _inspector(uow, groups, messages, offsets).list_groups(
         tenant=tenant, namespace=namespace, topic=topic, page=page, size=size
     )
+    visible = await _filter_rows(acl, tenant, rows)
     return ApiResponse.ok(
         GroupPage(
-            items=ConcurrentStableList(_item(row) for row in rows),
+            items=ConcurrentStableList(_item(row) for row in visible),
             total=total,
             page=page,
             size=size,
@@ -181,11 +212,18 @@ async def get_group(
     groups: GroupStoreDep,
     messages: MessageStoreDep,
     offsets: OffsetStoreDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[GroupDetail]:
     """消费组详情（状态 / 世代 / 成员 / 分配 / 各分区位点与积压）。
 
     需要 msg:query 权限；主题不存在 350001，组不存在 350013。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=namespace,
+        topic=topic,
+        action=ACL_ACTION_DESCRIBE,
+    )
     view = await _inspector(uow, groups, messages, offsets).describe(
         tenant=tenant, namespace=namespace, topic=topic, group=group
     )

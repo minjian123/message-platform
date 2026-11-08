@@ -41,6 +41,7 @@ from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Query, Request, params
 from fastapi.responses import StreamingResponse
 
+from bms_msg.acl.keys import ACL_ACTION_SUBSCRIBE
 from bms_msg.api.data.messages import (
     CONSUME_ERROR_CODES,
     CONSUME_PERMISSION,
@@ -67,6 +68,7 @@ from bms_msg.api.deps import (
     RetentionThrottleDep,
     StreamRegistryDep,
     StreamTuningDep,
+    TopicAclServiceDep,
     TopicCacheDep,
     UowFactoryDep,
     WaiterDep,
@@ -771,6 +773,7 @@ async def subscribe(
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
+    acl: TopicAclServiceDep,
 ) -> StreamingResponse:
     """订阅一条分区（SSE 长驻流，server streaming）。
 
@@ -783,6 +786,12 @@ async def subscribe(
     客户端断开或 `RST_STREAM` 后流被注销（`close(client_closed)`），已投未 ack 的消息仍可 ack。
     """
     connection_key = cast("str", request.state.connection_key)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=query.namespace,
+        topic=query.topic,
+        action=ACL_ACTION_SUBSCRIBE,
+    )
     # 先占名额：预检失败必须归还，否则一次失败会永久占一个长驻流名额（03-4 详细设计 §5.3）。
     connections.open_stream(connection_key, limit=connection_tuning.max_streams_per_connection)
     try:
@@ -895,6 +904,7 @@ async def subscribe_frames(
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
+    acl: TopicAclServiceDep,
 ) -> StreamingResponse:
     """订阅一条分区（帧流形态，`application/x-msg-frame`）。
 
@@ -913,6 +923,19 @@ async def subscribe_frames(
             headers=_STREAM_HEADERS,
         )
     connection_key = cast("str", request.state.connection_key)
+    try:
+        await acl.authorize(
+            tenant_id=int(tenant.tenant_id),
+            namespace=query.namespace,
+            topic=query.topic,
+            action=ACL_ACTION_SUBSCRIBE,
+        )
+    except BizError as exc:
+        return StreamingResponse(
+            _single_frame(error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id)),
+            media_type=FRAME_MEDIA_TYPE,
+            headers=_STREAM_HEADERS,
+        )
     connections.open_stream(connection_key, limit=connection_tuning.max_streams_per_connection)
     try:
         topic_id, partition_no = await _preflight(

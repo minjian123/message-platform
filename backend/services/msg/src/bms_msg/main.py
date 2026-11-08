@@ -36,13 +36,15 @@ from bms_core.audit.classes import AuditClass
 from bms_core.audit.emit import AuditEventEmitter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import Settings
+from bms_core.core.plugin import register_plugin
 from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import DbSession, SessionFactory, session_scope
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.events.consumer_records import EventConsumerRecord
-from bms_core.extension import SCOPE_RULE_KEY, ExtensionRequirement
+from bms_core.extension import RESOURCE_ACL_KEY, SCOPE_RULE_KEY, ExtensionRequirement
+from bms_core.permission.rbac import RBAC_PROVIDER_NAME
 from bms_core.registry.forms import FormRecord
 from bms_core.services.module_registry import ModuleRecord
 from bms_core.services.table_registry import TableRecord
@@ -50,6 +52,9 @@ from bms_core.tenant.guard import SourceTenantGuard, tenant_source_reader
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
+from bms_msg.acl.cache import TopicAclCache
+from bms_msg.acl.keys import MSG_TOPIC_ACL_PLUGIN
+from bms_msg.acl.port import MsgTopicAclFactory
 from bms_msg.api.access_audit import AccessAnomalyAuditMiddleware
 from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.router import api_router, frame_router
@@ -75,6 +80,7 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.core.config import DATA_ROOT_SUBDIR, OFFSETS_SUBDIR
 from bms_msg.health import register_msg_health_registry
+from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
@@ -103,6 +109,22 @@ class ApplicationFactory(BaseServiceApplicationFactory):
     version: str = __version__
     contract_version: str = CONTRACT_VERSION
     product_key: str | None = PRODUCT_KEY
+
+    def prepare_settings(self, settings: Settings) -> None:
+        """启用真实 RBAC 与主题 ACL（05-3）。
+
+        - `[permission].provider` 未显式配置时置为 `rbac`；显式配置（含 `null`）尊重；
+        - `[resource_acl].provider` 未显式配置时置为 `msg.topic`；
+        - 登记权限数据来源与真实校验器（插件注册表构建前）。
+
+        Args:
+            settings: 应用配置（可变）。
+        """
+        if not settings.permission.provider:
+            settings.permission.provider = RBAC_PROVIDER_NAME
+        if not settings.resource_acl.provider or settings.resource_acl.provider == "null":
+            settings.resource_acl.provider = MSG_TOPIC_ACL_PLUGIN
+        register_msg_permission(settings)
 
     def service_records(self) -> ConcurrentStableList[ModuleRecord]:
         """本产品服务清单（产品自持；与 `deploy/registry/msg.toml` 服务行同值）。"""
@@ -227,6 +249,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.retention_throttle = RetentionThrottle()
         # 05-2：配额快照缓存 / 存储用量采样器 / 今日投递计数（进程级；跨实例一致性归 8B_05）。
         app.state.quota_cache = QuotaCache()
+        # 05-3：主题 ACL 规则快照缓存（进程级；版本戳由 DB 提供，跨 worker 一致）。
+        app.state.topic_acl_cache = TopicAclCache()
         app.state.storage_usage_sampler = StorageUsageSampler(root=root)
         app.state.delivery_counter = default_delivery_counter()
         # 05-5：延迟转投前的租户可用性检查——复用基座租户守卫（租户源 + 全局版本戳），不建本地状态。
@@ -274,6 +298,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             quota_session_scope=lambda: lifecycle_session_scope(app),
             quota_cache=app.state.quota_cache,
             storage_sampler=app.state.storage_usage_sampler,
+            acl_session_scope=lambda: lifecycle_session_scope(app),
+            acl_cache=app.state.topic_acl_cache,
         )
         # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
         app.state.rpc_registry = default_rpc_registry()
@@ -298,13 +324,16 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         return ACTION_CLASSES
 
     def extension_requirements(self) -> ConcurrentStableList[ExtensionRequirement]:
-        """本产品声明的扩展点需求（07D 任务 03）：命名空间规则必需，缺失即拒启。
+        """本产品声明的扩展点需求（07D 任务 03 / 05-3）：命名空间规则与资源级 ACL 必需。
 
         Returns:
             ConcurrentStableList[ExtensionRequirement]: 有序需求清单。
         """
         return ConcurrentStableList(
-            (ExtensionRequirement(plugin_key=SCOPE_RULE_KEY, plugin_name=MSG_NAMESPACE_RULE, required=True),)
+            (
+                ExtensionRequirement(plugin_key=SCOPE_RULE_KEY, plugin_name=MSG_NAMESPACE_RULE, required=True),
+                ExtensionRequirement(plugin_key=RESOURCE_ACL_KEY, plugin_name=MSG_TOPIC_ACL_PLUGIN, required=True),
+            )
         )
 
     def configure_plugins(self, app: FastAPI, settings: Settings) -> None:
@@ -321,6 +350,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         """
         # 命名空间规则靠 `BasePluggable` 导入期自动收集，这里只需保证模块已导入（不显式登记，避免撞名）。
         importlib.import_module("bms_msg.tenant.scope_rule")
+        # 05-3：资源级 ACL 端口实现（工厂需应用引用，显式登记；导入期自动收集的类无缓存依赖）。
+        register_plugin(RESOURCE_ACL_KEY, MSG_TOPIC_ACL_PLUGIN, MsgTopicAclFactory(app))
         # 02-6：`/readyz` 的检查项来自 msg 自持注册表（基座缺省 provider 为空 → 空注册表，探针空转）。
         register_msg_health_registry(app, settings)
 

@@ -32,6 +32,14 @@ resolve_cache_ttl = 60
 # 租户可用性守卫回落基座默认：命名空间判定已迁到 scope_rule 规则链（07D 任务 03 附录 A）
 provider = "source"
 
+[permission]
+# 真实 RBAC（05-3）：校验器随基座分发，msg 注入 platform 权限数据来源
+provider = "rbac"
+
+[resource_acl]
+# 主题 ACL 端口实现（05-3）：msg 自持实现名，与资源类型标识同值
+provider = "msg.topic"
+
 [error_mapper]
 # 产品码映射改由 [[errcodes]].maps_from 声明装载（07D 任务 03 附录 B）；置空避免双重改写告警
 provider = ""
@@ -94,5 +102,6 @@ exclude_paths = [
   "/api/v1/msg/admin/topics",
   "/api/v1/msg/admin/quotas",
   "/api/v1/msg/admin/delayed",
+  "/api/v1/msg/admin/acls",
   "/api/v1/msg/admin/offsets",
 ]

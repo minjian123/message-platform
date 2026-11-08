@@ -173,7 +173,15 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     """
     created = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
     async with created.begin() as connection:
-        for table in ("msg_topic", "msg_partition", "msg_replay_task", "msg_tenant_lifecycle", "msg_quota"):
+        for table in (
+            "msg_topic",
+            "msg_partition",
+            "msg_replay_task",
+            "msg_tenant_lifecycle",
+            "msg_quota",
+            "msg_topic_acl",
+            "msg_topic_acl_scope",
+        ):
             await connection.run_sync(Base.metadata.tables[table].create)
     try:
         yield created

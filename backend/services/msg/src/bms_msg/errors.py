@@ -42,6 +42,7 @@ from bms_msg.core.config import RATE_LIMIT_RETRY_AFTER_MS, RPC_IDEMPOTENCY_IN_PR
 
 __all__ = [
     "ErrorCategory",
+    "MsgAclDeniedError",
     "MsgConnectionLimitExceededError",
     "MsgDelayQuotaExceededError",
     "MsgDeliveryExhaustedError",
@@ -187,6 +188,14 @@ class MsgErrorCode(IntEnum):
 
     与 `350013` 分工：那个是「组不存在」，本码是「组数量到顶」；只拦新建组，
     已存在组的心跳 / 拉取 / 离开不受影响。
+    """
+
+    ACL_DENIED = 350027
+    """主题 ACL 拒绝（403）：主体对该主题的该动作无授权（含显式 deny）。
+
+    与 `30001` 分工：`30001` 是功能级 RBAC 无权限，本码是资源级 ACL 拒绝；
+    与 `350001` 分工：本码不表示主题不存在（ACL 先于归属判定，不泄露存在性）。
+    基座 `82013` 经 `[[errcodes]].maps_from` 映射为本码。
     """
 
 
@@ -413,6 +422,13 @@ class MsgGroupCountQuotaExceededError(MsgError):
             message,
             data={"quota_key": "group_count", "limit": limit, "usage": usage},
         )
+
+
+class MsgAclDeniedError(MsgError):
+    """主题 ACL 拒绝（350027 / 403）：功能级 RBAC 已过，资源级 ACL 拒绝。"""
+
+    code_: ClassVar[int] = MsgErrorCode.ACL_DENIED
+    http_status_: ClassVar[int] = 403
 
 
 class MsgRpcInProgressError(MsgError):

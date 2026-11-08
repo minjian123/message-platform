@@ -29,6 +29,7 @@ from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
 from bms_core.db.session import DbSession
 
+from bms_msg.acl.cache import TopicAclCache
 from bms_msg.core.config import (
     DEFAULT_RETENTION_MS,
     TENANT_PURGE_BATCH_LIMIT,
@@ -38,6 +39,7 @@ from bms_msg.models.replay import TASK_PENDING, TASK_RUNNING
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.repositories.quota import QuotaRepository
 from bms_msg.repositories.tenant_lifecycle import TenantReplayRef, TenantTopicRef
+from bms_msg.repositories.topic_acl import MsgTopicAclRepository, MsgTopicAclScopeRepository
 from bms_msg.tenant.ledger import TenantLifecycleLedger
 from bms_msg.tenant.runtime import TenantLifecycleRuntime
 from bms_msg.usage.snapshot import StorageUsageSampler
@@ -301,6 +303,8 @@ class TenantPurgeService:
         quota_session_scope: Callable[[], AbstractAsyncContextManager[DbSession]] | None = None,
         quota_cache: QuotaCache | None = None,
         storage_sampler: StorageUsageSampler | None = None,
+        acl_session_scope: Callable[[], AbstractAsyncContextManager[DbSession]] | None = None,
+        acl_cache: TopicAclCache | None = None,
     ) -> None:
         """初始化（不启动任务）。
 
@@ -316,6 +320,8 @@ class TenantPurgeService:
             quota_session_scope: 配额清理的平台库短会话入口（None = 不删配额行）。
             quota_cache: 配额快照缓存（清理后失效）。
             storage_sampler: 存储用量采样器（清理后失效）。
+            acl_session_scope: ACL 清理的平台库短会话入口（None = 不删 ACL 行）。
+            acl_cache: ACL 快照缓存（清理后失效）。
         """
         self._ledger = ledger
         self._runtime = runtime
@@ -328,6 +334,8 @@ class TenantPurgeService:
         self._quota_session_scope = quota_session_scope
         self._quota_cache = quota_cache
         self._storage_sampler = storage_sampler
+        self._acl_session_scope = acl_session_scope
+        self._acl_cache = acl_cache
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
@@ -549,9 +557,24 @@ class TenantPurgeService:
             await self._record_failure(tenant_id, exc)
             raise
         await self._purge_quota(tenant_id)
+        await self._purge_acl(tenant_id)
         await self._ledger.mark_purged(tenant_id=tenant_id, at=plan.as_of)
         _LOGGER.info("msg_tenant_purge_completed", **final.to_payload())
         return final
+
+    async def _purge_acl(self, tenant_id: int) -> None:
+        """删除租户 ACL 规则 / 版本行并失效快照；失败上抛由调用方记失败。
+
+        Args:
+            tenant_id: 租户主键。
+        """
+        if self._acl_session_scope is not None:
+            async with self._acl_session_scope() as session:
+                await MsgTopicAclRepository(session).delete_for_tenant(tenant_id=tenant_id)
+                await MsgTopicAclScopeRepository(session).delete_for_tenant(tenant_id=tenant_id)
+                await session.commit()
+        if self._acl_cache is not None:
+            self._acl_cache.invalidate_tenant(tenant_id)
 
     async def _purge_quota(self, tenant_id: int) -> None:
         """删除租户配额行并失效相关缓存（05-2；失败上抛由调用方记失败）。

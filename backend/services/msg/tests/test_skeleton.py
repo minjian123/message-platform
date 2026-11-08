@@ -71,7 +71,7 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 @pytest.mark.kiwi_id(2410)
 @pytest.mark.kiwi_id(2412)
 def test_factory_surface_lists_are_declared() -> None:
-    """工厂三张清单可用：服务行一条、表归属四表（01-1 / 01-6 / 05-2）、业务路由两条聚合（03-1）。"""
+    """工厂三张清单可用：服务行一条、表归属七表（01-1 / 01-6 / 05-2 / 05-3）、业务路由两条聚合（03-1）。"""
     factory = ApplicationFactory()
 
     assert [record.module_key for record in factory.service_records()] == ["msg"]
@@ -81,6 +81,8 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_replay_task",
         "msg_tenant_lifecycle",
         "msg_quota",
+        "msg_topic_acl",
+        "msg_topic_acl_scope",
     ]
     assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
@@ -97,6 +99,8 @@ def test_table_registry_register_is_idempotent() -> None:
         "msg_replay_task",
         "msg_tenant_lifecycle",
         "msg_quota",
+        "msg_topic_acl",
+        "msg_topic_acl_scope",
     )
 
 

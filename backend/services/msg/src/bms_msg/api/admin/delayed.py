@@ -17,7 +17,8 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Query
 
-from bms_msg.api.deps import CurrentTenantDep, DelayStoreDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
+from bms_msg.api.deps import CurrentTenantDep, DelayStoreDep, TopicAclServiceDep
 from bms_msg.broker.delay import DelayedRow, DelayInspector, DelayStore
 from bms_msg.broker.router import TopicRouter
 from bms_msg.errors import MsgErrorCode
@@ -83,11 +84,40 @@ def _item(row: DelayedRow) -> DelayedItem:
     )
 
 
+async def _filter_rows(
+    acl: TopicAclServiceDep,
+    tenant: CurrentTenantDep,
+    rows: ConcurrentStableList[DelayedRow],
+) -> ConcurrentStableList[DelayedRow]:
+    """按 `describe` ACL 过滤延迟消息列表（无权限主题不返回）。
+
+    Args:
+        acl: ACL 守卫。
+        tenant: 当前租户。
+        rows: 候选延迟记录。
+
+    Returns:
+        ConcurrentStableList[DelayedRow]: 允许查看的记录（保持入参顺序）。
+    """
+    visible: ConcurrentStableList[DelayedRow] = ConcurrentStableList()
+    for row in rows:
+        allowed = await acl.filter_allowed(
+            tenant_id=int(tenant.tenant_id),
+            namespace=row.record.namespace,
+            topics=ConcurrentStableList([row.record.topic]),
+            action=ACL_ACTION_DESCRIBE,
+        )
+        if allowed:
+            visible.add(row)
+    return visible
+
+
 @router.get("", dependencies=[_QUERY], openapi_extra={"x-error-codes": _QUERY_ERRORS})
 async def list_delayed(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     store: DelayStoreDep,
+    acl: TopicAclServiceDep,
     namespace: Annotated[str | None, Query(max_length=64, description="命名空间过滤")] = None,
     topic: Annotated[str | None, Query(max_length=200, description="主题名过滤")] = None,
     partition: Annotated[int | None, Query(ge=0, description="分区号过滤")] = None,
@@ -109,9 +139,10 @@ async def list_delayed(
         page=page,
         size=size,
     )
+    visible = await _filter_rows(acl, tenant, rows)
     return ApiResponse.ok(
         DelayedPage(
-            items=ConcurrentStableList(_item(row) for row in rows),
+            items=ConcurrentStableList(_item(row) for row in visible),
             total=total,
             page=page,
             size=size,

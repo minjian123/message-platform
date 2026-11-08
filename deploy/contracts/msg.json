@@ -75,6 +75,230 @@
         "title": "AckResult",
         "type": "object"
       },
+      "AclBatchRequest": {
+        "additionalProperties": false,
+        "description": "批量授予 / 更新请求（整批校验、整批成功 / 失败）。",
+        "properties": {
+          "items": {
+            "description": "规则清单",
+            "items": {
+              "$ref": "#/components/schemas/AclRuleRequest"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "title": "AclBatchRequest",
+        "type": "object"
+      },
+      "AclBatchResult": {
+        "additionalProperties": false,
+        "description": "批量授予 / 更新结果。",
+        "properties": {
+          "changed": {
+            "description": "实际发生变更的规则 ID（幂等未变更为空）",
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed",
+            "type": "array"
+          },
+          "items": {
+            "description": "写入后的规则（与入参同序）",
+            "items": {
+              "$ref": "#/components/schemas/AclItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "title": "AclBatchResult",
+        "type": "object"
+      },
+      "AclItem": {
+        "additionalProperties": false,
+        "description": "ACL 规则明细。",
+        "properties": {
+          "acl_id": {
+            "description": "规则 ID（雪花，JSON 输出为字符串）",
+            "title": "Acl Id",
+            "type": "string"
+          },
+          "action": {
+            "description": "动作",
+            "title": "Action",
+            "type": "string"
+          },
+          "effect": {
+            "description": "效果",
+            "title": "Effect",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "principal_key": {
+            "description": "主体标识",
+            "title": "Principal Key",
+            "type": "string"
+          },
+          "principal_type": {
+            "description": "主体类型",
+            "title": "Principal Type",
+            "type": "string"
+          },
+          "status": {
+            "description": "状态（enabled / disabled）",
+            "title": "Status",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近更新时间（UTC）",
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "acl_id",
+          "namespace",
+          "topic",
+          "principal_type",
+          "principal_key",
+          "action",
+          "effect",
+          "status",
+          "updated_at"
+        ],
+        "title": "AclItem",
+        "type": "object"
+      },
+      "AclPage": {
+        "additionalProperties": false,
+        "description": "ACL 列表响应（页码分页）。",
+        "properties": {
+          "items": {
+            "description": "当页规则",
+            "items": {
+              "$ref": "#/components/schemas/AclItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "符合条件的总数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "AclPage",
+        "type": "object"
+      },
+      "AclRevokeResult": {
+        "additionalProperties": false,
+        "description": "收回结果（幂等）。",
+        "properties": {
+          "acl_id": {
+            "description": "规则 ID（雪花，JSON 输出为字符串）",
+            "title": "Acl Id",
+            "type": "string"
+          },
+          "changed": {
+            "description": "是否实际发生停用（已停用 / 不存在为 false）",
+            "title": "Changed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acl_id",
+          "changed"
+        ],
+        "title": "AclRevokeResult",
+        "type": "object"
+      },
+      "AclRuleRequest": {
+        "additionalProperties": false,
+        "description": "一条 ACL 规则（授予 / 更新）。",
+        "properties": {
+          "action": {
+            "description": "动作（publish / subscribe / describe / manage）",
+            "maxLength": 16,
+            "title": "Action",
+            "type": "string"
+          },
+          "effect": {
+            "description": "效果（allow / deny）",
+            "maxLength": 8,
+            "title": "Effect",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间（对齐 bms module_key）",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "principal_key": {
+            "description": "主体标识（用户 / 角色主键的十进制字符串）",
+            "maxLength": 64,
+            "title": "Principal Key",
+            "type": "string"
+          },
+          "principal_type": {
+            "description": "主体类型（user / role）",
+            "maxLength": 16,
+            "title": "Principal Type",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名（须已存在且属于当前租户）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic",
+          "principal_type",
+          "principal_key",
+          "action",
+          "effect"
+        ],
+        "title": "AclRuleRequest",
+        "type": "object"
+      },
       "ApiResponse": {
         "additionalProperties": false,
         "description": "统一响应体：`code=0` 成功，非 0 业务错误码。\n\n- `data` 为业务数据（泛型）；失败时为 `null`；分页载荷复用分页契约基类。\n- 雪花 ID 在 JSON 中以字符串输出（`BaseSchema` 统一序列化口径）。",
@@ -127,6 +351,87 @@
           }
         },
         "title": "ApiResponse[AckResult]",
+        "type": "object"
+      },
+      "ApiResponse_AclBatchResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AclBatchResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[AclBatchResult]",
+        "type": "object"
+      },
+      "ApiResponse_AclPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AclPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[AclPage]",
+        "type": "object"
+      },
+      "ApiResponse_AclRevokeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AclRevokeResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[AclRevokeResult]",
         "type": "object"
       },
       "ApiResponse_ConnectionInfo_": {
@@ -2745,6 +3050,437 @@
           350007,
           350009,
           350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/acls": {
+      "get": {
+        "description": "ACL 规则列表（分页 + 命名空间 / 主题 / 主体 / 动作 / 状态过滤）。\n\n需要 msg:manage 权限；按租户隔离；命名空间过滤值非法 350010，过滤枚举非法 10001。",
+        "operationId": "list_acls_api_v1_msg_admin_acls_get",
+        "parameters": [
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "主体类型过滤（user / role）",
+            "in": "query",
+            "name": "principal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主体类型过滤（user / role）",
+              "title": "Principal Type"
+            }
+          },
+          {
+            "description": "主体标识过滤",
+            "in": "query",
+            "name": "principal_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主体标识过滤",
+              "title": "Principal Key"
+            }
+          },
+          {
+            "description": "动作过滤",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "动作过滤",
+              "title": "Action"
+            }
+          },
+          {
+            "description": "状态过滤（enabled / disabled）",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "状态过滤（enabled / disabled）",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_AclPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Acls",
+        "tags": [
+          "msg-admin-acls"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350027,
+          350011,
+          350012
+        ]
+      },
+      "put": {
+        "description": "批量授予 / 更新 ACL（按唯一键 upsert；整批校验、整批成功 / 失败）。\n\n需要 msg:manage 权限 + 目标主题 manage ACL；主题不存在 350001，命名空间非法 350010，\nACL 拒绝 350027，参数非法 10001。新建 / 恢复记 grant，改 effect 记 update，幂等不变更不写审计。",
+        "operationId": "upsert_acls_api_v1_msg_admin_acls_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AclBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_AclBatchResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Upsert Acls",
+        "tags": [
+          "msg-admin-acls"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350027,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/acls/{acl_id}": {
+      "delete": {
+        "description": "收回一条 ACL（置 `status=disabled`；幂等）。\n\n需要 msg:manage 权限 + 目标主题 manage ACL；规则不存在 / 不属于当前租户返回 `changed=false`，\nACL 拒绝 350027。",
+        "operationId": "revoke_acl_api_v1_msg_admin_acls__acl_id__delete",
+        "parameters": [
+          {
+            "description": "ACL 规则 ID（雪花）",
+            "in": "path",
+            "name": "acl_id",
+            "required": true,
+            "schema": {
+              "description": "ACL 规则 ID（雪花）",
+              "title": "Acl Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_AclRevokeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Revoke Acl",
+        "tags": [
+          "msg-admin-acls"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350027,
           350011,
           350012
         ]

@@ -17,7 +17,15 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends
 
-from bms_msg.api.deps import DataPlaneTenantDep, DeliveryStateDep, GroupStoreDep, QuotaServiceDep, TopicCacheDep
+from bms_msg.acl.keys import ACL_ACTION_SUBSCRIBE
+from bms_msg.api.deps import (
+    DataPlaneTenantDep,
+    DeliveryStateDep,
+    GroupStoreDep,
+    QuotaServiceDep,
+    TopicAclServiceDep,
+    TopicCacheDep,
+)
 from bms_msg.broker.coordinator import GroupCoordinator, MemberState
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import ConsumerGroup, GroupStore
@@ -134,6 +142,7 @@ async def join(
     delivery: DeliveryStateDep,
     cache: TopicCacheDep,
     quota: QuotaServiceDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[MemberAssignment]:
     """加入消费组（服务端主导分配）。
 
@@ -141,6 +150,12 @@ async def join(
     （刷新存活、不递增世代、分配不变）。返回 `generation` 与 `partitions`，客户端按分配拉取。
     主题不存在 350001，命名空间非已启用 module_key 返回 350010，组数配额已满返回 350026。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_SUBSCRIBE,
+    )
     state = await _coordinator(uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id), quota=quota).join(
         tenant=tenant, request=req
     )

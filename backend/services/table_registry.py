@@ -53,8 +53,22 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="消息维度配额限额（六维 / 软硬限 / 作用域 / 来源；不存用量）",
     ),
+    TableRecord(
+        table_name="msg_topic_acl",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="主题 ACL 规则（主体 / 动作 / allow-deny / 启用状态）",
+    ),
+    TableRecord(
+        table_name="msg_topic_acl_scope",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="主题 ACL 作用域版本戳（按 tenant + namespace 失效快照）",
+    ),
 )
-"""msg 元数据四表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
+"""msg 元数据表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 
 
 def register() -> None:

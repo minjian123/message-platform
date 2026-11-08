@@ -19,7 +19,8 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path
 
-from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, MessageStoreDep, ReplayRunnerDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
+from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, MessageStoreDep, ReplayRunnerDep, TopicAclServiceDep
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayService
 from bms_msg.broker.router import TopicRouter
@@ -135,6 +136,7 @@ async def create_replay(
     store: MessageStoreDep,
     runner: ReplayRunnerDep,
     sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """建重放任务（按条件把历史再写一遍，返回任务快照）。
 
@@ -142,6 +144,12 @@ async def create_replay(
     命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。
     入口先写「建任务」审计，再惰性启动执行器（保证留痕顺序先创建后终态）。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_MANAGE,
+    )
     task = await _service(uow, store).create(tenant=tenant, request=req)
     await _auditor(sink).record_created(
         task=task,
@@ -159,12 +167,19 @@ async def get_replay(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     store: MessageStoreDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识）。
 
     需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。
     """
     task = await _service(uow, store).get(tenant=tenant, task_id=task_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=task.namespace,
+        topic=task.topic,
+        action=ACL_ACTION_DESCRIBE,
+    )
     return ApiResponse.ok(_item(task))
 
 
@@ -174,11 +189,19 @@ async def pause_replay(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     store: MessageStoreDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """暂停任务（批边界生效：当前批写完才停，进度与写入始终一致）。
 
     需要 msg:manage 权限；任务不存在 350016，已暂停或已终态 350017。
     """
+    current = await _service(uow, store).get(tenant=tenant, task_id=task_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=current.namespace,
+        topic=current.topic,
+        action=ACL_ACTION_MANAGE,
+    )
     task = await _service(uow, store).pause(tenant=tenant, task_id=task_id)
     return ApiResponse.ok(_item(task))
 
@@ -189,11 +212,19 @@ async def resume_replay(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     store: MessageStoreDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """恢复任务（仅接受已暂停的任务）。
 
     需要 msg:manage 权限；任务不存在 350016，未处于暂停 350017。
     """
+    current = await _service(uow, store).get(tenant=tenant, task_id=task_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=current.namespace,
+        topic=current.topic,
+        action=ACL_ACTION_MANAGE,
+    )
     task = await _service(uow, store).resume(tenant=tenant, task_id=task_id)
     return ApiResponse.ok(_item(task))
 
@@ -205,11 +236,19 @@ async def cancel_replay(
     uow: PlatformUowDep,
     store: MessageStoreDep,
     sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """取消任务（非终态可取消；已写入的记录不回滚——重放是新增写入，消费端仍按 message_id 幂等）。
 
     需要 msg:manage 权限；任务不存在 350016，已是终态 350017。取消在请求侧写终态审计（操作人可查）。
     """
+    current = await _service(uow, store).get(tenant=tenant, task_id=task_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=current.namespace,
+        topic=current.topic,
+        action=ACL_ACTION_MANAGE,
+    )
     task = await _service(uow, store).cancel(tenant=tenant, task_id=task_id)
     await _auditor(sink).record_cancelled(
         task=task,

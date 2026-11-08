@@ -17,7 +17,8 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
-from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, QuotaServiceDep, TopicCacheDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
+from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, QuotaServiceDep, TopicAclServiceDep, TopicCacheDep
 from bms_msg.audit.trail import TOPIC_CREATE_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
@@ -131,6 +132,34 @@ def _detail(topic: MsgTopic, partitions: ConcurrentStableList[MsgPartition]) -> 
     )
 
 
+async def _filter_topics(
+    acl: TopicAclServiceDep,
+    tenant: CurrentTenantDep,
+    topics: ConcurrentStableList[MsgTopic],
+) -> ConcurrentStableList[MsgTopic]:
+    """按 `describe` ACL 过滤主题（列表接口；无权限主题不返回）。
+
+    Args:
+        acl: ACL 守卫。
+        tenant: 当前租户。
+        topics: 候选主题。
+
+    Returns:
+        ConcurrentStableList[MsgTopic]: 允许查看的主题（保持入参顺序）。
+    """
+    visible: ConcurrentStableList[MsgTopic] = ConcurrentStableList()
+    for topic in topics:
+        allowed = await acl.filter_allowed(
+            tenant_id=int(tenant.tenant_id),
+            namespace=topic.namespace,
+            topics=ConcurrentStableList([topic.name]),
+            action=ACL_ACTION_DESCRIBE,
+        )
+        if allowed:
+            visible.add(topic)
+    return visible
+
+
 async def _audit_create(
     sink: AuditEmitter,
     *,
@@ -180,6 +209,7 @@ async def create_topic(
     cache: TopicCacheDep,
     quota: QuotaServiceDep,
     sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[TopicItem]:
     """创建主题（指定分区数，返回完整元数据）。
 
@@ -187,6 +217,12 @@ async def create_topic(
     返回 350008，分区数或保留期越界返回 350009，命名空间非已启用 module_key 返回 350010，
     主题数配额已满返回 350025。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.name,
+        action=ACL_ACTION_MANAGE,
+    )
     topic = await _service(uow, cache=cache, quota=quota).create_topic(tenant=tenant, request=req)
     await _audit_create(
         sink,
@@ -202,6 +238,7 @@ async def create_topic(
 async def list_topics(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
+    acl: TopicAclServiceDep,
     namespace: Annotated[str | None, Query(max_length=64, description="命名空间过滤")] = None,
     keyword: Annotated[str | None, Query(max_length=200, description="主题名模糊匹配")] = None,
     page: Annotated[int, Query(ge=1, description="页码（从 1 起）")] = 1,
@@ -214,9 +251,10 @@ async def list_topics(
     items, total = await _service(uow).list_topics(
         tenant=tenant, namespace=namespace, keyword=keyword, page=page, size=size
     )
+    visible = await _filter_topics(acl, tenant, items)
     return ApiResponse.ok(
         TopicPage(
-            items=ConcurrentStableList(_item(topic) for topic in items),
+            items=ConcurrentStableList(_item(topic) for topic in visible),
             total=total,
             page=page,
             size=size,
@@ -229,10 +267,17 @@ async def get_topic(
     topic_id: TopicIdPath,
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[TopicDetail]:
     """主题详情（含分区列表）。
 
     需要 msg:query 权限；不存在或不属于当前租户返回 350001。
     """
     topic, partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_DESCRIBE,
+    )
     return ApiResponse.ok(_detail(topic, partitions))

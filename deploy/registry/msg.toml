@@ -38,6 +38,18 @@ domain = "msg"
 service_key = "msg"
 description = "msg 消息平台服务（对外 /api/msg/v1/msg/...）"
 
+# ---- 作用域资源类型（第十类记录；05-3 主题 ACL）----
+# 主题名允许点号（如 `operation.created`），故 name_pattern 不用缺省 snake_case；
+# ACL 判定使用原样 topic，不构造 `ResourceScopeKey`（点号与基座缺省形态不同，详见 05-3 设计 §4）。
+[[resource_types]]
+key = "msg.topic"
+name = "消息主题"
+name_pattern = "^[a-zA-Z0-9._-]{1,200}$"
+max_length = 200
+retention_days = 0
+removal_policy = "purge"
+status = "enabled"
+
 # ---- 数据源（第五段之前的产品数据源登记）----
 # 租户用量只读投影：bms 租户管理页按 `data_source_key` 装载只读板块，
 # 前端经网关直取 `path`（对应内部 `/api/v1/msg/tenant-usage`）。
@@ -114,6 +126,23 @@ status = "enabled"
 sys_business = "code"
 sys_form = "business_id"
 sys_field = "form_id,field_key"
+
+# ---- 权限码种子（05-3；平台权限字典 sys_business / sys_action / sys_permission）----
+# 产品自持声明、平台统一调度；已存在的业务码 / 动作码原样保留（名称归平台维护），只补齐缺失行。
+[[seeds]]
+name = "msg-permissions"
+service = "msg"
+db_key = "platform_platform"
+module = "bms_msg.seeds.permissions"
+entry = "seed_permissions"
+after = []
+description = "消息平台权限码（业务码 msg × query/manage/publish/consume/rpc）"
+status = "enabled"
+
+[seeds.tables]
+sys_business = "code"
+sys_action = "code"
+sys_permission = "business_id,action_id"
 
 # ---- 错误码（第七类记录；段位取自本文件服务行 errcode_segment = "35"）----
 # 6 位码 = 2 位段 + 4 位序号；与 `backend/services/msg/src/bms_msg/errors.py` 的 `MsgErrorCode`
@@ -356,6 +385,16 @@ message_key = "msg.error.group_quota_exceeded"
 severity = "warning"
 description = "消费组数配额超限（每租户硬限已到）；只拦新建组，已存在组不受影响"
 
+# ---- 主题 ACL（05-3：资源级拒绝；基座 82013 经 maps_from 映射为本码）----
+[[errcodes]]
+code = 350027
+domain = "msg"
+http_status = 403
+message_key = "msg.error.acl_denied"
+severity = "warning"
+description = "主题 ACL 拒绝（主体对该主题的该动作无授权，含显式 deny）；ACL 先于归属，不泄露主题存在性"
+maps_from = [82013]
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
@@ -376,6 +415,8 @@ paths = [
   "backend/services/msg/src/bms_msg/api/**/*.py",
   "backend/services/msg/src/bms_msg/core/**/*.py",
   "backend/services/msg/src/bms_msg/tenant/**/*.py",
+  "backend/services/msg/src/bms_msg/acl/**/*.py",
+  "backend/services/msg/src/bms_msg/permission/**/*.py",
   "backend/services/msg/src/bms_msg/protocol/**/*.py",
   "backend/services/msg/src/bms_msg/rpc/**/*.py",
   "backend/services/msg/src/bms_msg/client/**/*.py",

@@ -16,6 +16,7 @@ RPC 已随 04-1 追加到根路径聚合（帧形态与 JSON 形态同一实现�
 from bms_core.api.base import BaseRouter, mount_service_routers
 from bms_core.core.concurrent import ConcurrentStableList
 
+from bms_msg.api.admin import acls as admin_acls
 from bms_msg.api.admin import delayed as admin_delayed
 from bms_msg.api.admin import groups as admin_groups
 from bms_msg.api.admin import quota as admin_quota
@@ -36,6 +37,7 @@ api_router = mount_service_routers(
             data_groups.router,
             admin_groups.router,
             admin_delayed.router,
+            admin_acls.router,
             admin_replay.router,
             admin_quota.router,
             admin_quota.admin_router,

@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from bms_core.api.errors import build_error_response
-from bms_core.core.exceptions import ParamError
+from bms_core.core.exceptions import BizError, ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.msgclient.frame import (
@@ -41,6 +41,7 @@ from bms_core.schemas.common import ApiResponse
 from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel, ValidationError
 
+from bms_msg.acl.service import TopicAclService
 from bms_msg.api.data.messages import (
     PlatformUowDep,
     ack,
@@ -65,6 +66,7 @@ from bms_msg.api.deps import (
     RateLimiterDep,
     RetentionThrottleDep,
     StorageGateDep,
+    TopicAclServiceDep,
     TopicCacheDep,
     UsageSnapshotDep,
     WaiterDep,
@@ -386,6 +388,7 @@ async def _invoke(
     quota: QuotaService,
     usage: UsageSnapshotService,
     counter: DeliveryCounter,
+    acl: TopicAclService,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -436,6 +439,7 @@ async def _invoke(
             quota=quota,
             usage=usage,
             counter=counter,
+            acl=acl,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -456,6 +460,7 @@ async def _invoke(
             quota=quota,
             usage=usage,
             counter=counter,
+            acl=acl,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -470,6 +475,7 @@ async def _invoke(
             waiter=waiter,
             cache=cache,
             directory=directory,
+            acl=acl,
         )
     elif frame_type == int(FrameType.NACK):
         response = await nack(
@@ -484,6 +490,7 @@ async def _invoke(
             waiter=waiter,
             cache=cache,
             directory=directory,
+            acl=acl,
         )
     else:  # pragma: no cover - 类型在挂载期已固定为三种之一
         raise TypeError(f"未支持的帧类型：{frame_type}")
@@ -517,6 +524,7 @@ async def _handle_frame(
     quota: QuotaService,
     usage: UsageSnapshotService,
     counter: DeliveryCounter,
+    acl: TopicAclService,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -619,6 +627,7 @@ async def _handle_frame(
             quota=quota,
             usage=usage,
             counter=counter,
+            acl=acl,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -626,6 +635,11 @@ async def _handle_frame(
         retry_ms = exc.retry_after_ms if isinstance(exc, MsgRateLimitedError) else None
         raise FrameHandled(
             _response(error_frame(code=exc.code, message=message, request_id=request_id, retry_after_ms=retry_ms))
+        ) from exc
+    except BizError as exc:
+        _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
+        raise FrameHandled(
+            _response(error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id))
         ) from exc
     _log(frame_type=frame_type, request_id=request_id, request=request, outcome="ok")
     return _response(result_frame(frame_type=frame_type, request_id=request_id, result=result))
@@ -666,6 +680,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         quota: QuotaServiceDep,
         usage: UsageSnapshotDep,
         counter: DeliveryCounterDep,
+        topic_acl: TopicAclServiceDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -721,6 +736,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             quota=quota,
             usage=usage,
             counter=counter,
+            acl=topic_acl,
         )
         raise FrameHandled(response)
 

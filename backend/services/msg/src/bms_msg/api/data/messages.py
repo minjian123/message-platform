@@ -38,6 +38,7 @@ from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, params
 from pydantic import BaseModel
 
+from bms_msg.acl.keys import ACL_ACTION_PUBLISH, ACL_ACTION_SUBSCRIBE
 from bms_msg.api.deps import (
     BackpressureMetricsDep,
     BackpressureTuningDep,
@@ -55,6 +56,7 @@ from bms_msg.api.deps import (
     RateLimiterDep,
     RetentionThrottleDep,
     StorageGateDep,
+    TopicAclServiceDep,
     TopicCacheDep,
     UsageSnapshotDep,
     WaiterDep,
@@ -606,6 +608,7 @@ async def publish(
     quota: QuotaServiceDep,
     usage: UsageSnapshotDep,
     counter: DeliveryCounterDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -619,6 +622,12 @@ async def publish(
     **存储配额在存储水位之前判**（05-2 / 02-6）：超租户存储硬限返回 350022（507，
     `data.reason=tenant_quota`）；盘满同样 350022（`data.reason=watermark`）。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_PUBLISH,
+    )
     await quota.ensure_initialized(int(tenant.tenant_id))
     await _ensure_quota_rate(
         quota=quota,
@@ -739,6 +748,7 @@ async def consume(
     quota: QuotaServiceDep,
     usage: UsageSnapshotDep,
     counter: DeliveryCounterDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[ConsumeResult]:
     """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
@@ -754,6 +764,12 @@ async def consume(
     （成员可能在挂起期间超时）。挂起数到全局上限时立即返空（不报错）。
     **inflight 阈值（03-5）**：已达阈值时不拉、直接返空 + `paused=true`；ack / nack / 死信归还后立即恢复。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_SUBSCRIBE,
+    )
     topic_id, partition_no = await apply_retention(
         tenant=tenant,
         uow=uow,
@@ -822,12 +838,19 @@ async def ack(
     waiter: WaiterDep,
     cache: TopicCacheDep,
     directory: PartitionDirectoryDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[AckResult]:
     """确认一条消息（位点提交值 = `offset + 1`，提交失败不前移）。
 
     需要 msg:consume 权限；须是该分区的当前持有者（组不存在 350013，成员失效或分区已易主 350014）。
     位点越界 350002，消息不在投递中 350003，消息已因重投超限转入死信 350007。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_SUBSCRIBE,
+    )
     await ensure_member(
         tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
     )
@@ -857,6 +880,7 @@ async def nack(
     waiter: WaiterDep,
     cache: TopicCacheDep,
     directory: PartitionDirectoryDep,
+    acl: TopicAclServiceDep,
 ) -> ApiResponse[NackResult]:
     """拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。
 
@@ -864,6 +888,12 @@ async def nack(
     成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。
     已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。
     """
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic=req.topic,
+        action=ACL_ACTION_SUBSCRIBE,
+    )
     await ensure_member(
         tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
     )

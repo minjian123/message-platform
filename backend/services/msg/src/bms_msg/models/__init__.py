@@ -37,8 +37,32 @@ from bms_msg.models.topic import (
     STATUS_DISABLED,
     MsgTopic,
 )
+from bms_msg.models.topic_acl import (
+    ACL_ACTION_DESCRIBE,
+    ACL_ACTION_MANAGE,
+    ACL_ACTION_PUBLISH,
+    ACL_ACTION_SUBSCRIBE,
+    ACL_EFFECT_ALLOW,
+    ACL_EFFECT_DENY,
+    ACL_PRINCIPAL_ROLE,
+    ACL_PRINCIPAL_USER,
+    ACL_STATUS_DISABLED,
+    ACL_STATUS_ENABLED,
+    MsgTopicAcl,
+    MsgTopicAclScope,
+)
 
 __all__ = [
+    "ACL_ACTION_DESCRIBE",
+    "ACL_ACTION_MANAGE",
+    "ACL_ACTION_PUBLISH",
+    "ACL_ACTION_SUBSCRIBE",
+    "ACL_EFFECT_ALLOW",
+    "ACL_EFFECT_DENY",
+    "ACL_PRINCIPAL_ROLE",
+    "ACL_PRINCIPAL_USER",
+    "ACL_STATUS_DISABLED",
+    "ACL_STATUS_ENABLED",
     "ACTION_ACTIVATED",
     "ACTION_CREATED",
     "ACTION_DELETED",
@@ -63,6 +87,8 @@ __all__ = [
     "MsgReplayTask",
     "MsgTenantLifecycle",
     "MsgTopic",
+    "MsgTopicAcl",
+    "MsgTopicAclScope",
 ]
 
 MODEL_MODULES: tuple[str, ...] = (
@@ -71,5 +97,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.quota",
     "bms_msg.models.replay",
     "bms_msg.models.tenant_lifecycle",
+    "bms_msg.models.topic_acl",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

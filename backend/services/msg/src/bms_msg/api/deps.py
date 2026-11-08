@@ -14,8 +14,12 @@ from typing import Annotated, cast
 from bms_core.core.config import get_settings
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
+from bms_core.extension.base import RESOURCE_ACL_KEY
+from bms_core.resource_scope.acl import get_resource_acl
 from fastapi import Depends, Request
 
+from bms_msg.acl.cache import TopicAclCache
+from bms_msg.acl.service import TopicAclAdminService, TopicAclService
 from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter, default_backpressure_tuning
 from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, connection_tuning_from_settings
 from bms_msg.broker.deadletter import DeadLetterQueue
@@ -36,6 +40,8 @@ from bms_msg.broker.watermark import StorageGate
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.quota import QuotaRepository
+from bms_msg.repositories.topic import TopicRepository
+from bms_msg.repositories.topic_acl import MsgTopicAclRepository, MsgTopicAclScopeRepository
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.tenant.context import CurrentTenant
@@ -74,6 +80,8 @@ __all__ = [
     "StorageGateDep",
     "StreamRegistryDep",
     "StreamTuningDep",
+    "TopicAclAdminServiceDep",
+    "TopicAclServiceDep",
     "TopicCacheDep",
     "UowFactoryDep",
     "UsageSnapshotDep",
@@ -103,6 +111,9 @@ __all__ = [
     "get_rpc_registry",
     "get_stream_registry",
     "get_stream_tuning",
+    "get_topic_acl_admin_service",
+    "get_topic_acl_cache",
+    "get_topic_acl_service",
     "get_topic_cache",
     "get_uow_factory",
     "get_usage_counter",
@@ -723,3 +734,93 @@ QuotaServiceDep = Annotated[QuotaService, Depends(get_quota_service)]
 
 CachedQuotaServiceDep = Annotated[QuotaService, Depends(get_quota_service_cached)]
 """连接守卫参数写法：`quota: CachedQuotaServiceDep`（只读缓存）。"""
+
+
+def get_topic_acl_cache(request: Request) -> TopicAclCache:
+    """取 ACL 规则快照缓存（进程级单例；装配期注入，测试 app 缺失时惰性补一份）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        TopicAclCache: 快照缓存。
+    """
+    state = request.app.state
+    cache = getattr(state, "topic_acl_cache", None)
+    if cache is None:
+        cache = TopicAclCache()
+        state.topic_acl_cache = cache
+    return cast("TopicAclCache", cache)
+
+
+def _resource_acl_declared(request: Request) -> bool:
+    """产品是否声明了 `resource_acl` 扩展点（未声明 = 无 ACL 模型，守卫跳过）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        bool: 已声明 True。
+    """
+    requirements = getattr(request.app.state, "extension_requirements", None) or ()
+    return any(getattr(item, "plugin_key", None) == RESOURCE_ACL_KEY for item in requirements)
+
+
+def get_topic_acl_service(
+    request: Request,
+    uow: Annotated[UnitOfWork, Depends(get_platform_uow)],
+) -> TopicAclService:
+    """取主题 ACL 守卫（请求级仓储 + 进程级快照缓存 + 端口读取器）。
+
+    Args:
+        request: 当前请求。
+        uow: 平台库工作单元。
+
+    Returns:
+        TopicAclService: ACL 守卫。
+    """
+    session = cast("DbSession", uow.session)
+    acl_provider = (lambda: get_resource_acl(request)) if _resource_acl_declared(request) else (lambda: None)
+    return TopicAclService(
+        rules=MsgTopicAclRepository(session),
+        scopes=MsgTopicAclScopeRepository(session),
+        cache=get_topic_acl_cache(request),
+        acl_provider=acl_provider,
+        release=uow.rollback,
+    )
+
+
+def get_topic_acl_admin_service(
+    request: Request,
+    uow: Annotated[UnitOfWork, Depends(get_platform_uow)],
+    topic_acl: Annotated[TopicAclService, Depends(get_topic_acl_service)],
+    sink: Annotated[AuditSink, Depends(get_audit_sink)],
+) -> TopicAclAdminService:
+    """取 ACL 管理服务（请求级仓储 + 守卫 + 审计出口）。
+
+    Args:
+        request: 当前请求。
+        uow: 平台库工作单元。
+        topic_acl: ACL 守卫（写前判目标主题 manage）。
+        sink: 审计出口。
+
+    Returns:
+        TopicAclAdminService: ACL 管理服务。
+    """
+    session = cast("DbSession", uow.session)
+    return TopicAclAdminService(
+        rules=MsgTopicAclRepository(session),
+        scopes=MsgTopicAclScopeRepository(session),
+        topics=TopicRepository(session),
+        uow=uow,
+        cache=get_topic_acl_cache(request),
+        authorizer=topic_acl,
+        sink=sink,
+    )
+
+
+TopicAclServiceDep = Annotated[TopicAclService, Depends(get_topic_acl_service)]
+"""路由参数写法：`acl: TopicAclServiceDep`（ACL 守卫）。"""
+
+TopicAclAdminServiceDep = Annotated[TopicAclAdminService, Depends(get_topic_acl_admin_service)]
+"""路由参数写法：`acls: TopicAclAdminServiceDep`（ACL 管理服务）。"""

@@ -14,11 +14,12 @@ from typing import cast
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.plugin import default_plugin_registry, resolve_plugin
-from bms_core.extension import SCOPE_RULE_KEY
+from bms_core.extension import RESOURCE_ACL_KEY, SCOPE_RULE_KEY
 from bms_core.resource_scope.rules import BaseScopeRule
 from fastapi import FastAPI
 
 from bms_msg import errors as errors_module
+from bms_msg.acl.keys import MSG_TOPIC_ACL_PLUGIN
 from bms_msg.errors import MsgError, MsgErrorCode
 from bms_msg.main import ApplicationFactory
 from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE, MsgNamespaceRule
@@ -89,17 +90,21 @@ def test_declared_maps_from() -> None:
     declared = _declared()
     assert list(cast("list[int]", declared[350011]["maps_from"])) == [80002]
     assert list(cast("list[int]", declared[350012]["maps_from"])) == [80001]
+    assert list(cast("list[int]", declared[350027]["maps_from"])) == [82013]
     assert int(cast("int", declared[350011]["http_status"])) == 403
     assert int(cast("int", declared[350012]["http_status"])) == 404
 
 
 def test_extension_requirements_declares_scope_rule() -> None:
-    """装配声明：只声明命名空间规则一项，且为必需（缺失即拒启，附录 A）。"""
+    """装配声明：命名空间规则与资源级 ACL 两项，均为必需（缺失即拒启）。"""
     requirements = list(ApplicationFactory().extension_requirements())
-    assert len(requirements) == 1
+    assert len(requirements) == 2
     assert requirements[0].plugin_key == SCOPE_RULE_KEY
     assert requirements[0].plugin_name == MSG_NAMESPACE_RULE
     assert requirements[0].required is True
+    assert requirements[1].plugin_key == RESOURCE_ACL_KEY
+    assert requirements[1].plugin_name == MSG_TOPIC_ACL_PLUGIN
+    assert requirements[1].required is True
 
 
 def test_configure_plugins_exposes_scope_rule() -> None:
