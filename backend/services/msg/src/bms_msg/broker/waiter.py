@@ -97,6 +97,25 @@ class DeliveryWaiter(BaseFrameworkObject):
         if event is not None:
             event.set()
 
+    def forget_topic(self, *, topic_id: int) -> int:
+        """忘掉某主题的全部分区版本 / 事件（租户删除时的易失资源清理）。
+
+        正在挂起的等待者不会被强制唤醒；它们最多等到自己的超时，随后因基座租户守卫拒绝而结束。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 清掉的等待键数。
+        """
+        target = int(topic_id)
+        keys = {key for key in self._versions if key[0] == target}
+        keys.update(key for key in self._events if key[0] == target)
+        for key in keys:
+            self._versions.pop(key, None)
+            self._events.pop(key, None)
+        return len(keys)
+
     def waiting(self) -> int:
         """当前挂起的等待者数（指标 `msg_long_poll_waiters` 与用例断言）。
 

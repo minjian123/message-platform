@@ -21,6 +21,7 @@
 import asyncio
 import base64
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -574,3 +575,63 @@ async def test_loop_survives_tick_failure(
         assert exploding.exploded is True
     finally:
         await scheduler.stop()
+
+
+def test_wheel_forget_tenant_removes_bucket_and_overdue(clock: Now) -> None:
+    """按租户清时间轮：桶内记录与待重试队列都移除。"""
+    wheel = DelayWheel(now=clock)
+    first = replace(_record(published_at=clock(), span_ms=60_000, log_id="a"), tenant_id=1)
+    second = replace(_record(published_at=clock(), span_ms=30_000, log_id="b"), tenant_id=2)
+    overdue = replace(_record(published_at=clock(), span_ms=60_000, log_id="c"), tenant_id=1)
+    overdue = replace(overdue, deliver_at=clock() - timedelta(seconds=1))
+    wheel.place(first)
+    wheel.place(second)
+    wheel.place(overdue)
+
+    assert wheel.forget_tenant(tenant_id=1) == 2
+    due = wheel.take_due(clock() + timedelta(minutes=2))
+    assert [record.tenant_id for record in due] == [2]
+
+
+async def test_inactive_tenant_defers_delivery(
+    delay_store: DelayStore,
+    message_store: InMemoryMessageStore,
+    delay_wheel: DelayWheel,
+    clock: Now,
+    advance: Advance,
+) -> None:
+    """停用租户：延迟记录保留、不转投；启用后同轮恢复。"""
+
+    class _Availability:
+        def __init__(self) -> None:
+            self.active = False
+            self.calls: list[int] = []
+
+        async def is_active(self, tenant_id: int) -> bool:
+            self.calls.append(tenant_id)
+            return self.active
+
+    availability = _Availability()
+    scheduler = DelayScheduler(
+        store=delay_store,
+        messages=message_store,
+        wheel=delay_wheel,
+        now=clock,
+        availability=availability,
+    )
+    await _enqueue(
+        store=delay_store,
+        wheel=delay_wheel,
+        record=_record(published_at=clock(), span_ms=1_000, log_id="l1"),
+    )
+    advance(1_100)
+
+    assert await scheduler.run_once() == 0
+    assert await scheduler.run_once() == 0, "同窗口第二次只记一次日志"
+    assert availability.calls == [TENANT_ID, TENANT_ID]
+    assert await delay_store.count_for_tenant(tenant_id=TENANT_ID) == 1
+    assert await message_store.leo(topic_id=1, partition_no=0) == 0
+
+    availability.active = True
+    assert await scheduler.run_once() == 1
+    assert await delay_store.count_for_tenant(tenant_id=TENANT_ID) == 0

@@ -319,6 +319,22 @@ class _PartitionDelayLog:
         for segment in self._segments:
             segment.close()
 
+    def delete_all(self) -> int:
+        """关闭并删除该分区的全部 `.delay` 段（租户删除时用）。
+
+        Returns:
+            int: 删除的段数。
+        """
+        removed = 0
+        for segment in self._segments:
+            segment.close()
+            segment.delete()
+            removed += 1
+        self._segments = []
+        self._effective = {}
+        self._active = None
+        return removed
+
     def _open_new(self) -> DelaySegment:
         """以 `max_seq + 1` 开新段（序号只增不复用）。
 
@@ -526,6 +542,36 @@ class FileDelayStore(DelayStore):
         self._decrement_tenant(record.tenant_id)
         self._publish_pending(record.tenant_id)
         self._publish_segments()
+
+    def drop_tenant(self, *, tenant_id: int) -> int:
+        """清空某租户的延迟区（内存条目 + `.delay` 段；不动 `.log` 与位点）。
+
+        租户删除后延迟消息不得再投；同时删盘上 `.delay`，避免进程重启时 `rebuild()` 把记录
+        重新装进时间轮。调用方负责同时清 `DelayWheel`。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 清掉的延迟记录数。
+        """
+        target = int(tenant_id)
+        removed = 0
+        for log_id, entry in list(self._entries.items()):
+            if entry.record.tenant_id != target:
+                continue
+            self._entries.pop(log_id, None)
+            removed += 1
+        for key, log in list(self._logs.items()):
+            located = self._directory.locate(key[0])
+            if located is None or int(located.tenant_id) != target:
+                continue
+            log.delete_all()
+            self._logs.pop(key, None)
+        self._tenant_counts.pop(target, None)
+        self._publish_pending(target)
+        self._publish_segments()
+        return removed
 
     async def rebuild(self) -> DelayRecoveryReport:
         """全量扫 `.delay` 重建索引（启动钩子调用；幂等：先清空再重建）。

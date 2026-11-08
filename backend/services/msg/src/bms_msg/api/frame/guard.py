@@ -71,6 +71,22 @@ def _tenant_code(request: Request) -> str | None:
     return None
 
 
+def _tenant_id(request: Request) -> int | None:
+    """读中间件已解析的租户内部身份（生命周期按它取消连接）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        int | None: 租户主键；未解析为 None。
+    """
+    state = cast("dict[str, object]", request.scope.get("state") or {})
+    tenant = state.get("tenant")
+    if isinstance(tenant, TenantContext) and tenant.tenant_id is not None:
+        return int(tenant.tenant_id)
+    return None
+
+
 def _is_draining(request: Request) -> bool:
     """读基座摘流标记（`ServiceRuntime.start_drain()` 置位；无该属性按未摘流处理）。
 
@@ -216,7 +232,15 @@ def build_connection_guard(
                 MsgConnectionLimitExceededError(f"连接数已达上限 {tuning.max_connections}，请换实例或退避后重连"),
                 tuning,
             )
-        record = connections.touch(key=key, meta=meta, tenant=tenant, now=now, wall=wall, heartbeat=heartbeat)
+        record = connections.touch(
+            key=key,
+            meta=meta,
+            tenant=tenant,
+            now=now,
+            wall=wall,
+            heartbeat=heartbeat,
+            tenant_id=_tenant_id(request),
+        )
         request.state.connection_record = record
         request.state.connection_key = key
         if _is_draining(request):

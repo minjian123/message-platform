@@ -94,12 +94,13 @@ class _OffsetFlushStub:
         self.closed = True
 
 
-def _app(scheduler: DelayScheduler, runner: ReplayRunner) -> FastAPI:
+def _app(scheduler: DelayScheduler, runner: ReplayRunner, *, purge: object | None = None) -> FastAPI:
     """构造只带后台任务与资源管理器的空应用。
 
     Args:
         scheduler: 延迟推进器。
         runner: 重放执行器。
+        purge: 租户到期清扫服务替身（05-5；None 表示不装配）。
 
     Returns:
         FastAPI: 应用实例。
@@ -110,8 +111,44 @@ def _app(scheduler: DelayScheduler, runner: ReplayRunner) -> FastAPI:
     app.state.offset_store = _OffsetFlushStub()
     # 02-7：启动钩子会先尝试重建延迟区；内存实现没有 `rebuild`，钩子按「无则跳过」处理
     app.state.delay_store = InMemoryDelayStore()
+    if purge is not None:
+        app.state.tenant_purge_service = purge
     app.state.resources = ResourceManager()
     return app
+
+
+class _PurgeStub:
+    """租户到期清扫服务替身（05-5：只验证启动 / 停止接线）。"""
+
+    def __init__(self) -> None:
+        """初始化（未启动）。"""
+        self.ensured = False
+        self.stopped = False
+
+    def ensure_started(self) -> None:
+        """标记清扫循环已启动。"""
+        self.ensured = True
+
+    async def stop(self) -> None:
+        """标记清扫循环已停止。"""
+        self.stopped = True
+
+
+async def test_start_hook_starts_and_stops_tenant_purge_service(
+    delay_scheduler: DelayScheduler, replay_runner: ReplayRunner
+) -> None:
+    """05-5：启动钩子拉起租户到期清扫，停机随资源管理器停止。"""
+    purge = _PurgeStub()
+    app = _app(delay_scheduler, replay_runner, purge=purge)
+
+    await start_background_tasks(app)
+
+    assert purge.ensured is True
+    assert purge.stopped is False
+
+    await app.state.resources.aclose()
+
+    assert purge.stopped is True
 
 
 async def test_start_hook_starts_loops_and_registers_resource(

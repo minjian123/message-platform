@@ -273,6 +273,21 @@ async def test_stream_keeps_alive_when_idle(
     assert api_app.state.stream_registry.active() == 0
 
 
+async def test_stream_closed_when_tenant_cancelled(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant
+) -> None:
+    """租户停用 / 删除取消长驻流：下一轮以 `close(tenant_cancelled)` 收尾并释放登记。"""
+    await _prepare(client)
+    agen = _events(api_app, current_tenant, _query(), FAST)
+    assert (await _next(agen))[0] == "open"
+
+    assert api_app.state.stream_registry.cancel_tenant(tenant_id=int(current_tenant.tenant_id)) == 1
+
+    events = await _drain_until_close(agen)
+    assert events[-1] == ("close", {"reason": "tenant_cancelled"})
+    assert api_app.state.stream_registry.active() == 0
+
+
 async def test_stream_reports_member_lost_after_leave(
     client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant
 ) -> None:

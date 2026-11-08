@@ -9,6 +9,7 @@
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -106,6 +107,17 @@ class DeadLetterQueue(BaseFrameworkObject, ABC):
             bool: 已死信返回 True。
         """
 
+    @abstractmethod
+    async def purge_topics(self, *, topic_ids: Iterable[int]) -> int:
+        """删除指定主题的全部死信（租户删除时的易失资源清理）。
+
+        Args:
+            topic_ids: 主题主键集合。
+
+        Returns:
+            int: 删除的死信数。
+        """
+
 
 class InMemoryDeadLetterQueue(DeadLetterQueue):
     """内存死信队列（首期实现；06 域查询端点直接消费）。"""
@@ -147,3 +159,23 @@ class InMemoryDeadLetterQueue(DeadLetterQueue):
             bool: 已死信返回 True。
         """
         return (topic_id, partition_no, offset) in self._keys
+
+    async def purge_topics(self, *, topic_ids: Iterable[int]) -> int:
+        """删除指定主题的全部死信（幂等）。
+
+        Args:
+            topic_ids: 主题主键集合。
+
+        Returns:
+            int: 删除的死信数。
+        """
+        targets = ConcurrentStableSet([int(item) for item in topic_ids])
+        if not targets:
+            return 0
+        kept = [letter for letter in self._letters if letter.topic_id not in targets]
+        removed = len(self._letters) - len(kept)
+        if removed == 0:
+            return 0
+        self._letters = ConcurrentStableList(kept)
+        self._keys = ConcurrentStableSet((letter.topic_id, letter.partition_no, letter.offset) for letter in kept)
+        return removed

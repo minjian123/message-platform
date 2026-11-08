@@ -34,6 +34,7 @@ def test_model_modules_cover_all_model_files() -> None:
         "bms_msg.models.topic",
         "bms_msg.models.partition",
         "bms_msg.models.replay",
+        "bms_msg.models.tenant_lifecycle",
     )
     assert {MsgTopic.__tablename__, MsgPartition.__tablename__} <= set(Base.metadata.tables)
 

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """文件段消息存储专项（msg 任务 02-1；Kiwi 2427）。
 
 覆盖（详细设计 §13.1 用例 F1~F19）：记录字节布局与 CRC、损坏判定、段轮转（大小 / 时间）、
@@ -444,3 +445,26 @@ async def test_truncate_floors_to_segment_boundary(tmp_path: Path) -> None:
     started = await store.truncate_before(topic_id=TOPIC_ID, partition_no=PARTITION, offset=target)
 
     assert started == max(base for base in bases if base <= target)
+
+
+async def test_close_tenant_closes_handles_and_forgets_log_ids(tmp_path: Path) -> None:
+    """租户删除前关闭该租户分区句柄并清 `log_id` 缓存；其它租户不受影响。"""
+    store = _store(tmp_path)
+    await _append(store, index=0)
+    assert await store.close_tenant(tenant_id=TENANT_ID) == 1
+    assert store._partitions == {}
+    assert store._log_ids == {}
+    assert await store.locate_by_log_id(log_id="l-0") is None
+    assert await store.close_tenant(tenant_id=TENANT_ID) == 0
+    assert await store.close_tenant(tenant_id=TENANT_ID + 1) == 0
+
+
+async def test_close_tenant_skips_unmapped_partition(tmp_path: Path) -> None:
+    """目录登记缺失时跳过关闭（不误关未知分区）。"""
+    store = _store(tmp_path)
+    await _append(store, index=0)
+    store._directory.forget(TOPIC_ID)
+    assert await store.close_tenant(tenant_id=TENANT_ID) == 0
+    assert store._partitions
+    for partition in store._partitions.values():
+        partition.close()

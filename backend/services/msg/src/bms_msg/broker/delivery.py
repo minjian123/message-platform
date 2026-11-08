@@ -224,6 +224,25 @@ class DeliveryState:
         self._inflight.pop(key, None)
         self._sizes.pop(key, None)
 
+    def drop_topic(self, *, topic_id: int) -> int:
+        """清掉某主题全部在途、字节账与暂存确认（租户删除时的易失资源清理）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 清掉的分区键数。
+        """
+        target = int(topic_id)
+        keys = [key for key in self._inflight if key[1] == target]
+        keys.extend(key for key in self._sizes if key[1] == target and key not in keys)
+        keys.extend(key for key in self._acked if key[1] == target and key not in keys)
+        for key in keys:
+            self._inflight.pop(key, None)
+            self._sizes.pop(key, None)
+            self._acked.pop(key, None)
+        return len(keys)
+
 
 class DeliveryService:
     """投递服务（请求级）：发布 / 拉取 / 确认，语义见模块文档与详细设计 §6。"""

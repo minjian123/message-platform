@@ -530,6 +530,21 @@ class InMemoryDelayStore(DelayStore):
         """
         self._records.pop(log_id, None)
 
+    def drop_tenant(self, *, tenant_id: int) -> int:
+        """清空某租户的延迟记录（内存替身；生产见 `FileDelayStore.drop_tenant`）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 清掉的记录数。
+        """
+        target = int(tenant_id)
+        keys = [log_id for log_id, record in self._records.items() if record.tenant_id == target]
+        for log_id in keys:
+            self._records.pop(log_id, None)
+        return len(keys)
+
 
 class DelayService:
     """延迟发布服务（请求级：主题仓储 + 进程级延迟区 / 时间轮）。

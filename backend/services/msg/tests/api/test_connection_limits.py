@@ -21,10 +21,11 @@ from typing import Any, cast
 import pytest
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.plugin import default_plugin_registry
+from bms_core.db.tenant import TenantContext
 from bms_core.msgclient.frame import FrameFlags, FrameType, decode_frame, encode_frame
 from bms_core.registry.products import load_product_manifest
 from bms_core.services.module_registry import register_error_code_records, reset_error_code_records
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient, Response
 
 from bms_msg.api.deps import get_connection_tuning
@@ -259,3 +260,22 @@ async def test_failed_preflight_returns_slot(api_app: FastAPI) -> None:
     assert _body(first)["code"] == int(MsgErrorCode.TOPIC_NOT_FOUND)
     assert second.status_code == 404, "若名额未归还，这里会是 429（350021）"
     assert _body(second)["code"] == int(MsgErrorCode.TOPIC_NOT_FOUND)
+
+
+def test_tenant_id_helper_reads_context_and_falls_back_to_none() -> None:
+    """`_tenant_id` 读中间件解析结果；未解析 / 无内部身份返回 None（生命周期按 id 取消连接）。"""
+    assert guard_module._tenant_id(Request({"type": "http", "state": {}})) is None  # pyright: ignore[reportPrivateUsage]
+    anonymous = Request(
+        {
+            "type": "http",
+            "state": {"tenant": TenantContext(code="demo", db_key="tenant_demo", name="演示租户")},
+        }
+    )
+    assert guard_module._tenant_id(anonymous) is None  # pyright: ignore[reportPrivateUsage]
+    parsed = Request(
+        {
+            "type": "http",
+            "state": {"tenant": TenantContext(code="demo", db_key="tenant_demo", name="演示租户", tenant_id=7001)},
+        }
+    )
+    assert guard_module._tenant_id(parsed) == 7001  # pyright: ignore[reportPrivateUsage]

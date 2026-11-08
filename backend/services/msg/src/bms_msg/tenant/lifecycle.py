@@ -1,38 +1,52 @@
-"""消息平台租户生命周期消费（05-1 第 7 条；需求 `05-6` 归口）。
+"""消息平台租户生命周期消费（05-1 第 7 条 + 05-5 四动作）。
 
-- **只做非库类资源**：`tenant.created` 到达时预创建 `data/{tenant_id}/` 并写幂等账本
-  `.lifecycle.json`；**不建命名空间、不建默认配额**——命名空间按架构 07 §5.1 在首次发布时
-  懒创建，配额归 05-2。
-- **基座契约**：实现 `BaseTenantResourceHandler`（四动作 + 版本账本）并经
-  `TenantLifecycleDispatcher` 分发；本期只声明 `tenant.created`，05-5 直接补其余三动作。
-- **幂等**：业务级 `(tenant_id, created, version)`；同版本重复投递 `skipped`，新版本重跑
-  （目录创建天然幂等）；投递级幂等沿用基座 `sys_event_consumed` 账本，不另建表。
+- **四类事件**：`tenant.created` / `tenant.suspended` / `tenant.activated` / `tenant.deleted`；
+  同一消费组 `msg-tenant-lifecycle`，`ordered=True` 保证同租户事件串行。
+- **动作**：`created` 只建租户目录（不建命名空间 / 配额，仍按首次发布懒创建）；`suspended`
+  取消已建立连接 / 长驻流；`activated` 取消待清理；`deleted` 停写 + 易失资源清理 + 按主题
+  保留期排定清理。
+- **幂等**：业务级 `(tenant_id, action, version)` 落 `msg_tenant_lifecycle`（生产）或
+  `.lifecycle.json`（仅 05-1 兼容读 / 测试替身）；投递级沿用基座 `sys_event_consumed`。
 - **失败语义**：动作抛错**不记账、原样上抛**，由基座消费组退避重试 / 死信；租户开通事务已由
   基座提交，事件消费不阻塞开通。
-- **可观测**：结构化日志 + 进程内三计数（`applied` / `skipped` / `failed`）；外部指标出口归 06-3。
 """
 
 from __future__ import annotations
 
-import json
-import os
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ConfigError
 from bms_core.core.logging import get_logger
 from bms_core.events.base import EventConsumer, EventEnvelope
 from bms_core.events.consumer_records import EventConsumerRecord
 from bms_core.tenant.lifecycle import (
     LIFECYCLE_APPLIED,
+    TENANT_ACTIVATED,
     TENANT_CREATED,
+    TENANT_DELETED,
+    TENANT_LIFECYCLE_EVENT_TYPES,
+    TENANT_SUSPENDED,
     BaseTenantResourceHandler,
     TenantLifecycleContext,
     TenantLifecycleDispatcher,
 )
 
 from bms_msg.broker.file_store import data_root
+from bms_msg.core.config import DATA_ROOT_SUBDIR
+from bms_msg.tenant.ledger import (
+    LEDGER_NAME,
+    FileTenantLifecycleLedger,
+    TenantLifecycleLedger,
+)
+from bms_msg.tenant.runtime import (
+    TenantLifecycleMetrics,
+    TenantLifecycleRuntime,
+    get_tenant_lifecycle_metrics,
+    get_tenant_lifecycle_runtime,
+    reset_tenant_lifecycle_metrics,
+)
 
 __all__ = [
     "LEDGER_NAME",
@@ -47,94 +61,79 @@ __all__ = [
 
 _LOGGER = get_logger("bms_msg.tenant_lifecycle")
 
-LEDGER_NAME = ".lifecycle.json"
-"""租户目录下的幂等账本文件名（记录 `动作 → 已处理版本`）。"""
-
 MSG_TENANT_LIFECYCLE_GROUP = "msg-tenant-lifecycle"
 """消费组名（装载时补 `[event_consumer].group_prefix` 前缀，如 `bms-msg-tenant-lifecycle`）。"""
 
+_EVENT_DESCRIPTIONS: ConcurrentStableDict[str, str] = ConcurrentStableDict(
+    {
+        TENANT_CREATED: "租户开通初始化：tenant.created → 租户数据目录 + 幂等账本",
+        TENANT_SUSPENDED: "租户停用：tenant.suspended → 取消已建立连接 / 长驻流",
+        TENANT_ACTIVATED: "租户启用：tenant.activated → 取消待清理",
+        TENANT_DELETED: "租户删除：tenant.deleted → 易失资源清理 + 按保留期排定清理",
+    }
+)
+"""四条事件声明的说明文案（顺序与 `_LIFECYCLE_EVENTS` 一致）。"""
 
-@dataclass
-class TenantLifecycleMetrics:
-    """进程内生命周期计数（可观测的最小实现；外部指标出口归 06-3）。"""
-
-    applied: int = 0
-    """成功执行数。"""
-
-    skipped: int = 0
-    """版本不新 / 重复投递跳过数。"""
-
-    failed: int = 0
-    """处理失败数（已上抛，等待重试 / 死信）。"""
-
-    def snapshot(self) -> ConcurrentStableDict[str, int]:
-        """返回当前计数快照。
-
-        Returns:
-            ConcurrentStableDict[str, int]: `applied` / `skipped` / `failed` 三计数。
-        """
-        return ConcurrentStableDict({"applied": self.applied, "skipped": self.skipped, "failed": self.failed})
-
-
-_METRICS = TenantLifecycleMetrics()
-"""进程级计数（测试经 `reset_tenant_lifecycle_metrics()` 隔离）。"""
-
-
-def reset_tenant_lifecycle_metrics() -> None:
-    """清零进程级计数（测试隔离用；生产路径不调用）。"""
-    _METRICS.applied = 0
-    _METRICS.skipped = 0
-    _METRICS.failed = 0
+_LIFECYCLE_EVENTS: ConcurrentStableList[str] = ConcurrentStableList(
+    (
+        TENANT_CREATED,
+        TENANT_SUSPENDED,
+        TENANT_ACTIVATED,
+        TENANT_DELETED,
+    )
+)
+"""本消费组订阅的四类事件（与 bms 契约一一对应）。"""
 
 
 class MsgTenantResourceHandler(BaseTenantResourceHandler):
-    """msg 产品资源动作实现：租户目录 + 文件账本。
+    """msg 产品资源动作实现：目录 / 连接 / 延迟 / 删除排期。
 
-    账本与资源同在租户目录下：目录创建幂等，账本用「临时文件 + `os.replace`」原子替换；
-    本实现不触碰命名空间 / 配额（那两类归首次发布与 05-2）。
+    `root` / `ledger` 可注入用于测试；生产由 `tenant_lifecycle_consumer()` 取进程级运行时，
+    运行时持有 DB 账本与各资源句柄。`on_created` 不依赖运行时（05-1 回归）。
     """
 
     plugin_name = "msg.file"
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        root: Path | None = None,
+        ledger: TenantLifecycleLedger | None = None,
+        runtime: TenantLifecycleRuntime | None = None,
+    ) -> None:
         """初始化。
 
         Args:
             root: 数据根目录（测试注入；缺省 `data_root()`）。
+            ledger: 幂等账本（缺省文件账本，供 05-1 回归 / 测试）。
+            runtime: 生命周期运行时（停用 / 启用 / 删除必需；缺省取进程级）。
         """
-        self._root = Path(root) if root is not None else data_root()
+        self._root = Path(root) if root is not None else data_root() / DATA_ROOT_SUBDIR
+        self._ledger = ledger if ledger is not None else FileTenantLifecycleLedger(root=self._root)
+        self._runtime = runtime if runtime is not None else get_tenant_lifecycle_runtime()
 
     async def applied_version(self, *, tenant_id: int, action: str) -> int:
         """读取已处理版本（业务级幂等判定依据）。
 
         Args:
             tenant_id: 租户主键。
-            action: 动作名（本期 `created`）。
+            action: 动作名。
 
         Returns:
-            int: 已处理版本；账本不存在 / 损坏 / 该动作无记录返回 `-1`。
+            int: 已处理版本；无记录返回 `-1`。
         """
-        value = self._read_ledger(tenant_id).get(action)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        return -1
+        return await self._ledger.applied_version(tenant_id=tenant_id, action=action)
 
-    async def mark_applied(self, *, tenant_id: int, action: str, version: int) -> None:
-        """记账（与资源动作同在租户目录内；原子替换）。
+    async def mark_applied(self, *, tenant_id: int, action: str, version: int, event_id: str | None = None) -> None:
+        """记账（动作成功后由分发器调用）。
 
         Args:
             tenant_id: 租户主键。
             action: 动作名。
             version: 已处理版本。
+            event_id: 事件 ID（排障用；可空）。
         """
-        directory = self._tenant_dir(tenant_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        payload = self._read_ledger(tenant_id)
-        payload[action] = version
-        path = self._ledger_path(tenant_id)
-        temporary = path.with_name(f"{LEDGER_NAME}.tmp")
-        temporary.write_text(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
+        await self._ledger.mark_applied(tenant_id=tenant_id, action=action, version=version, event_id=event_id)
 
     async def on_created(self, context: TenantLifecycleContext) -> None:
         """预创建租户数据目录（幂等；不建命名空间、不建配额）。
@@ -142,7 +141,7 @@ class MsgTenantResourceHandler(BaseTenantResourceHandler):
         Args:
             context: 生命周期上下文（动作名恒为 `created`）。
         """
-        self._tenant_dir(context.tenant_id).mkdir(parents=True, exist_ok=True)
+        (self._root / str(context.tenant_id)).mkdir(parents=True, exist_ok=True)
         _LOGGER.info(
             "msg_tenant_created_initialized",
             tenant_id=context.tenant_id,
@@ -150,82 +149,83 @@ class MsgTenantResourceHandler(BaseTenantResourceHandler):
             version=context.version,
         )
 
-    def _tenant_dir(self, tenant_id: int) -> Path:
-        """租户数据目录。
+    async def on_suspended(self, context: TenantLifecycleContext) -> None:
+        """停用：取消已建立连接 / 长驻流（数据保留）。
 
         Args:
-            tenant_id: 租户主键。
+            context: 生命周期上下文。
 
-        Returns:
-            Path: `data_root()/{tenant_id}`。
+        Raises:
+            ConfigError: 未装配运行时（后台消费必需）。
         """
-        return self._root / str(tenant_id)
+        await self._require_runtime().suspend(tenant_id=context.tenant_id, version=context.version, context=context)
 
-    def _ledger_path(self, tenant_id: int) -> Path:
-        """租户账本路径。
+    async def on_activated(self, context: TenantLifecycleContext) -> None:
+        """启用：取消待清理（已物理删除的主题不恢复）。
 
         Args:
-            tenant_id: 租户主键。
+            context: 生命周期上下文。
 
-        Returns:
-            Path: `data_root()/{tenant_id}/.lifecycle.json`。
+        Raises:
+            ConfigError: 未装配运行时（后台消费必需）。
         """
-        return self._tenant_dir(tenant_id) / LEDGER_NAME
+        await self._require_runtime().activate(tenant_id=context.tenant_id, version=context.version, context=context)
 
-    def _read_ledger(self, tenant_id: int) -> ConcurrentStableDict[str, int]:
-        """读取账本（缺失 / 损坏 / 非对象均按空账本处理）。
+    async def on_deleted(self, context: TenantLifecycleContext) -> None:
+        """删除：停写 + 易失资源清理 + 按主题保留期排定清理。
 
         Args:
-            tenant_id: 租户主键。
+            context: 生命周期上下文。
+
+        Raises:
+            ConfigError: 未装配运行时（后台消费必需）。
+        """
+        await self._require_runtime().delete(tenant_id=context.tenant_id, version=context.version, context=context)
+
+    def _require_runtime(self) -> TenantLifecycleRuntime:
+        """取运行时；未装配即 fail-closed。
 
         Returns:
-            ConcurrentStableDict[str, int]: 动作名 → 已处理版本（只保留整数版本）。
+            TenantLifecycleRuntime: 运行时。
+
+        Raises:
+            ConfigError: 未装配运行时。
         """
-        path = self._ledger_path(tenant_id)
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return ConcurrentStableDict()
-        except OSError, ValueError:
-            _LOGGER.warning("msg_tenant_lifecycle_ledger_corrupt", tenant_id=tenant_id)
-            return ConcurrentStableDict()
-        if not isinstance(raw, dict):
-            _LOGGER.warning("msg_tenant_lifecycle_ledger_corrupt", tenant_id=tenant_id)
-            return ConcurrentStableDict()
-        payload: ConcurrentStableDict[str, int] = ConcurrentStableDict()
-        for key, value in cast("dict[str, object]", raw).items():
-            if isinstance(value, int) and not isinstance(value, bool):
-                payload[key] = value
-        return payload
+        if self._runtime is None:
+            raise ConfigError("租户生命周期运行时未装配（configure_service 未登记）")
+        return self._runtime
 
 
 class TenantLifecycleConsumer(EventConsumer):
-    """单事件处理器：`tenant.created` → 基座生命周期分发器。"""
+    """单事件处理器：一条租户生命周期事件 → 基座生命周期分发器。"""
 
     def __init__(
         self,
         *,
+        event_type: str = TENANT_CREATED,
         handler: BaseTenantResourceHandler | None = None,
         metrics: TenantLifecycleMetrics | None = None,
     ) -> None:
         """初始化。
 
         Args:
+            event_type: 订阅的事件类型。
             handler: 资源动作实现（缺省 `MsgTenantResourceHandler()`；测试可注入）。
-            metrics: 计数容器（缺省进程级 `_METRICS`）。
+            metrics: 计数容器（缺省进程级）。
         """
+        self._event_type = event_type
         self._handler = handler if handler is not None else MsgTenantResourceHandler()
         self._dispatcher = TenantLifecycleDispatcher(handler=self._handler)
-        self._metrics = metrics if metrics is not None else _METRICS
+        self._metrics = metrics if metrics is not None else get_tenant_lifecycle_metrics()
 
     @property
     def event_type(self) -> str:
         """订阅的事件类型。
 
         Returns:
-            str: `tenant.created`。
+            str: 事件类型。
         """
-        return TENANT_CREATED
+        return self._event_type
 
     async def consume(self, event: EventEnvelope) -> None:
         """消费一条租户生命周期事件（失败原样上抛，由消费组重试 / 死信）。
@@ -252,27 +252,55 @@ class TenantLifecycleConsumer(EventConsumer):
 
 
 def tenant_lifecycle_consumer() -> EventConsumer:
-    """构造处理器工厂（每次返回独立实例）。
+    """构造 `tenant.created` 处理器工厂（05-1 兼容零参入口）。
 
     Returns:
         EventConsumer: 租户生命周期处理器。
     """
-    return TenantLifecycleConsumer()
+    return _factory(TENANT_CREATED)()
 
 
 def event_consumer_records() -> ConcurrentStableList[EventConsumerRecord]:
-    """msg 自持的租户生命周期消费组声明（本期只订阅 `tenant.created`）。
+    """msg 自持的租户生命周期消费组声明（四类事件各一条）。
 
     Returns:
         ConcurrentStableList[EventConsumerRecord]: 消费组声明。
     """
-    return ConcurrentStableList(
-        (
+    records: ConcurrentStableList[EventConsumerRecord] = ConcurrentStableList()
+    for event_type in _LIFECYCLE_EVENTS:
+        records.add(
             EventConsumerRecord(
                 consumer=MSG_TENANT_LIFECYCLE_GROUP,
-                event_type=TENANT_CREATED,
-                handler_factory=tenant_lifecycle_consumer,
-                description="消息平台租户开通初始化：tenant.created → 租户数据目录 + 幂等账本",
-            ),
+                event_type=event_type,
+                handler_factory=_factory(event_type),
+                ordered=True,
+                description=_EVENT_DESCRIPTIONS[event_type],
+            )
         )
-    )
+    return records
+
+
+def _factory(event_type: str) -> Callable[[], EventConsumer]:
+    """构造指定事件类型的处理器工厂。
+
+    Args:
+        event_type: 事件类型。
+
+    Returns:
+        Callable[[], EventConsumer]: 零参工厂。
+    """
+
+    def _build() -> EventConsumer:
+        """构造处理器实例。
+
+        Returns:
+            EventConsumer: 生命周期处理器。
+        """
+        return TenantLifecycleConsumer(event_type=event_type)
+
+    return _build
+
+
+# 事件名 → 动作名的映射由基座维护；此处仅做导入期契约可见性声明。
+if set(_LIFECYCLE_EVENTS) != set(TENANT_LIFECYCLE_EVENT_TYPES):  # pragma: no cover - 导入期契约断言
+    raise ConfigError("msg 生命周期事件集合与 bms 契约不一致")

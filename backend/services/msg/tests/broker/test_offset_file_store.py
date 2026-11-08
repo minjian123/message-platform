@@ -1028,3 +1028,30 @@ async def test_flush_reports_oversized_group_without_writing(tmp_path: Path) -> 
 
     assert await store.flush_once() == 0
     assert await store.get(group="g" * 129, topic_id=TOPIC_ID, partition_no=0) == 1
+
+
+async def test_purge_tenant_removes_all_offsets(tmp_path: Path) -> None:
+    """租户删除：删全部位点文件与缓存；重复调用返回 0。"""
+    store = _store(tmp_path)
+    await _commit(store, 5, group="audit")
+    assert await store.purge_tenant(tenant_id=TENANT_ID) >= 1
+    assert list(await store.list_group(tenant_id=TENANT_ID, group="audit")) == []
+    assert await store.purge_tenant(tenant_id=TENANT_ID) == 0
+
+
+async def test_in_memory_purge_tenant_is_noop() -> None:
+    """内存替身没有租户维度，`purge_tenant` 恒返回 0。"""
+    store = InMemoryOffsetStore()
+    await store.commit(group=GROUP, topic_id=TOPIC_ID, partition_no=0, offset=1)
+    assert await store.purge_tenant(tenant_id=TENANT_ID) == 0
+
+
+async def test_purge_tenant_skips_foreign_files(tmp_path: Path) -> None:
+    """按租户删只清合法位点文件；非位点文件保留（目录因此不删）。"""
+    store = _store(tmp_path)
+    await _commit(store, 5)
+    foreign = _path(tmp_path).parent / "foreign.offset"
+    foreign.write_text("x", encoding="utf-8")
+
+    assert await store.purge_tenant(tenant_id=TENANT_ID) == 1
+    assert foreign.exists()

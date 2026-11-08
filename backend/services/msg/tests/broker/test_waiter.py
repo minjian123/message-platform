@@ -20,6 +20,18 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore, WaitOut
 
 pytestmark = pytest.mark.kiwi_id(2425)
 
+
+def test_forget_topic_clears_versions_and_events() -> None:
+    """按主题清等待器：版本与事件都移除，重复调用返回 0。"""
+    waiter = DeliveryWaiter()
+    waiter.notify(KEY)
+    waiter.notify((8, 0))
+    assert waiter.forget_topic(topic_id=7) == 1
+    assert waiter.version(KEY) == 0
+    assert waiter.version((8, 0)) == 1
+    assert waiter.forget_topic(topic_id=7) == 0
+
+
 KEY = (7, 0)
 """等待键（`(topic_id, partition_no)`）。"""
 

@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
@@ -194,6 +194,14 @@ class PartitionDirectory:
             TopicLocation | None: 已登记返回身份；未登记返回 None。
         """
         return self._locations.get(int(topic_id))
+
+    def forget(self, topic_id: int) -> None:
+        """移除一个主题的目录登记（主题删除清理完成后调用）。
+
+        Args:
+            topic_id: 主题主键。
+        """
+        self._locations.pop(int(topic_id), None)
 
     def path_of(self, location: TopicLocation, partition_no: int) -> Path:
         """算一个分区的目录路径（不创建）。
@@ -1607,6 +1615,37 @@ class FileMessageStore(MessageStore):
         self._partitions.clear()
         self._pending_alignment.clear()
         _LOGGER.info("msg_store_closed", partitions=closed)
+
+    async def close_tenant(self, *, tenant_id: int) -> int:
+        """关闭某租户的全部分区句柄并移除进程内缓存（不删数据文件）。
+
+        租户删除清理在删目录前必须先关句柄，否则 Windows 下会因打开句柄删不掉。数据文件由清扫
+        服务按主题删除；本方法只释放句柄与 `log_id` LRU 缓存。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 关闭的分区数。
+        """
+        target = int(tenant_id)
+        closed = 0
+        topic_ids: ConcurrentStableSet[int] = ConcurrentStableSet()
+        for key, partition in list(self._partitions.items()):
+            located = self._directory.locate(key[0])
+            if located is None or int(located.tenant_id) != target:
+                continue
+            async with partition.lock:
+                partition.flush()
+                partition.close()
+            self._partitions.pop(key, None)
+            self._pending_alignment.pop(key, None)
+            topic_ids.add(int(key[0]))
+            closed += 1
+        for log_id, (topic_id, _partition, _offset) in list(self._log_ids.items()):
+            if topic_id in topic_ids:
+                self._log_ids.pop(log_id, None)
+        return closed
 
     def _remember_log_id(self, *, log_id: str, topic_id: int, partition_no: int, offset: int) -> None:
         """登记 `log_id` → 位置的 LRU 条目（超上限淘汰最久未用）。

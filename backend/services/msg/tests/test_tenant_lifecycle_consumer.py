@@ -74,22 +74,32 @@ def _event(version: int) -> EventEnvelope:
     )
 
 
-def test_event_consumer_records_declares_tenant_created() -> None:
-    """消费组声明只订阅 `tenant.created`，工厂可调用，声明通过基座校验。"""
+def test_event_consumer_records_declares_four_lifecycle_events() -> None:
+    """消费组声明四条生命周期事件，工厂可调用，声明通过基座校验。"""
     records = event_consumer_records()
-    assert len(records) == 1
-    record = records[0]
-    assert record.consumer == MSG_TENANT_LIFECYCLE_GROUP
-    assert record.event_type == "tenant.created"
-    assert callable(record.handler_factory)
+    assert [record.event_type for record in records] == [
+        "tenant.created",
+        "tenant.suspended",
+        "tenant.activated",
+        "tenant.deleted",
+    ]
+    for record in records:
+        assert record.consumer == MSG_TENANT_LIFECYCLE_GROUP
+        assert record.ordered is True
+        assert callable(record.handler_factory)
     assert tenant_lifecycle_consumer().event_type == "tenant.created"
     assert list(validate_event_consumer_records(records)) == []
 
 
 def test_factory_event_consumer_records_hook() -> None:
-    """应用工厂 `event_consumer_records()` 钩子返回租户生命周期声明。"""
+    """应用工厂 `event_consumer_records()` 钩子返回四条租户生命周期声明。"""
     records = ApplicationFactory().event_consumer_records()
-    assert [record.event_type for record in records] == ["tenant.created"]
+    assert [record.event_type for record in records] == [
+        "tenant.created",
+        "tenant.suspended",
+        "tenant.activated",
+        "tenant.deleted",
+    ]
     assert list(validate_event_consumer_records(records)) == []
 
 

@@ -391,6 +391,7 @@ async def _stream_core(
         partition=query.partition,
         opened_at=started,
         connection_key=connection_key,
+        tenant_id=int(tenant.tenant_id),
     )
     reason = "error"
     pending: asyncio.Task[ConcurrentStableList[MessageItem]] | None = None
@@ -407,6 +408,10 @@ async def _stream_core(
             )
         )
         while True:
+            if registry.is_cancelled(stream_id):
+                reason = "tenant_cancelled"
+                yield close_event(reason)
+                return
             if time.monotonic() >= deadline:
                 reason = "deadline"
                 yield close_event(reason)

@@ -19,6 +19,14 @@ from bms_msg.models.replay import (
     TASK_TERMINAL_STATUSES,
     MsgReplayTask,
 )
+from bms_msg.models.tenant_lifecycle import (
+    ACTION_ACTIVATED,
+    ACTION_CREATED,
+    ACTION_DELETED,
+    ACTION_SUSPENDED,
+    LIFECYCLE_ACTIONS,
+    MsgTenantLifecycle,
+)
 from bms_msg.models.topic import (
     CLEANUP_COMPACT,
     CLEANUP_DELETE,
@@ -30,10 +38,15 @@ from bms_msg.models.topic import (
 )
 
 __all__ = [
+    "ACTION_ACTIVATED",
+    "ACTION_CREATED",
+    "ACTION_DELETED",
+    "ACTION_SUSPENDED",
     "CLEANUP_COMPACT",
     "CLEANUP_DELETE",
     "DEFAULT_CLEANUP_POLICY",
     "DEFAULT_STATUS",
+    "LIFECYCLE_ACTIONS",
     "MODEL_MODULES",
     "STATUS_ACTIVE",
     "STATUS_DISABLED",
@@ -46,6 +59,7 @@ __all__ = [
     "TASK_TERMINAL_STATUSES",
     "MsgPartition",
     "MsgReplayTask",
+    "MsgTenantLifecycle",
     "MsgTopic",
 ]
 
@@ -53,5 +67,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.topic",
     "bms_msg.models.partition",
     "bms_msg.models.replay",
+    "bms_msg.models.tenant_lifecycle",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

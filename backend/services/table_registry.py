@@ -39,6 +39,13 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="重放任务（范围 / 限速 / 进度 / 游标 / 终态）",
     ),
+    TableRecord(
+        table_name="msg_tenant_lifecycle",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="租户生命周期动作账本（版本戳 / 删除保留期 / 清理进度）",
+    ),
 )
 """msg 元数据三表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 

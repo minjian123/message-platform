@@ -194,6 +194,17 @@ class GroupStore(BaseFrameworkObject, ABC):
             ConcurrentStableList[ConsumerGroup]: 组记录（组名升序）。
         """
 
+    @abstractmethod
+    async def purge_tenant(self, *, tenant_id: int) -> int:
+        """删除某租户的全部组记录（租户删除时的易失资源清理）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 删除的组记录数。
+        """
+
 
 class InMemoryGroupStore(GroupStore):
     """内存组存储（首期实现；8B_02 换 `msg_group` / `msg_group_member`，端口与装配点不变）。"""
@@ -241,3 +252,17 @@ class InMemoryGroupStore(GroupStore):
             if owner == tenant_id and (topic_id is None or topic == topic_id)
         ]
         return ConcurrentStableList(sorted(matched, key=lambda record: (record.group, record.topic_id)))
+
+    async def purge_tenant(self, *, tenant_id: int) -> int:
+        """删除某租户的全部组记录（幂等）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 删除的组记录数。
+        """
+        keys = [key for key in self._groups if key[0] == int(tenant_id)]
+        for key in keys:
+            self._groups.pop(key, None)
+        return len(keys)

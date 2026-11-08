@@ -112,3 +112,32 @@ def test_default_stream_tuning_matches_constants() -> None:
     assert tuning.poll_interval_ms == SUBSCRIBE_POLL_INTERVAL_MS
     assert tuning.max_seconds == SUBSCRIBE_MAX_SECONDS
     assert tuning.keepalive_ms == SUBSCRIBE_KEEPALIVE_MS
+
+
+def test_stream_registry_cancel_tenant_is_scoped() -> None:
+    """按租户取消长驻流：只标记目标租户，未登记 / 已取消不重复标记。"""
+    registry = StreamRegistry()
+    first = registry.open(
+        namespace="msg",
+        topic="a",
+        group="g",
+        consumer_id="c1",
+        partition=0,
+        opened_at=1.0,
+        tenant_id=1,
+    )
+    second = registry.open(
+        namespace="msg",
+        topic="b",
+        group="g",
+        consumer_id="c2",
+        partition=1,
+        opened_at=1.0,
+        tenant_id=2,
+    )
+    assert registry.cancel_tenant(tenant_id=1) == 1
+    assert registry.is_cancelled(first) is True
+    assert registry.is_cancelled(second) is False
+    assert registry.cancel_tenant(tenant_id=1) == 0
+    registry.close(second, reason="test")
+    assert registry.is_cancelled(second) is True

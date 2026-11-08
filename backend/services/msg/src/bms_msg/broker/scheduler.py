@@ -27,7 +27,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.logging import get_logger
 
 from bms_msg.broker.delay import DelayRecord, DelayStore, with_attempt
@@ -47,6 +47,7 @@ __all__ = [
     "DelayScheduler",
     "DelayWheel",
     "DurabilityPoint",
+    "TenantAvailability",
 ]
 
 _LOGGER = get_logger("bms_msg.broker.scheduler")
@@ -176,6 +177,33 @@ class DelayWheel:
         self._overdue = ConcurrentStableList()
         self._last_scan = self._now()
 
+    def forget_tenant(self, *, tenant_id: int) -> int:
+        """移除某租户在时间轮中的全部记录引用（租户删除时的易失资源清理）。
+
+        `FileDelayStore.drop_tenant()` 已删 `.delay` 与内存索引；若不同时清时间轮，下一轮
+        `take_due()` 仍会拿到旧引用并尝试转投，等于把已删除租户的延迟消息重新写回日志。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 移除的记录数。
+        """
+        target = int(tenant_id)
+        removed = 0
+        for layers in (self._seconds, self._minutes, self._hours):
+            for slot in list(layers):
+                kept = [record for record in layers[slot] if record.tenant_id != target]
+                removed += len(layers[slot]) - len(kept)
+                if kept:
+                    layers[slot] = ConcurrentStableList(kept)
+                else:
+                    layers.pop(slot, None)
+        kept_overdue = [record for record in self._overdue if record.tenant_id != target]
+        removed += len(self._overdue) - len(kept_overdue)
+        self._overdue = ConcurrentStableList(kept_overdue)
+        return removed
+
 
 class DurabilityPoint(Protocol):
     """转投的耐久点端口（02-7）：把某分区日志显式刷到磁盘。
@@ -190,6 +218,21 @@ class DurabilityPoint(Protocol):
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
+        """
+        ...
+
+
+class TenantAvailability(Protocol):
+    """租户可用性检查端口（延迟转投前的异步守卫；生产复用基座 `BaseTenantGuard`）。"""
+
+    async def is_active(self, tenant_id: int) -> bool:
+        """租户当前是否可收发。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            bool: 可用 True；停用 / 不存在 / 租户源不可达按 False（fail-closed）。
         """
         ...
 
@@ -218,6 +261,7 @@ class DelayScheduler:
         failure_log_window_ms: int = DELAY_FAILURE_LOG_WINDOW_MS,
         clock: Callable[[], float] | None = None,
         durable: DurabilityPoint | None = None,
+        availability: TenantAvailability | None = None,
     ) -> None:
         """初始化（不启动任务：由 `ensure_started()` 决定）。
 
@@ -231,6 +275,7 @@ class DelayScheduler:
             failure_log_window_ms: 同分区同原因的失败日志抑制窗口（毫秒；缺省一个 tick）。
             clock: 单调毫秒时钟（抑制窗口判据；用例注入以确定性控制窗口边界）。
             durable: 日志耐久点（02-7；None 表示不显式刷盘，用于内存实现与用例）。
+            availability: 租户可用性检查（None 表示不判；生产传基座租户守卫适配器）。
         """
         self._store = store
         self._messages = messages
@@ -241,7 +286,9 @@ class DelayScheduler:
         self._failure_log_window_ms = failure_log_window_ms
         self._clock = clock if clock is not None else _monotonic_ms
         self._durable = durable
+        self._availability = availability
         self._failure_logged: dict[tuple[int, int, str], float] = {}
+        self._inactive_logged: ConcurrentStableDict[int, float] = ConcurrentStableDict()
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -279,6 +326,11 @@ class DelayScheduler:
             if delivered >= self._batch_limit:
                 # 本轮已达上限：留到下一轮（进待重试队列，下一轮首先取出）。
                 self._wheel.place(record)
+                continue
+            if self._availability is not None and not await self._availability.is_active(record.tenant_id):
+                # 停用 / 不存在 / 租户源不可达：记录保留，不转投；下一轮再判。
+                self._wheel.place(record)
+                self._log_inactive(record)
                 continue
             if await self._transfer(record):
                 delivered += 1
@@ -361,6 +413,26 @@ class DelayScheduler:
         await self._store.enqueue(retried)
         self._wheel.place(retried)
         return False
+
+    def _log_inactive(self, record: DelayRecord) -> None:
+        """按窗口记一次「租户不可用、延迟转投暂停」日志（防每 tick 刷屏）。
+
+        Args:
+            record: 被暂停的延迟记录。
+        """
+        key = int(record.tenant_id)
+        now_ms = self._clock()
+        last = self._inactive_logged.get(key)
+        if last is not None and now_ms - last < self._failure_log_window_ms:
+            return
+        self._inactive_logged[key] = now_ms
+        _LOGGER.info(
+            "delay_tenant_inactive",
+            tenant_id=key,
+            log_id=record.log_id,
+            namespace=record.namespace,
+            topic=record.topic,
+        )
 
     def _log_failure(self, record: DelayRecord, exc: Exception) -> None:
         """按窗口记一次转投失败日志（同分区同原因在窗口内只记一条）。

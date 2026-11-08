@@ -394,6 +394,17 @@ class OffsetPurger(Protocol):
         """
         ...
 
+    async def purge_tenant(self, *, tenant_id: int) -> int:
+        """删除该租户的全部位点文件（租户删除清理）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 删除的文件数。
+        """
+        ...
+
 
 class OffsetCeiling(Protocol):
     """LEO 只读协议（越界判定用；`FileMessageStore` 结构上即满足）。"""
@@ -773,6 +784,18 @@ class InMemoryOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEn
         for key in keys:
             self._offsets.pop(key, None)
         return len(keys)
+
+    async def purge_tenant(self, *, tenant_id: int) -> int:
+        """删除该租户的全部位点（内存替身没有租户维度，恒返回 0）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 0。
+        """
+        del tenant_id
+        return 0
 
 
 @dataclass
@@ -1171,6 +1194,35 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
             self._entries.pop(key, None)
         await self._emit_purge_audit(scope="topic", tenant_id=tenant_id, key=str(int(topic_id)), files=removed)
         _LOGGER.info("msg_offset_purged", scope="topic", topic_id=int(topic_id), files=removed)
+        return removed
+
+    async def purge_tenant(self, *, tenant_id: int) -> int:
+        """删除该租户的全部位点文件与进程内缓存（租户删除清理）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 删除的文件数。
+        """
+        target = int(tenant_id)
+        group_root = self._root / OFFSETS_SUBDIR / str(target)
+        removed = 0
+        if group_root.is_dir():
+            for directory in sorted(path for path in group_root.iterdir() if path.is_dir()):
+                for path in sorted(directory.glob(f"*{OFFSET_FILE_SUFFIX}")):
+                    if parse_offset_filename(path.name) is None:
+                        continue
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+            if not any(group_root.iterdir()):
+                group_root.rmdir()
+        for key in [item for item in self._entries if int(self._entries[item].tenant_id) == target]:
+            self._entries.pop(key, None)
+        await self._emit_purge_audit(scope="tenant", tenant_id=target, key=str(target), files=removed)
+        _LOGGER.info("msg_offset_purged", scope="tenant", tenant_id=target, files=removed)
         return removed
 
     # ------------------------------------------------------------------

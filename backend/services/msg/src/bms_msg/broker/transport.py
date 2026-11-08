@@ -145,7 +145,13 @@ class StreamSession:
     """建立时刻（`time.monotonic()` 秒，只用于算存活时长）。"""
 
     reason: str
-    """关闭原因（`open` 时为 `""`）：`client_closed` / `deadline` / `member_lost` / `error`。"""
+    """关闭原因（`open` 时为 `""`）：`client_closed` / `deadline` / `member_lost` / `error` / `tenant_cancelled`。"""
+
+    tenant_id: int | None = None
+    """租户内部身份（生命周期停用 / 删除按它取消；None 表示未关联）。"""
+
+    cancelled: bool = False
+    """是否已被租户生命周期标记取消（流循环每轮检查后自行结束）。"""
 
 
 class StreamRegistry(BaseFrameworkObject):
@@ -170,6 +176,7 @@ class StreamRegistry(BaseFrameworkObject):
         partition: int,
         opened_at: float,
         connection_key: str = "",
+        tenant_id: int | None = None,
     ) -> str:
         """登记一条流。
 
@@ -181,6 +188,7 @@ class StreamRegistry(BaseFrameworkObject):
             partition: 分区号。
             opened_at: 建立时刻（`time.monotonic()` 秒）。
             connection_key: 所属连接的派生键（03-4；缺省空串表示未关联）。
+            tenant_id: 租户内部身份（生命周期取消按它匹配；None 表示未知）。
 
         Returns:
             str: 流标识（`s<n>`）。
@@ -199,6 +207,7 @@ class StreamRegistry(BaseFrameworkObject):
                 partition=partition,
                 opened_at=opened_at,
                 reason="",
+                tenant_id=None if tenant_id is None else int(tenant_id),
             ),
         )
         return stream_id
@@ -218,6 +227,39 @@ class StreamRegistry(BaseFrameworkObject):
             return None
         self._sessions.pop(stream_id, None)
         return replace(session, reason=reason)
+
+    def cancel_tenant(self, *, tenant_id: int) -> int:
+        """标记某租户的全部长驻流为取消（流循环下一轮自行结束）。
+
+        只改登记标记，不直接关闭传输层流；流循环每轮检查 `is_cancelled()`，看到标记后发结束帧并
+        `close()`，从而让「已建立流」在租户停用 / 删除后停止消费。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 标记的流数。
+        """
+        target = int(tenant_id)
+        marked = 0
+        for stream_id, session in list(self._sessions.items()):
+            if session.tenant_id != target or session.cancelled:
+                continue
+            self._sessions.set(stream_id, replace(session, cancelled=True))
+            marked += 1
+        return marked
+
+    def is_cancelled(self, stream_id: str) -> bool:
+        """该流是否已被租户生命周期取消。
+
+        Args:
+            stream_id: 流标识。
+
+        Returns:
+            bool: 已取消 / 已注销返回 True（未登记也视为不可继续）。
+        """
+        session = self._sessions.get(stream_id)
+        return session is None or session.cancelled
 
     def active(self) -> int:
         """当前活跃流数（用例据此断言「断开即释放」）。

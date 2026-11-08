@@ -130,6 +130,9 @@ class ConnectionRecord:
     stale: bool
     """是否已被清扫标记（名额已回收；可被同键请求复活）。"""
 
+    tenant_id: int | None = None
+    """租户内部身份（雪花；匿名 / 未解析为 None）。生命周期事件按它取消该租户连接。"""
+
 
 class ConnectionRegistry(BaseFrameworkObject):
     """进程级连接登记表（单副本进程内状态；跨副本共享归 8B_05）。
@@ -152,6 +155,7 @@ class ConnectionRegistry(BaseFrameworkObject):
         now: float,
         wall: float,
         heartbeat: bool,
+        tenant_id: int | None = None,
     ) -> ConnectionRecord:
         """登记或刷新一条连接（新键即建、stale 键即复活、其余只刷新时间与计数）。
 
@@ -162,6 +166,7 @@ class ConnectionRegistry(BaseFrameworkObject):
             now: 当前时刻（monotonic 秒）。
             wall: 当前时刻（wall clock 秒）。
             heartbeat: 本次是否由心跳触发（是则更新 `last_heartbeat_wall`）。
+            tenant_id: 租户内部身份（生命周期取消按它匹配；None 表示未知）。
 
         Returns:
             ConnectionRecord: 刷新后的快照。
@@ -184,6 +189,7 @@ class ConnectionRegistry(BaseFrameworkObject):
                 requests=1,
                 drain_signaled=False,
                 stale=False,
+                tenant_id=None if tenant_id is None else int(tenant_id),
             )
             self._records.set(key, created)
             _LOGGER.info(
@@ -208,6 +214,7 @@ class ConnectionRegistry(BaseFrameworkObject):
             requests=1 if revived else record.requests + 1,
             stale=False,
             drain_signaled=False if revived else record.drain_signaled,
+            tenant_id=record.tenant_id if tenant_id is None else int(tenant_id),
         )
         self._records.set(key, updated)
         if revived:
@@ -241,6 +248,36 @@ class ConnectionRegistry(BaseFrameworkObject):
             duration_ms=int((time.monotonic() - record.opened_at) * MS_PER_SECOND),
         )
         return record
+
+    def purge_tenant(self, *, tenant_id: int, reason: str) -> int:
+        """取消某租户的全部连接登记（生命周期停用 / 删除用）。
+
+        只移除登记与名额，不强制关闭 TCP / h2 连接（应用层无强关入口）；后续请求由基座租户守卫
+        拒绝，已建立长驻流由 `StreamRegistry.cancel_tenant()` 标记取消。
+
+        Args:
+            tenant_id: 租户主键。
+            reason: 取消原因（`tenant_suspended` / `tenant_deleted`）。
+
+        Returns:
+            int: 移除的连接数。
+        """
+        target = int(tenant_id)
+        removed = 0
+        for key, record in list(self._records.items()):
+            if record.tenant_id != target:
+                continue
+            self._records.delete(key)
+            removed += 1
+            _LOGGER.info(
+                "msg_connection_released",
+                connection_key=key,
+                tenant=record.tenant,
+                tenant_id=target,
+                reason=reason,
+                duration_ms=int((time.monotonic() - record.opened_at) * MS_PER_SECOND),
+            )
+        return removed
 
     def open_stream(self, key: str, *, limit: int) -> ConnectionRecord | None:
         """占用一个长驻流名额。

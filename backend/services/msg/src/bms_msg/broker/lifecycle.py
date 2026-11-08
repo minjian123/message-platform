@@ -31,6 +31,7 @@ __all__ = [
     "OffsetFlushLoop",
     "OffsetFlusher",
     "RebuildableDelayStore",
+    "StoppableLoop",
     "StorageCloser",
     "start_background_tasks",
 ]
@@ -43,6 +44,16 @@ class CloseableStore(Protocol):
 
     async def aclose(self) -> None:
         """刷盘、写恢复点并释放句柄。"""
+
+
+class StoppableLoop(Protocol):
+    """可启动 / 停止的后台服务（避免与租户模块形成导入环）。"""
+
+    def ensure_started(self) -> None:
+        """启动循环（幂等）。"""
+
+    async def stop(self) -> None:
+        """停止循环（幂等）。"""
 
 
 class RebuildableDelayStore(Protocol):
@@ -170,20 +181,30 @@ class OffsetFlusher(BaseAsyncResource):
 class BackgroundLoops(BaseAsyncResource):
     """两个后台循环的回收句柄（登记进 `ResourceManager`，停机时逆序释放）。"""
 
-    def __init__(self, *, scheduler: DelayScheduler, runner: ReplayRunner) -> None:
+    def __init__(
+        self,
+        *,
+        scheduler: DelayScheduler,
+        runner: ReplayRunner,
+        purge: StoppableLoop | None = None,
+    ) -> None:
         """初始化。
 
         Args:
             scheduler: 延迟到期推进器。
             runner: 重放执行器。
+            purge: 租户到期清扫服务（可选；不导入租户模块以免成环）。
         """
         self._scheduler = scheduler
         self._runner = runner
+        self._purge = purge
 
     async def aclose(self) -> None:
-        """停止两个循环（各自 `stop()` 幂等，重复调用无副作用）。"""
+        """停止全部循环（各自 `stop()` 幂等，重复调用无副作用）。"""
         await self._scheduler.stop()
         await self._runner.stop()
+        if self._purge is not None:
+            await self._purge.stop()
         _LOGGER.info("background_loops_stopped")
 
 
@@ -210,19 +231,23 @@ async def start_background_tasks(app: FastAPI) -> None:
     scheduler.ensure_started()
     runner.ensure_started()
     offsets.ensure_started()
+    purge = cast("StoppableLoop | None", getattr(app.state, "tenant_purge_service", None))
+    if purge is not None:
+        purge.ensure_started()
     resources = cast("ResourceManager", app.state.resources)
     if getattr(app.state, "offset_flush_loop", None) is None:
         flush_loop = OffsetFlushLoop(store=offsets)
         resources.register(flush_loop)
         app.state.offset_flush_loop = flush_loop
     if getattr(app.state, "background_loops", None) is None:
-        loops = BackgroundLoops(scheduler=scheduler, runner=runner)
+        loops = BackgroundLoops(scheduler=scheduler, runner=runner, purge=purge)
         resources.register(loops)
         app.state.background_loops = loops
     _LOGGER.info(
         "background_loops_started",
         delay_scheduler=scheduler.running,
         replay_runner=runner.running,
+        tenant_purge=purge is not None,
         offset_flush_loop=getattr(app.state, "offset_flush_loop", None) is not None,
     )
 

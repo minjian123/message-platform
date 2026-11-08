@@ -25,7 +25,13 @@ from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.deadletter import DeadLetter, DeadLetterQueue, InMemoryDeadLetterQueue
-from bms_msg.broker.delivery import DeliveryService, DeliveryState, decode_payload, ensure_payload_size
+from bms_msg.broker.delivery import (
+    DeliveryService,
+    DeliveryState,
+    InflightDelivery,
+    decode_payload,
+    ensure_payload_size,
+)
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore, OffsetStore
 from bms_msg.broker.router import TopicRouter
@@ -677,3 +683,15 @@ async def test_nack_reports_missing_record(
     )
     with pytest.raises(MsgMessageNotFoundError):
         await delivery_service.nack(tenant=current_tenant, request=request)
+
+
+def test_delivery_state_drop_topic_clears_inflight_and_acked() -> None:
+    """按主题清投递状态：在途、字节账与暂存确认都移除。"""
+    state = DeliveryState()
+    key = ("audit", 1, 0)
+    state.track(key, 0, InflightDelivery(attempts=1, deadline=datetime(2026, 1, 1)), size=10)
+    state.mark_acked(key, 1)
+    assert state.drop_topic(topic_id=1) == 1
+    assert state.usage(key).messages == 0
+    assert list(state.pending(key)) == []
+    assert state.drop_topic(topic_id=1) == 0

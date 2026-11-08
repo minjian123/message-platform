@@ -79,6 +79,7 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_topic",
         "msg_partition",
         "msg_replay_task",
+        "msg_tenant_lifecycle",
     ]
     assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
@@ -89,7 +90,7 @@ def test_table_registry_register_is_idempotent() -> None:
     """表归属装载入口可调用且幂等（同值重复登记无副作用）。"""
     register_product_tables()
     register_product_tables()
-    assert table_names() == ("msg_topic", "msg_partition", "msg_replay_task")
+    assert table_names() == ("msg_topic", "msg_partition", "msg_replay_task", "msg_tenant_lifecycle")
 
 
 @pytest.mark.kiwi_id(2414)

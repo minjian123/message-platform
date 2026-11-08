@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """`.delay` 文件延迟区（msg 任务 02-7；Kiwi 2432）。
 
 覆盖（详细设计 §12 用例 D3 的 kind 分支、D6~D12、D20）：
@@ -484,3 +485,38 @@ async def test_default_clock_is_used_when_not_injected(tmp_path: Path) -> None:
     """未注入墙钟时用系统时间（`stale_count` 的缺省路径）。"""
     store = FileDelayStore(directory=_directory(tmp_path), fsync_mode="os", clock=lambda: 0.0)
     assert store.stale_count() == 0
+
+
+async def test_drop_tenant_removes_records_and_segments(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """租户删除：清内存条目 + 删 `.delay` 段；重建后不复活。"""
+    store = _store(tmp_path, now=clock, fsync_mode="each")
+    await store.enqueue(_record(clock, log_id="l-1", tenant_id=TENANT_ID))
+    assert await store.count_for_tenant(tenant_id=TENANT_ID) == 1
+
+    assert store.drop_tenant(tenant_id=TENANT_ID) == 1
+    assert await store.count_for_tenant(tenant_id=TENANT_ID) == 0
+    partition_dir = tmp_path / "data" / str(TENANT_ID) / NAMESPACE / f"{TOPIC_NAME}.{TOPIC_ID}" / "0"
+    assert list_delay_segment_seqs(partition_dir) == []
+    await store.rebuild()
+    assert await store.count_for_tenant(tenant_id=TENANT_ID) == 0
+
+
+async def test_drop_tenant_skips_other_tenant_records(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """按租户删除只清目标租户的条目（同分区其他租户条目保留）。"""
+    store = _store(tmp_path, now=clock, fsync_mode="each", quota=10, global_quota=10)
+    await store.enqueue(_record(clock, log_id="a", tenant_id=TENANT_ID))
+    await store.enqueue(_record(clock, log_id="b", tenant_id=OTHER_TENANT))
+
+    assert store.drop_tenant(tenant_id=TENANT_ID) == 1
+    assert await store.count_for_tenant(tenant_id=TENANT_ID) == 0
+    assert await store.count_for_tenant(tenant_id=OTHER_TENANT) == 1
+
+
+async def test_drop_tenant_skips_log_without_directory(tmp_path: Path, clock: Callable[[], datetime]) -> None:
+    """目录登记缺失时跳过段删除（只清内存条目，不误删未知目录）。"""
+    store = _store(tmp_path, now=clock, fsync_mode="each")
+    await store.enqueue(_record(clock, log_id="l-1", tenant_id=TENANT_ID))
+    store._directory.forget(TOPIC_ID)
+
+    assert store.drop_tenant(tenant_id=TENANT_ID) == 1
+    assert await store.count_for_tenant(tenant_id=TENANT_ID) == 0

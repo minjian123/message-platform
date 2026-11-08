@@ -28,7 +28,7 @@
 
 import importlib
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import cast
 
 from bms_core.application import BaseServiceApplicationFactory, StartupHook
@@ -38,13 +38,14 @@ from bms_core.core.config import Settings
 from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
-from bms_core.db.session import SessionFactory, session_scope
+from bms_core.db.session import DbSession, SessionFactory, session_scope
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.events.consumer_records import EventConsumerRecord
 from bms_core.extension import SCOPE_RULE_KEY, ExtensionRequirement
 from bms_core.registry.forms import FormRecord
 from bms_core.services.module_registry import ModuleRecord
 from bms_core.services.table_registry import TableRecord
+from bms_core.tenant.guard import SourceTenantGuard, tenant_source_reader
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
@@ -68,10 +69,18 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
+from bms_msg.core.config import DATA_ROOT_SUBDIR, OFFSETS_SUBDIR
 from bms_msg.health import register_msg_health_registry
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.tenant.ledger import DbTenantLifecycleLedger
 from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
+from bms_msg.tenant.purge import TenantPurgeService
+from bms_msg.tenant.runtime import (
+    GuardTenantAvailability,
+    TenantLifecycleRuntime,
+    set_tenant_lifecycle_runtime,
+)
 from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE
 from services.form_registry import form_records as msg_form_records
 from services.module_registry import MSG_SERVICE_RECORDS
@@ -209,13 +218,43 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 01-7：主题元数据快照缓存与保留清理节流窗口（进程级；跨实例一致性归 8B_05）。
         app.state.topic_cache = TopicCache()
         app.state.retention_throttle = RetentionThrottle()
+        # 05-5：延迟转投前的租户可用性检查——复用基座租户守卫（租户源 + 全局版本戳），不建本地状态。
+        tenant_guard = SourceTenantGuard(source_provider=tenant_source_reader(app))
+        app.state.tenant_availability = GuardTenantAvailability(guard=tenant_guard)
         app.state.delay_scheduler = DelayScheduler(
             store=delay_store,
             messages=app.state.message_store,
             wheel=DelayWheel(),
             durable=file_store,
+            availability=app.state.tenant_availability,
         )
         app.state.uow_factory = platform_uow_factory(app)
+        lifecycle_ledger = DbTenantLifecycleLedger(session_scope=lambda: lifecycle_session_scope(app))
+        lifecycle_runtime = TenantLifecycleRuntime(
+            ledger=lifecycle_ledger,
+            audit_sink=sink,
+            connections=app.state.connection_registry,
+            streams=app.state.stream_registry,
+            delay_store=delay_store,
+            delay_wheel=app.state.delay_scheduler.wheel,
+            message_store=file_store,
+            offset_store=offset_store,
+            groups=app.state.group_store,
+            dead_letters=app.state.dead_letter_queue,
+            delivery_state=app.state.delivery_state,
+            waiter=waiter,
+            topic_cache=app.state.topic_cache,
+            retention_throttle=app.state.retention_throttle,
+            directory=app.state.partition_directory,
+        )
+        set_tenant_lifecycle_runtime(lifecycle_runtime)
+        app.state.tenant_lifecycle_runtime = lifecycle_runtime
+        app.state.tenant_purge_service = TenantPurgeService(
+            ledger=lifecycle_ledger,
+            runtime=lifecycle_runtime,
+            data_root=root / DATA_ROOT_SUBDIR,
+            offsets_root=root / OFFSETS_SUBDIR,
+        )
         # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
         app.state.rpc_registry = default_rpc_registry()
         # 04-4：幂等去重存储（进程内；不跨实例 / 不跨重启，8B_05 换共享存储时只改这一行）。
@@ -253,6 +292,22 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         importlib.import_module("bms_msg.tenant.scope_rule")
         # 02-6：`/readyz` 的检查项来自 msg 自持注册表（基座缺省 provider 为空 → 空注册表，探针空转）。
         register_msg_health_registry(app, settings)
+
+
+def lifecycle_session_scope(app: FastAPI) -> AbstractAsyncContextManager[DbSession]:
+    """生命周期账本 / 清扫的平台库短会话入口（后台消费无请求上下文）。
+
+    Args:
+        app: 应用实例（取引擎注册表）。
+
+    Returns:
+        AbstractAsyncContextManager[DbSession]: 平台库会话上下文。
+    """
+    return session_scope(
+        cast("EngineRegistry", app.state.engine_registry),
+        db_key=PLATFORM_DB_KEY,
+        factory=SessionFactory(),
+    )
 
 
 def platform_uow_factory(app: FastAPI) -> UowFactory:

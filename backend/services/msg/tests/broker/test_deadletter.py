@@ -68,6 +68,15 @@ async def test_contains_scopes_by_partition_and_offset(dead_letters: InMemoryDea
     assert not await dead_letters.contains(topic_id=1, partition_no=1, offset=2)
 
 
+async def test_purge_topics_is_scoped_and_idempotent(dead_letters: InMemoryDeadLetterQueue) -> None:
+    """按主题清死信：空集合 / 未命中返回 0，命中后移除。"""
+    assert await dead_letters.purge_topics(topic_ids=()) == 0
+    await dead_letters.add(_letter(0))
+    assert await dead_letters.purge_topics(topic_ids=(2,)) == 0
+    assert await dead_letters.purge_topics(topic_ids=(1,)) == 1
+    assert list(await dead_letters.list_all()) == []
+
+
 def test_reason_enum_values() -> None:
     """原因三值：两值由消费端上报，`delivery_exhausted` 由 broker 独占。
 
