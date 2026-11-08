@@ -85,6 +85,23 @@ def install_backpressure_state(app: FastAPI) -> None:
     app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
 
 
+class NoopAuditSink:
+    """审计出口替身（最小测试应用只需可写，不断言内容）。"""
+
+    async def emit(self, event: object, *, required: bool = False) -> bool:
+        """恒成功。
+
+        Args:
+            event: 审计事件（忽略）。
+            required: 强审计开关（忽略）。
+
+        Returns:
+            bool: True。
+        """
+        del event, required
+        return True
+
+
 def build_frame_app(
     *,
     session: AsyncSession | None = None,
@@ -130,6 +147,8 @@ def build_frame_app(
         ),
     )
     app.state.tenant_source = tenant_source
+    # 05-4：建主题走显式强审计；最小测试应用只需一个可写出口（不断言内容）。
+    app.state.audit_sink = NoopAuditSink()
     app.state.message_store = InMemoryMessageStore(segment_records=segment_records)
     install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()

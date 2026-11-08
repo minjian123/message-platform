@@ -32,8 +32,9 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import cast
 
 from bms_core.application import BaseServiceApplicationFactory, StartupHook
+from bms_core.audit.classes import AuditClass
 from bms_core.audit.emit import AuditEventEmitter
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import Settings
 from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
@@ -49,12 +50,15 @@ from bms_core.tenant.guard import SourceTenantGuard, tenant_source_reader
 from fastapi import APIRouter, FastAPI
 
 from bms_msg import CONTRACT_VERSION, PRODUCT_KEY, SERVICE_NAME, SERVICE_TITLE, __version__
+from bms_msg.api.access_audit import AccessAnomalyAuditMiddleware
 from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.router import api_router, frame_router
+from bms_msg.audit.trail import ACTION_CLASSES
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import DelayMetrics
+from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
@@ -235,6 +239,12 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             durable=file_store,
             availability=app.state.tenant_availability,
         )
+        # 05-4：延迟转投异常处置（服务原语；06-2 的延迟区取消端点复用同一实例）。
+        app.state.delay_disposal = DelayDisposalService(
+            store=delay_store,
+            wheel=app.state.delay_scheduler.wheel,
+            sink=sink,
+        )
         app.state.uow_factory = platform_uow_factory(app)
         lifecycle_ledger = DbTenantLifecycleLedger(session_scope=lambda: lifecycle_session_scope(app))
         lifecycle_runtime = TenantLifecycleRuntime(
@@ -275,6 +285,17 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             auditor=ReplayAuditor(sink=sink),
         )
         register_frame_handlers(app)
+        # 05-4：访问异常拒绝审计。最后注册即最外层，能看到租户中间件提前拒绝的响应；
+        # 只补基座未记录的 401 / 403 / 429，不改变原响应。
+        app.add_middleware(AccessAnomalyAuditMiddleware, settings=settings.audit_log)
+
+    def audit_classes(self) -> ConcurrentStableDict[str, AuditClass]:
+        """本服务的留痕类别（05-4）：动作 → 类别 / 强审计 / 记录级。
+
+        Returns:
+            ConcurrentStableDict[str, AuditClass]: 与运行期 helper 同源的唯一映射。
+        """
+        return ACTION_CLASSES
 
     def extension_requirements(self) -> ConcurrentStableList[ExtensionRequirement]:
         """本产品声明的扩展点需求（07D 任务 03）：命名空间规则必需，缺失即拒启。

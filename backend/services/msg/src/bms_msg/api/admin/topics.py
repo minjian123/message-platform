@@ -10,14 +10,15 @@
 from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
-from bms_msg.api.deps import CurrentTenantDep, QuotaServiceDep, TopicCacheDep
+from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, QuotaServiceDep, TopicCacheDep
+from bms_msg.audit.trail import TOPIC_CREATE_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
 from bms_msg.models.partition import MsgPartition
@@ -130,6 +131,47 @@ def _detail(topic: MsgTopic, partitions: ConcurrentStableList[MsgPartition]) -> 
     )
 
 
+async def _audit_create(
+    sink: AuditEmitter,
+    *,
+    tenant_id: int,
+    namespace: str,
+    topic_name: str,
+    topic: MsgTopic,
+) -> None:
+    """写一条建主题审计（配置变更，强审计；失败即接口失败）。
+
+    Args:
+        sink: 审计出口。
+        tenant_id: 租户主键。
+        namespace: 命名空间。
+        topic_name: 主题名。
+        topic: 新建主题。
+    """
+    params = ConcurrentStableDict(
+        {
+            "topic_id": str(topic.id),
+            "namespace": namespace,
+            "topic": topic_name,
+            "partition_count": int(topic.partition_count),
+            "retention_ms": int(topic.retention_ms),
+            "retention_bytes": int(topic.retention_bytes),
+            "cleanup_policy": topic.cleanup_policy,
+            "status": topic.status,
+        }
+    )
+    await emit_sensitive(
+        sink,
+        action=TOPIC_CREATE_ACTION,
+        tenant_id=tenant_id,
+        params=params,
+        method="POST",
+        path="/api/v1/msg/admin/topics",
+        module_key=namespace,
+        resource_key=topic_name,
+    )
+
+
 @router.post("", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _CREATE_ERRORS})
 async def create_topic(
     req: TopicCreateRequest,
@@ -137,6 +179,7 @@ async def create_topic(
     uow: PlatformUowDep,
     cache: TopicCacheDep,
     quota: QuotaServiceDep,
+    sink: AuditSinkDep,
 ) -> ApiResponse[TopicItem]:
     """创建主题（指定分区数，返回完整元数据）。
 
@@ -145,6 +188,13 @@ async def create_topic(
     主题数配额已满返回 350025。
     """
     topic = await _service(uow, cache=cache, quota=quota).create_topic(tenant=tenant, request=req)
+    await _audit_create(
+        sink,
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        topic_name=req.name,
+        topic=topic,
+    )
     return ApiResponse.ok(_item(topic))
 
 

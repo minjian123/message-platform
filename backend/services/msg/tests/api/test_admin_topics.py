@@ -45,6 +45,23 @@ BASE_URL = "http://test"
 """测试基址。"""
 
 
+class _Sink:
+    """审计替身：建主题显式强审计只要求写入成功。"""
+
+    async def emit(self, event: object, *, required: bool = False) -> bool:
+        """恒成功。
+
+        Args:
+            event: 审计事件（忽略）。
+            required: 强审计开关（忽略）。
+
+        Returns:
+            bool: True。
+        """
+        del event, required
+        return True
+
+
 class _DenyChecker(BasePermissionChecker):
     """权限桩：一律拒绝（验证权限码拦截；不声明 `plugin_name`，避免被自动收集与显式登记重名）。"""
 
@@ -120,6 +137,8 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     app.state.tenant_source = tenant_source
     # 01-7：写端点要按精确键失效主题快照缓存（管理面读路径不经缓存）。
     app.state.topic_cache = TopicCache()
+    # 05-4：建主题显式强审计（本文件不断言审计内容，只保证写出口可用）。
+    app.state.audit_sink = _Sink()
     app.add_middleware(TenantMiddleware)
     register_exception_handlers(app)
     app.include_router(mount_service_routers(ConcurrentStableList([topics.router])))

@@ -12,15 +12,11 @@
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
-from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
-from bms_core.core.context import get_current_client_ip, get_current_trace_id, get_current_user_id
 from bms_core.core.exceptions import ParamError
-from bms_core.core.logging import get_logger
 from bms_core.db.session import get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
@@ -34,7 +30,7 @@ from bms_msg.api.deps import (
     QuotaServiceDep,
     UsageSnapshotDep,
 )
-from bms_msg.broker.replay import AuditSink
+from bms_msg.audit.trail import QUOTA_UPDATE_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.core.config import (
     QUOTA_UNIT_BYTES,
     QUOTA_UNIT_COUNT,
@@ -46,8 +42,6 @@ from bms_msg.schemas.quota import QuotaItem, QuotaUpdateRequest, QuotaView
 from bms_msg.usage.columns import USAGE_COLUMNS, column_payloads
 
 __all__ = ["admin_router", "router"]
-
-_LOGGER = get_logger("bms_msg.quota_api")
 
 router = BaseRouter(
     key="msg_tenant_usage",
@@ -316,53 +310,40 @@ def _update_payload(request: QuotaUpdateRequest) -> ConcurrentStableList[QuotaUp
 
 
 async def _audit_update(
-    sink: AuditSink,
+    sink: AuditEmitter,
     *,
     tenant_id: int,
     payload: ConcurrentStableList[QuotaUpdate],
 ) -> None:
-    """写一条配额调整审计（普通审计：失败只记日志，不阻断调整）。
+    """写一条配额调整审计（配置变更，强审计；失败即调整失败）。
 
     Args:
         sink: 审计出口。
         tenant_id: 租户主键。
         payload: 调整项。
+
+    Raises:
+        InternalError: 强审计写入失败（10000 / 500）。
     """
-    serialized = json.dumps(
-        {
-            "items": [
-                {
-                    "quota_key": item.quota_key,
-                    "namespace": item.namespace,
-                    "limit": item.limit,
-                    "soft_limit": item.soft_limit,
-                }
-                for item in payload
-            ]
-        },
-        ensure_ascii=False,
-    )
-    event = build_operation_event(
-        tenant_id=str(tenant_id),
-        user_id=get_current_user_id(),
-        username=None,
-        module="msg",
-        action="msg:quota.update",
+    params = {
+        "items": [
+            {
+                "quota_key": item.quota_key,
+                "namespace": item.namespace,
+                "limit": item.limit,
+                "soft_limit": item.soft_limit,
+            }
+            for item in payload
+        ]
+    }
+    await emit_sensitive(
+        sink,
+        action=QUOTA_UPDATE_ACTION,
+        tenant_id=int(tenant_id),
+        params=params,
         method="PUT",
         path="/api/v1/msg/admin/quotas",
-        query=None,
-        params=serialized,
-        ip=get_current_client_ip(),
-        user_agent=None,
-        cost_time=None,
-        status=200,
-        error_msg=None,
-        trace_id=get_current_trace_id(),
     )
-    try:
-        await sink.emit(event, required=False)
-    except Exception as exc:  # 普通审计：写失败只记日志
-        _LOGGER.warning("msg_quota_audit_failed", tenant_id=int(tenant_id), error=repr(exc))
 
 
 @admin_router.put(

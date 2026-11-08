@@ -676,3 +676,9 @@ QUOTA_ORIGIN_DEFAULT = "default"
 
 QUOTA_ORIGIN_CONFIGURED = "configured"
 """配额来源：管理面调整写入。"""
+
+ACCESS_ANOMALY_WINDOW_MS = 60_000
+"""访问异常审计的节流窗口（毫秒）：同一 `(租户, 路径, 状态)` 窗口内只留首条。"""
+
+ACCESS_ANOMALY_MAX_KEYS = 1_024
+"""访问异常节流键数量上限：超过即清空，防止随机路径打爆内存。"""

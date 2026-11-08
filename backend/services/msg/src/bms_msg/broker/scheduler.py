@@ -177,6 +177,32 @@ class DelayWheel:
         self._overdue = ConcurrentStableList()
         self._last_scan = self._now()
 
+    def forget(self, *, log_id: str) -> int:
+        """移除某条记录在时间轮中的全部引用（延迟转投异常处置）。
+
+        `DelayStore.remove()` 只删存储与内存索引；若不同时清时间轮，下一轮 `take_due()` 仍会拿到
+        旧引用并尝试转投，等于把已丢弃的延迟消息重新写回日志。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            int: 移除的引用数（记录已转投 / 不在轮中返回 0）。
+        """
+        removed = 0
+        for layers in (self._seconds, self._minutes, self._hours):
+            for slot in list(layers):
+                kept = [record for record in layers[slot] if record.log_id != log_id]
+                removed += len(layers[slot]) - len(kept)
+                if kept:
+                    layers[slot] = ConcurrentStableList(kept)
+                else:
+                    layers.pop(slot, None)
+        kept_overdue = [record for record in self._overdue if record.log_id != log_id]
+        removed += len(self._overdue) - len(kept_overdue)
+        self._overdue = ConcurrentStableList(kept_overdue)
+        return removed
+
     def forget_tenant(self, *, tenant_id: int) -> int:
         """移除某租户在时间轮中的全部记录引用（租户删除时的易失资源清理）。
 

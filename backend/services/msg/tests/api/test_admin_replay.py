@@ -336,6 +336,7 @@ async def test_create_replay_writes_audit(client: AsyncClient, api_app: FastAPI)
     """A2：建任务写一条 `msg:replay` 审计，载荷含范围与 `task_id`。"""
     topic_id = await _create_topic(client)
     await _seed(api_app, topic_id=topic_id, count=2)
+    cast("SinkView", api_app.state.audit_sink).events.clear()
 
     data = _data(await _create_replay(client))
     sink = cast("SinkView", api_app.state.audit_sink)
@@ -382,6 +383,7 @@ async def test_pause_resume_cancel_state_machine(client: AsyncClient, api_app: F
     """A5：暂停 / 恢复 / 取消各 200；终态再暂停返回 `350017`（409）。"""
     topic_id = await _create_topic(client)
     await _seed(api_app, topic_id=topic_id, count=2)
+    cast("SinkView", api_app.state.audit_sink).events.clear()
     task_id = _data(await _create_replay(client))["task_id"]
     base = f"/api/v1/msg/admin/replay/{task_id}"
 

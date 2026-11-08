@@ -47,14 +47,6 @@ class _Sink:
         return True
 
 
-class _ExplodingSink:
-    """审计替身：发射即抛（普通审计失败不阻断调整）。"""
-
-    async def emit(self, event: object, *, required: bool = False) -> bool:
-        del event, required
-        raise RuntimeError("audit down")
-
-
 @pytest.fixture(autouse=True)
 def _plugins() -> Iterator[None]:
     registry = default_plugin_registry()
@@ -200,12 +192,9 @@ async def test_get_quotas_rejects_unknown_namespace(client: AsyncClient) -> None
     assert _body(response)["code"] == 350010
 
 
-async def test_put_quotas_survives_audit_failure(api_app: FastAPI, client: AsyncClient) -> None:
-    """普通审计写失败只记日志，调整仍成功返回。"""
-    api_app.dependency_overrides[get_audit_sink] = lambda: _ExplodingSink()
-    response = await client.put(
-        "/api/v1/msg/admin/quotas",
-        json={"items": [{"quota_key": "topic_count", "limit": 5}]},
-        headers={"X-Tenant-ID": "demo"},
-    )
-    assert (response.status_code, _body(response)["code"]) == (200, 0)
+async def test_put_quotas_audit_failure_is_covered_by_05_4(api_app: FastAPI, client: AsyncClient) -> None:
+    """强审计失败行为归 05-4：本文件只保留 05-2 的成功 / 校验路径。
+
+    失败处置见 `tests/api/test_audit_config_changes.py::test_update_quotas_audit_failure_fails`。
+    """
+    del api_app, client

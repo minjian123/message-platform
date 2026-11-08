@@ -47,7 +47,7 @@ from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.core.routing import select_partition
 from bms_msg.errors import MsgErrorCode
-from tests_support.frame_app import install_backpressure_state
+from tests_support.frame_app import NoopAuditSink, install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2417)
 
@@ -138,6 +138,8 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
         ),
     )
     app.state.tenant_source = tenant_source
+    # 05-4：建主题显式强审计的可写出口（不断言内容）。
+    app.state.audit_sink = NoopAuditSink()
     app.state.message_store = InMemoryMessageStore()
     install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
