@@ -281,6 +281,30 @@ def test_tenant_id_helper_reads_context_and_falls_back_to_none() -> None:
     assert guard_module._tenant_id(parsed) == 7001  # pyright: ignore[reportPrivateUsage]
 
 
+def _no_tenant_id(request: Request) -> None:
+    """租户解析成功但无内部身份（`tenant_id` 恒为 None）。
+
+    Args:
+        request: 请求（本替身不读取）。
+    """
+    del request
+
+
+async def test_connection_global_limit_applies_when_tenant_id_unknown(
+    api_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """租户无内部身份时跳过租户配额，直接判副本全局上限（`350020`，不带配额键）。"""
+    monkeypatch.setattr(guard_module, "_tenant_id", _no_tenant_id)
+    async with _client(api_app, host="10.0.0.1", port=1) as first:
+        assert (await first.post("/msg/connection/heartbeat", headers=DEMO_HEADERS)).status_code == 200
+    async with _client(api_app, host="10.0.0.2", port=2) as second:
+        rejected = await second.post("/msg/connection/heartbeat", headers=DEMO_HEADERS)
+
+    assert rejected.status_code == 429
+    assert _body(rejected)["code"] == int(MsgErrorCode.CONNECTION_LIMIT_EXCEEDED)
+    assert "quota_key" not in (_body(rejected).get("data") or {}), "全局上限不是租户配额"
+
+
 async def test_connection_tenant_quota_rejects_new_connection(api_app: FastAPI) -> None:
     """租户连接数配额（350020）：已有一条连接时新连接被拒，副本全局上限不参与。"""
     _use_tuning(

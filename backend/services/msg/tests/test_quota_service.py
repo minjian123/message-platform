@@ -570,6 +570,17 @@ def test_delivery_counter_roll_reset_and_default() -> None:
     assert default_delivery_counter().value() == 0
 
 
+def test_storage_sampler_skips_subdirectories(tmp_path: Path) -> None:
+    """目录扫描只累计文件：`rglob` 会连目录一起返回，目录项必须跳过。"""
+    nested = tmp_path / "data" / str(TENANT_ID) / "audit.operation" / "0"
+    nested.mkdir(parents=True)
+    (nested / "segment.log").write_bytes(b"x" * 10)
+
+    sampler = StorageUsageSampler(root=tmp_path)
+
+    assert sampler.sample(TENANT_ID) == 10, "只算文件大小，目录本身不累计"
+
+
 def test_storage_sampler_handles_scan_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """目录扫描失败返回 None（投影判不可用，不拒绝写入）。"""
     directory = tmp_path / "data" / str(TENANT_ID)
