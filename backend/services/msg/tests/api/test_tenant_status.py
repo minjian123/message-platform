@@ -102,6 +102,8 @@ def _app(source: _TenantSource) -> FastAPI:
     """
     app = FastAPI()
     app.state.settings = types.SimpleNamespace(
+        # 管理面只读白名单：最小应用走原口径（空 = 全拒）；只读窗口见 test_tenant_readonly。
+        tenant_guard=types.SimpleNamespace(readonly_routes=ConcurrentStableList()),
         tenant=types.SimpleNamespace(
             exempt_paths=ConcurrentStableList(),
             deferred_paths=ConcurrentStableList(),

@@ -128,6 +128,8 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     """
     app = FastAPI()
     app.state.settings = SimpleNamespace(
+        # 管理面只读白名单：最小应用走原口径（空 = 全拒）；只读窗口见 test_tenant_readonly。
+        tenant_guard=SimpleNamespace(readonly_routes=ConcurrentStableList()),
         permission=SimpleNamespace(provider=""),
         tenant_module=SimpleNamespace(provider=""),
         error_mapper=SimpleNamespace(provider=""),

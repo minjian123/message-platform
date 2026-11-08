@@ -31,6 +31,11 @@ resolve_cache_ttl = 60
 [tenant_guard]
 # 租户可用性守卫回落基座默认：命名空间判定已迁到 scope_rule 规则链（07D 任务 03 附录 A）
 provider = "source"
+# 管理面只读放行（05-5 详细设计 §4 / bms 04_03-01）：停用 / 注销窗口内仍可只读查看。
+# 条目形如「服务键:路径前缀」，仅 GET / HEAD 生效；未登记即全拒（fail-closed），写方法永不进本通道。
+# 只登记管理面读端点（主题 / 组 / 延迟 / 重放 / ACL / 配额 + 租户用量投影）；
+# 数据面（/msg/*、/rpc/*）与 `/api/v1/msg/{publish,consume,ack,nack,join,leave,heartbeat}` 一律不登记。
+readonly_routes = ["msg:/api/v1/msg/admin/", "msg:/api/v1/msg/tenant-usage"]
 
 [permission]
 # 真实 RBAC（05-3）：校验器随基座分发，msg 注入 platform 权限数据来源

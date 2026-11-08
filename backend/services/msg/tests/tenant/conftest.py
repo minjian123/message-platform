@@ -29,7 +29,11 @@ from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger, SessionScope
 from bms_msg.tenant.purge import TenantPurgeService, reset_tenant_purge_metrics
-from bms_msg.tenant.runtime import TenantLifecycleRuntime, reset_tenant_lifecycle_metrics
+from bms_msg.tenant.runtime import (
+    TenantLifecycleRuntime,
+    reset_tenant_lifecycle_metrics,
+    reset_tenant_lifecycle_runtime,
+)
 
 TENANT_ID = 7001
 """测试租户主键。"""
@@ -64,12 +68,18 @@ class RecordingAudit:
 
 @pytest.fixture(autouse=True)
 def _reset_metrics() -> Iterator[None]:
-    """每个用例前后清零进程级生命周期 / 清扫计数。"""
+    """每个用例前后清零进程级生命周期 / 清扫计数，并清掉进程级运行时持有者。
+
+    运行时持有者是**进程级**的（应用装配期登记）：同进程内先跑过装配类用例（如骨架用例
+    `ApplicationFactory().create()`）会留下持有者，使「未装配运行时即 fail-closed」的断言失效。
+    """
     reset_tenant_lifecycle_metrics()
     reset_tenant_purge_metrics()
+    reset_tenant_lifecycle_runtime()
     yield
     reset_tenant_lifecycle_metrics()
     reset_tenant_purge_metrics()
+    reset_tenant_lifecycle_runtime()
 
 
 @pytest.fixture
