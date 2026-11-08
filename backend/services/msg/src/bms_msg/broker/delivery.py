@@ -54,6 +54,7 @@ from bms_msg.errors import (
 )
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
+from bms_msg.usage.counter import DeliveryCounter, default_delivery_counter
 
 __all__ = [
     "Delivery",
@@ -259,6 +260,7 @@ class DeliveryService:
         backpressure: BackpressureTuning | None = None,
         waiter: DeliveryWaiter | None = None,
         gate: StorageGate | None = None,
+        counter: DeliveryCounter | None = None,
     ) -> None:
         """初始化。
 
@@ -272,6 +274,7 @@ class DeliveryService:
             backpressure: inflight 双阈值（03-5；None 表示不限，保持 01-2 / 01-3 用例原行为）。
             waiter: 分区唤醒器（03-5；确认 / 死信归还额度后唤醒被暂停的流）。
             gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
+            counter: 今日投递计数（05-2；None 表示不计数）。
         """
         self._store = store
         self._offsets = offsets
@@ -282,6 +285,7 @@ class DeliveryService:
         self._backpressure = backpressure
         self._waiter = waiter
         self._gate = gate
+        self._counter = counter if counter is not None else default_delivery_counter()
 
     def _notify(self, key: PartitionKey) -> None:
         """唤醒该分区上的长轮询 / 长驻流（额度归还或消息写入后）。
@@ -585,6 +589,7 @@ class DeliveryService:
             Delivery | None: 需投出时的投递；`None` 仅表示本次刚转死信（调用方应继续看下一条）。
         """
         if acks == ACKS_FIRE_AND_FORGET:
+            self._counter.increment()
             return Delivery(message=message, delivery_count=1)
         attempts = 1 if existing is None else existing.attempts + 1
         if attempts > MAX_DELIVERY_ATTEMPTS:
@@ -599,6 +604,7 @@ class DeliveryService:
             ),
             size=len(message.payload),
         )
+        self._counter.increment()
         return Delivery(message=message, delivery_count=attempts)
 
     async def _dead_letter(

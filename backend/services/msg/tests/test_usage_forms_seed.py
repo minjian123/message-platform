@@ -16,6 +16,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenDict
 from bms_core.core.exceptions import ParamError
 from bms_core.db.session import DbSession
+from bms_core.db.tenant import TenantContext
 from bms_core.models.base import Base
 from bms_core.models.platform.menu_form import SysField, SysForm
 from bms_core.models.platform.permission_meta import SysBusiness
@@ -31,7 +32,9 @@ from bms_msg.seeds.forms import (
     expected_rows,
     seed_usage_forms,
 )
+from bms_msg.tenant.context import CurrentTenant
 from bms_msg.usage.columns import USAGE_COLUMNS
+from bms_msg.usage.snapshot import UsageSnapshot
 
 pytestmark = pytest.mark.kiwi_id(2452)
 
@@ -200,7 +203,9 @@ def test_manifest_declares_seed_and_allowlist() -> None:
     payload = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
     sources = {str(item["data_source_key"]): item for item in payload["data_sources"]}
     assert sources["msg_tenant_usage"]["allowlist"] == [column.key for column in USAGE_COLUMNS]
-    assert sources["msg_quota_projection"]["path"] == "/api/v1/msg/tenant-usage/quota"
+    assert sources["msg_quota_count"]["path"] == "/api/v1/msg/tenant-usage/quota"
+    assert sources["msg_quota_bytes"]["quota_unit"] == "bytes"
+    assert sources["msg_quota_rate"]["quota_unit"] == "qps"
 
     seeds = payload["seeds"]
     assert len(seeds) == 1
@@ -230,7 +235,14 @@ async def test_endpoint_columns_match_seeded_fields(platform_session: AsyncSessi
     await seed_usage_forms(platform_session, ConcurrentStableDict())
     await platform_session.commit()
     fields = (await platform_session.execute(select(SysField).order_by(SysField.sort))).scalars().all()
-    response = await tenant_usage()
+
+    class _Usage:
+        async def snapshot(self, tenant_id: int) -> UsageSnapshot:
+            del tenant_id
+            return UsageSnapshot(0, 0, 0, 0, 0, 0, 0)
+
+    tenant = CurrentTenant.from_context(TenantContext(code="demo", db_key="tenant_demo", name="演示", tenant_id=7001))
+    response = await tenant_usage(cast("object", _Usage()), tenant)  # type: ignore[arg-type]
     payload = json.loads(bytes(response.body))
     assert payload["columns"] == [{"key": field.field_key, "label": field.name} for field in fields]
 

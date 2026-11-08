@@ -27,7 +27,7 @@ from bms_core.db.tenant import TenantContext
 from bms_core.msgclient.frame import PROTOCOL_VERSION
 from fastapi import Depends, Request, Response
 
-from bms_msg.api.deps import ConnectionRegistryDep, ConnectionTuningDep
+from bms_msg.api.deps import ConnectionRegistryDep, ConnectionTuningDep, QuotaServiceDep
 from bms_msg.api.frame.media import is_frame_request
 from bms_msg.api.frame.responses import FRAME_MEDIA_TYPE, error_frame
 from bms_msg.broker.connection import (
@@ -199,19 +199,21 @@ def build_connection_guard(
         request: Request,
         connections: ConnectionRegistryDep,
         tuning: ConnectionTuningDep,
+        quota: QuotaServiceDep,
     ) -> ConnectionRecord:
-        """清扫 → 登记 / 刷新 → 连接数上限 → drain 标记。
+        """清扫 → 登记 / 刷新 → 连接数上限（租户配额 → 副本全局）→ drain 标记。
 
         Args:
             request: 当前请求。
             connections: 连接登记表。
             tuning: 连接参数。
+            quota: 配额服务（新连接判租户连接数配额）。
 
         Returns:
             ConnectionRecord: 刷新后的连接快照（同时挂到 `request.state.connection_record`）。
 
         Raises:
-            MsgConnectionLimitExceededError: 有效连接数已达上限（`350020`）。
+            MsgConnectionLimitExceededError: 租户配额或副本上限已达（`350020`）。
             FrameHandled: 同一超限的帧形态（200 + error 帧）。
         """
         meta = connection_meta(request.scope)
@@ -220,18 +222,39 @@ def build_connection_guard(
         now = time.monotonic()
         wall = time.time()
         connections.evict(now=now, limit=tuning.evict_scan_limit, idle_timeout_ms=tuning.idle_timeout_ms)
-        if enforce_limit and connections.get(key) is None and connections.count() >= tuning.max_connections:
-            _LOGGER.warning(
-                "msg_connection_limit_rejected",
-                connection_key=key,
-                tenant=tenant if tenant else ANONYMOUS_TENANT,
-                reason="connection_limit",
-            )
-            raise _reject(
-                request,
-                MsgConnectionLimitExceededError(f"连接数已达上限 {tuning.max_connections}，请换实例或退避后重连"),
-                tuning,
-            )
+        is_new = connections.get(key) is None
+        if enforce_limit and is_new:
+            tenant_id = _tenant_id(request)
+            if tenant_id is not None:
+                limit = await quota.effective(tenant_id, "", "connection_count")
+                used = connections.count_for_tenant(tenant_id=tenant_id)
+                if limit.limit > 0 and used >= limit.limit:
+                    _LOGGER.warning(
+                        "msg_connection_limit_rejected",
+                        connection_key=key,
+                        tenant=tenant if tenant else ANONYMOUS_TENANT,
+                        reason="tenant_quota",
+                    )
+                    raise _reject(
+                        request,
+                        MsgConnectionLimitExceededError(
+                            f"连接数已达租户配额上限 {limit.limit}，请换实例或申请调整配额",
+                            data={"quota_key": "connection_count", "limit": limit.limit, "usage": used},
+                        ),
+                        tuning,
+                    )
+            if connections.count() >= tuning.max_connections:
+                _LOGGER.warning(
+                    "msg_connection_limit_rejected",
+                    connection_key=key,
+                    tenant=tenant if tenant else ANONYMOUS_TENANT,
+                    reason="connection_limit",
+                )
+                raise _reject(
+                    request,
+                    MsgConnectionLimitExceededError(f"连接数已达上限 {tuning.max_connections}，请换实例或退避后重连"),
+                    tuning,
+                )
         record = connections.touch(
             key=key,
             meta=meta,

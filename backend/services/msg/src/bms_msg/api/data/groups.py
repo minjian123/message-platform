@@ -17,7 +17,7 @@ from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends
 
-from bms_msg.api.deps import DataPlaneTenantDep, DeliveryStateDep, GroupStoreDep, TopicCacheDep
+from bms_msg.api.deps import DataPlaneTenantDep, DeliveryStateDep, GroupStoreDep, QuotaServiceDep, TopicCacheDep
 from bms_msg.broker.coordinator import GroupCoordinator, MemberState
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.group import ConsumerGroup, GroupStore
@@ -25,6 +25,7 @@ from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.core.config import HEARTBEAT_INTERVAL_MS, SESSION_TIMEOUT_MS
 from bms_msg.errors import MsgErrorCode
+from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.group import LeaveResult, MemberAssignment, MemberRequest
 
@@ -35,10 +36,11 @@ _CONSUME = Depends(require_permission("msg:consume"))
 _JOIN_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
     int(MsgErrorCode.NAMESPACE_INVALID),
+    int(MsgErrorCode.GROUP_QUOTA_EXCEEDED),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
 ]
-"""加入端点声明的错误码（`x-error-codes`；`join` 新建组，故不报 `350013`）。"""
+"""加入端点声明的错误码（`x-error-codes`；`join` 新建组，故不报 `350013`，但可能报组数配额 `350026`）。"""
 
 _HEARTBEAT_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
@@ -76,6 +78,7 @@ def _coordinator(
     *,
     cache: TopicCache | None,
     tenant_id: int | None,
+    quota: QuotaService | None = None,
 ) -> GroupCoordinator:
     """组装协调器（请求级主题仓储 + 进程级组存储 / 投递状态）。
 
@@ -85,6 +88,7 @@ def _coordinator(
         delivery: 投递状态（撤销易主分区时清在途）。
         cache: 进程内主题快照缓存（None = 不缓存）。
         tenant_id: 当前租户主键（缓存键的一部分）。
+        quota: 配额服务（join 新建组时判组数配额）。
 
     Returns:
         GroupCoordinator: 消费组协调器。
@@ -94,6 +98,7 @@ def _coordinator(
         groups=groups,
         router=TopicRouter(TopicRepository(session), cache=cache, tenant_id=tenant_id),
         delivery=delivery,
+        quota=quota,
     )
 
 
@@ -128,14 +133,15 @@ async def join(
     groups: GroupStoreDep,
     delivery: DeliveryStateDep,
     cache: TopicCacheDep,
+    quota: QuotaServiceDep,
 ) -> ApiResponse[MemberAssignment]:
     """加入消费组（服务端主导分配）。
 
     需要 msg:consume 权限；组按 `(namespace, topic)` 维度建，同 `consumer_id` 再次加入视为重连
     （刷新存活、不递增世代、分配不变）。返回 `generation` 与 `partitions`，客户端按分配拉取。
-    主题不存在 350001，命名空间非已启用 module_key 返回 350010。
+    主题不存在 350001，命名空间非已启用 module_key 返回 350010，组数配额已满返回 350026。
     """
-    state = await _coordinator(uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id)).join(
+    state = await _coordinator(uow, groups, delivery, cache=cache, tenant_id=int(tenant.tenant_id), quota=quota).join(
         tenant=tenant, request=req
     )
     return ApiResponse.ok(_assignment(state, req))

@@ -4,6 +4,8 @@ __pycache__/
 *.so
 build/
 dist/
+dist-standalone/
+coverage/
 *.egg-info/
 .venv/
 .pytest_cache/

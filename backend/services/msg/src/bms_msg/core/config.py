@@ -603,3 +603,76 @@ TENANT_PURGE_BATCH_LIMIT = 100
 # ---------------------------------------------------------------------------
 # 04-1 RPC 一元调用：路径形态 / 调用方标识 / 客户端兜底超时 / RPC 速率
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 05-2 消息维度配额：六维缺省 / 软限 / 缓存 / 存储采样
+# ---------------------------------------------------------------------------
+
+QUOTA_DEFAULT_TOPIC_COUNT_ENV = "MSG_QUOTA_DEFAULT_TOPIC_COUNT"
+"""主题数缺省值环境变量名。"""
+
+QUOTA_DEFAULT_TOPIC_COUNT = 100
+"""主题数缺省硬限（每租户 / 命名空间；`0` = 不限）。"""
+
+QUOTA_DEFAULT_GROUP_COUNT_ENV = "MSG_QUOTA_DEFAULT_GROUP_COUNT"
+"""消费组数缺省值环境变量名。"""
+
+QUOTA_DEFAULT_GROUP_COUNT = 100
+"""消费组数缺省硬限（每租户）。"""
+
+QUOTA_DEFAULT_PRODUCE_RATE_ENV = "MSG_QUOTA_DEFAULT_PRODUCE_RATE"
+"""生产速率缺省值环境变量名。"""
+
+QUOTA_DEFAULT_PRODUCE_RATE = 1_000
+"""生产速率缺省硬限（条/秒；每租户 / 命名空间）。"""
+
+QUOTA_DEFAULT_STORAGE_BYTES_ENV = "MSG_QUOTA_DEFAULT_STORAGE_BYTES"
+"""消息存储缺省值环境变量名。"""
+
+QUOTA_DEFAULT_STORAGE_BYTES = 10 * 1024 * 1024 * 1024
+"""消息存储缺省硬限（字节，10 GiB；每租户）。"""
+
+QUOTA_DEFAULT_UNACKED_COUNT_ENV = "MSG_QUOTA_DEFAULT_UNACKED_COUNT"
+"""未确认数缺省值环境变量名。"""
+
+QUOTA_DEFAULT_UNACKED_COUNT = 10_000
+"""未确认数缺省硬限（条；每租户聚合）。"""
+
+QUOTA_DEFAULT_CONNECTION_COUNT_ENV = "MSG_QUOTA_DEFAULT_CONNECTION_COUNT"
+"""连接数缺省值环境变量名。"""
+
+QUOTA_DEFAULT_CONNECTION_COUNT = 1_000
+"""连接数缺省硬限（每租户；仅新连接判定）。"""
+
+QUOTA_SOFT_RATIO_PERCENT = 80
+"""软限缺省比例（硬限的百分比）：只告警、不拒绝。"""
+
+QUOTA_CACHE_TTL_MS_ENV = "MSG_QUOTA_CACHE_TTL_MS"
+"""配额快照缓存有效期环境变量名（毫秒）。"""
+
+QUOTA_CACHE_TTL_MS = 60_000
+"""配额快照缓存缺省有效期（毫秒）：直改库最多滞后该值，管理面调整显式失效。"""
+
+QUOTA_STORAGE_SAMPLE_TTL_MS_ENV = "MSG_QUOTA_STORAGE_SAMPLE_TTL_MS"
+"""存储用量采样有效期环境变量名（毫秒）。"""
+
+QUOTA_STORAGE_SAMPLE_TTL_MS = 30_000
+"""存储用量采样缺省有效期（毫秒）：扫描是目录遍历，不宜每次发布都做。"""
+
+QUOTA_UNIT_COUNT = "count"
+"""单位：条数。"""
+
+QUOTA_UNIT_BYTES = "bytes"
+"""单位：字节数。"""
+
+QUOTA_UNIT_QPS = "qps"
+"""单位：每秒条数。"""
+
+QUOTA_PERIOD_NONE = "none"
+"""周期：瞬时（本期六维均为瞬时值）。"""
+
+QUOTA_ORIGIN_DEFAULT = "default"
+"""配额来源：懒初始化写入的缺省行。"""
+
+QUOTA_ORIGIN_CONFIGURED = "configured"
+"""配额来源：管理面调整写入。"""

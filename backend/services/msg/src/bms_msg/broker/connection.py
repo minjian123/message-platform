@@ -372,6 +372,22 @@ class ConnectionRegistry(BaseFrameworkObject):
         """
         return sum(1 for record in self._records.values() if not record.stale)
 
+    def count_for_tenant(self, *, tenant_id: int) -> int:
+        """当前某租户的有效连接数（匿名连接不计；05-2 配额判定用）。
+
+        Args:
+            tenant_id: 租户主键。
+
+        Returns:
+            int: 有效连接数。
+        """
+        target = int(tenant_id)
+        return sum(
+            1
+            for record in self._records.values()
+            if not record.stale and record.tenant_id is not None and int(record.tenant_id) == target
+        )
+
     def records(self) -> ConcurrentStableList[ConnectionRecord]:
         """全部连接快照（含 stale；日志与用例用）。
 

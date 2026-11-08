@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bms_msg.api.admin import topics
 from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
+from bms_msg.api.deps import get_quota_service, get_usage_snapshot
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delay import InMemoryDelayStore
@@ -530,3 +531,27 @@ async def test_entrypoints_trigger_retention_cleanup(client: AsyncClient, api_ap
     await _join(client)
     consumed = await _consume(client)
     assert _body(consumed)["code"] == int(MsgErrorCode.MESSAGE_NOT_FOUND)
+
+
+async def test_consume_unacked_quota_returns_paused_empty_batch(api_app: FastAPI, client: AsyncClient) -> None:
+    """未确认硬限已到：返空批 + `paused=true`，不返回错误。"""
+    await _create_topic(client)
+    await _join(client)
+
+    class _Quota:
+        async def effective(self, tenant_id: int, namespace: str, quota_key: str) -> object:
+            del tenant_id, namespace, quota_key
+            return SimpleNamespace(limit=1)
+
+    class _Usage:
+        async def unacked_count(self, tenant_id: int) -> int:
+            del tenant_id
+            return 1
+
+    api_app.dependency_overrides[get_quota_service] = lambda: _Quota()
+    api_app.dependency_overrides[get_usage_snapshot] = lambda: _Usage()
+    response = await _consume(client)
+    assert response.status_code == 200
+    data = _data(response)
+    assert data["paused"] is True
+    assert data["messages"] == []

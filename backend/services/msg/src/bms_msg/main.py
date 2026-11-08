@@ -71,6 +71,7 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.core.config import DATA_ROOT_SUBDIR, OFFSETS_SUBDIR
 from bms_msg.health import register_msg_health_registry
+from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
@@ -82,6 +83,8 @@ from bms_msg.tenant.runtime import (
     set_tenant_lifecycle_runtime,
 )
 from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE
+from bms_msg.usage.counter import default_delivery_counter
+from bms_msg.usage.snapshot import StorageUsageSampler
 from services.form_registry import form_records as msg_form_records
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
@@ -218,6 +221,10 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 01-7：主题元数据快照缓存与保留清理节流窗口（进程级；跨实例一致性归 8B_05）。
         app.state.topic_cache = TopicCache()
         app.state.retention_throttle = RetentionThrottle()
+        # 05-2：配额快照缓存 / 存储用量采样器 / 今日投递计数（进程级；跨实例一致性归 8B_05）。
+        app.state.quota_cache = QuotaCache()
+        app.state.storage_usage_sampler = StorageUsageSampler(root=root)
+        app.state.delivery_counter = default_delivery_counter()
         # 05-5：延迟转投前的租户可用性检查——复用基座租户守卫（租户源 + 全局版本戳），不建本地状态。
         tenant_guard = SourceTenantGuard(source_provider=tenant_source_reader(app))
         app.state.tenant_availability = GuardTenantAvailability(guard=tenant_guard)
@@ -254,6 +261,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             runtime=lifecycle_runtime,
             data_root=root / DATA_ROOT_SUBDIR,
             offsets_root=root / OFFSETS_SUBDIR,
+            quota_session_scope=lambda: lifecycle_session_scope(app),
+            quota_cache=app.state.quota_cache,
+            storage_sampler=app.state.storage_usage_sampler,
         )
         # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
         app.state.rpc_registry = default_rpc_registry()

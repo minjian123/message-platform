@@ -38,7 +38,8 @@ from bms_msg.broker.group import (
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.core.config import SESSION_TIMEOUT_MS
-from bms_msg.errors import MsgGroupNotFoundError, MsgMemberInvalidError
+from bms_msg.errors import MsgGroupCountQuotaExceededError, MsgGroupNotFoundError, MsgMemberInvalidError
+from bms_msg.quota.service import QuotaService
 from bms_msg.schemas.group import MemberRequest
 from bms_msg.tenant.context import CurrentTenant
 
@@ -75,6 +76,7 @@ class GroupCoordinator:
         router: TopicRouter,
         delivery: DeliveryState,
         now: Callable[[], datetime] = _utcnow,
+        quota: QuotaService | None = None,
     ) -> None:
         """初始化。
 
@@ -83,11 +85,13 @@ class GroupCoordinator:
             router: 主题路由（请求级，绑定平台库主题仓储）。
             delivery: 投递状态（进程级；撤销易主分区时清在途）。
             now: 时钟（缺省 UTC 当前时间；用例注入固定时钟以模拟会话超时）。
+            quota: 配额服务（None = 不判组数配额，兼容既有单测）。
         """
         self._groups = groups
         self._router = router
         self._delivery = delivery
         self._now = now
+        self._quota = quota
 
     async def join(self, *, tenant: CurrentTenant, request: MemberRequest) -> MemberState:
         """加入组（组不存在则建；同 `consumer_id` 即重连）。
@@ -107,6 +111,7 @@ class GroupCoordinator:
         partition_count = int(topic.partition_count)
         record = await self._load(tenant=tenant, topic_id=int(topic.id), group=request.group)
         if record is None:
+            await self._ensure_group_quota(tenant=tenant)
             record = ConsumerGroup(
                 tenant_id=int(tenant.tenant_id),
                 topic_id=int(topic.id),
@@ -256,6 +261,28 @@ class GroupCoordinator:
             ConsumerGroup | None: 组记录；未 `join` 过返回 None。
         """
         return await self._groups.load(tenant_id=int(tenant.tenant_id), topic_id=topic_id, group=group)
+
+    async def _ensure_group_quota(self, *, tenant: CurrentTenant) -> None:
+        """校验消费组数配额（仅新建组时调用；硬限已到即 `350026`）。
+
+        Args:
+            tenant: 当前租户。
+
+        Raises:
+            MsgGroupCountQuotaExceededError: 组数已达硬限（350026 / 429）。
+        """
+        if self._quota is None:
+            return
+        limit = await self._quota.effective(int(tenant.tenant_id), "", "group_count")
+        if limit.limit <= 0:
+            return
+        used = len(await self._groups.list_for_tenant(tenant_id=int(tenant.tenant_id)))
+        if used >= limit.limit:
+            raise MsgGroupCountQuotaExceededError(
+                f"消费组数已达配额上限：{used}/{limit.limit}",
+                limit=limit.limit,
+                usage=used,
+            )
 
     def _member_of(self, record: ConsumerGroup, consumer_id: str) -> GroupMember:
         """取成员，不存在即 `350014`（`heartbeat` 的成员判定与 `join` 的返回取值共用）。

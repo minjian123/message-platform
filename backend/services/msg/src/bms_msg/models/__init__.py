@@ -9,6 +9,7 @@
 """
 
 from bms_msg.models.partition import MsgPartition
+from bms_msg.models.quota import MsgQuota
 from bms_msg.models.replay import (
     TASK_CANCELLED,
     TASK_COMPLETED,
@@ -58,6 +59,7 @@ __all__ = [
     "TASK_RUNNING",
     "TASK_TERMINAL_STATUSES",
     "MsgPartition",
+    "MsgQuota",
     "MsgReplayTask",
     "MsgTenantLifecycle",
     "MsgTopic",
@@ -66,6 +68,7 @@ __all__ = [
 MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.topic",
     "bms_msg.models.partition",
+    "bms_msg.models.quota",
     "bms_msg.models.replay",
     "bms_msg.models.tenant_lifecycle",
 )

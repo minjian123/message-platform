@@ -8,9 +8,12 @@
 - 命名空间校验用 `CurrentTenant.ensure_namespace()`，与消费守卫共用同一判定（`350010`）。
 """
 
+from collections.abc import Callable
 from typing import Annotated, cast
 
 from bms_core.core.config import get_settings
+from bms_core.db.session import DbSession, get_platform_uow
+from bms_core.db.unit_of_work import UnitOfWork
 from fastapi import Depends, Request
 
 from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter, default_backpressure_tuning
@@ -19,7 +22,7 @@ from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import PartitionDirectory
-from bms_msg.broker.group import GroupStore
+from bms_msg.broker.group import GroupStore, InMemoryGroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetEnumerator, OffsetPurger, OffsetResetter, OffsetStore
@@ -30,15 +33,21 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
+from bms_msg.quota.cache import QuotaCache
+from bms_msg.quota.service import QuotaService
+from bms_msg.repositories.quota import QuotaRepository
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.registry import RpcRegistry
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
+from bms_msg.usage.counter import DeliveryCounter, default_delivery_counter
+from bms_msg.usage.snapshot import StorageUsageSampler, UsageSnapshotService
 
 __all__ = [
     "AuditSinkDep",
     "BackpressureMetricsDep",
     "BackpressureTuningDep",
+    "CachedQuotaServiceDep",
     "ConnectionRegistryDep",
     "ConnectionTuningDep",
     "CurrentTenantDep",
@@ -46,6 +55,7 @@ __all__ = [
     "DeadLetterQueueDep",
     "DelaySchedulerDep",
     "DelayStoreDep",
+    "DeliveryCounterDep",
     "DeliveryStateDep",
     "GroupStoreDep",
     "IdempotencyStoreDep",
@@ -55,6 +65,8 @@ __all__ = [
     "OffsetResetterDep",
     "OffsetStoreDep",
     "PartitionDirectoryDep",
+    "QuotaCacheDep",
+    "QuotaServiceDep",
     "RateLimiterDep",
     "ReplayRunnerDep",
     "RetentionThrottleDep",
@@ -64,6 +76,7 @@ __all__ = [
     "StreamTuningDep",
     "TopicCacheDep",
     "UowFactoryDep",
+    "UsageSnapshotDep",
     "WaiterDep",
     "get_audit_sink",
     "get_backpressure_metrics",
@@ -92,6 +105,8 @@ __all__ = [
     "get_stream_tuning",
     "get_topic_cache",
     "get_uow_factory",
+    "get_usage_counter",
+    "get_usage_snapshot",
     "get_waiter",
 ]
 
@@ -561,3 +576,150 @@ def get_idempotency_store(request: Request) -> InProcessIdempotencyStore:
 
 IdempotencyStoreDep = Annotated[InProcessIdempotencyStore, Depends(get_idempotency_store)]
 """路由参数写法：`store: IdempotencyStoreDep`（进程内幂等去重）。"""
+
+
+def get_quota_cache(request: Request) -> QuotaCache:
+    """取配额快照缓存（进程级单例；装配期注入，测试 app 缺失时惰性补一份）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        QuotaCache: 配额缓存。
+    """
+    state = request.app.state
+    cache = getattr(state, "quota_cache", None)
+    if cache is None:
+        cache = QuotaCache()
+        state.quota_cache = cache
+    return cast("QuotaCache", cache)
+
+
+def get_usage_counter(request: Request) -> DeliveryCounter:
+    """取今日投递计数器（进程级单例；测试 app 缺失时惰性补一份）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        DeliveryCounter: 计数器。
+    """
+    state = request.app.state
+    counter = getattr(state, "delivery_counter", None)
+    if counter is None:
+        counter = default_delivery_counter()
+        state.delivery_counter = counter
+    return cast("DeliveryCounter", counter)
+
+
+def get_storage_sampler(request: Request) -> StorageUsageSampler:
+    """取存储用量采样器（进程级单例；测试 app 缺失时按缺省数据根补一份）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        StorageUsageSampler: 采样器。
+    """
+    state = request.app.state
+    sampler = getattr(state, "storage_usage_sampler", None)
+    if sampler is None:
+        # 局部导入：`data_root()` 依赖文件存储模块，放在模块顶层会拉大依赖面。
+        from bms_msg.broker.file_store import data_root
+
+        sampler = StorageUsageSampler(root=data_root())
+        state.storage_usage_sampler = sampler
+    return cast("StorageUsageSampler", sampler)
+
+
+def get_usage_snapshot(
+    request: Request,
+    uow: Annotated[UnitOfWork, Depends(get_platform_uow)],
+) -> UsageSnapshotService:
+    """取用量快照服务（请求级会话 + 进程级运行态）。
+
+    Args:
+        request: 当前请求。
+        uow: 平台库工作单元（元数据计数）。
+
+    Returns:
+        UsageSnapshotService: 用量快照服务。
+    """
+    return UsageSnapshotService(
+        session=cast("DbSession", uow.session),
+        groups=_state_or(request, "group_store", InMemoryGroupStore),
+        delivery_state=_state_or(request, "delivery_state", DeliveryState),
+        connections=_state_or(request, "connection_registry", ConnectionRegistry),
+        counter=get_usage_counter(request),
+        sampler=get_storage_sampler(request),
+    )
+
+
+def _state_or[StateT](request: Request, name: str, factory: Callable[[], StateT]) -> StateT:
+    """取进程级状态；最小测试 app 缺失时惰性补一份并挂回 `app.state`。
+
+    Args:
+        request: 当前请求。
+        name: 状态属性名。
+        factory: 缺失时的构造器。
+
+    Returns:
+        StateT: 状态实例。
+    """
+    state = request.app.state
+    value = getattr(state, name, None)
+    if value is None:
+        value = factory()
+        setattr(state, name, value)
+    return cast("StateT", value)
+
+
+def get_quota_service(
+    request: Request,
+    uow: Annotated[UnitOfWork, Depends(get_platform_uow)],
+    usage: Annotated[UsageSnapshotService, Depends(get_usage_snapshot)],
+) -> QuotaService:
+    """取配额服务（请求级仓储 + 进程级缓存 / 用量）。
+
+    Args:
+        request: 当前请求。
+        uow: 平台库工作单元。
+        usage: 用量快照服务。
+
+    Returns:
+        QuotaService: 配额服务。
+    """
+    return QuotaService(
+        cache=get_quota_cache(request),
+        repo=QuotaRepository(cast("DbSession", uow.session)),
+        uow=uow,
+        usage=usage,
+    )
+
+
+def get_quota_service_cached(request: Request) -> QuotaService:
+    """取只读缓存的配额服务（连接守卫用：不查库、按缺省值兜底）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        QuotaService: 无仓储 / 无用量的配额服务。
+    """
+    return QuotaService(cache=get_quota_cache(request))
+
+
+QuotaCacheDep = Annotated[QuotaCache, Depends(get_quota_cache)]
+"""路由参数写法：`cache: QuotaCacheDep`（配额快照缓存）。"""
+
+DeliveryCounterDep = Annotated[DeliveryCounter, Depends(get_usage_counter)]
+"""路由参数写法：`counter: DeliveryCounterDep`（今日投递计数）。"""
+
+UsageSnapshotDep = Annotated[UsageSnapshotService, Depends(get_usage_snapshot)]
+"""路由参数写法：`usage: UsageSnapshotDep`（用量快照）。"""
+
+QuotaServiceDep = Annotated[QuotaService, Depends(get_quota_service)]
+"""路由参数写法：`quota: QuotaServiceDep`（请求级配额服务）。"""
+
+CachedQuotaServiceDep = Annotated[QuotaService, Depends(get_quota_service_cached)]
+"""连接守卫参数写法：`quota: CachedQuotaServiceDep`（只读缓存）。"""

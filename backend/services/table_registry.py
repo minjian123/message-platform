@@ -46,8 +46,15 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="租户生命周期动作账本（版本戳 / 删除保留期 / 清理进度）",
     ),
+    TableRecord(
+        table_name="msg_quota",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="消息维度配额限额（六维 / 软硬限 / 作用域 / 来源；不存用量）",
+    ),
 )
-"""msg 元数据三表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
+"""msg 元数据四表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 
 
 def register() -> None:

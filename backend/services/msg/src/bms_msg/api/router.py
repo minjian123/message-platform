@@ -38,6 +38,7 @@ api_router = mount_service_routers(
             admin_delayed.router,
             admin_replay.router,
             admin_quota.router,
+            admin_quota.admin_router,
         ]
     )
 )

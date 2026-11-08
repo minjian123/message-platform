@@ -31,9 +31,11 @@ from bms_msg.errors import (
     MsgPartitionCountInvalidError,
     MsgTopicExistsError,
     MsgTopicNotFoundError,
+    MsgTopicQuotaExceededError,
 )
 from bms_msg.models.partition import MsgPartition
 from bms_msg.models.topic import CLEANUP_DELETE, MsgTopic
+from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.tenant.context import CurrentTenant
@@ -57,6 +59,7 @@ class TopicService:
         uow: UnitOfWork,
         *,
         cache: TopicCache | None = None,
+        quota: QuotaService | None = None,
     ) -> None:
         """初始化。
 
@@ -65,11 +68,13 @@ class TopicService:
             partitions: 分区仓储（同会话）。
             uow: 工作单元（事务边界）。
             cache: 进程内主题快照缓存（None = 不失效；数据面读最新值靠它）。
+            quota: 配额服务（None = 不判主题数配额，兼容既有单测）。
         """
         self._topics = topics
         self._partitions = partitions
         self._uow = uow
         self._cache = cache
+        self._quota = quota
 
     async def create_topic(self, *, tenant: CurrentTenant, request: TopicCreateRequest) -> MsgTopic:
         """创建主题（同事务写主题行 + N 条分区行）。
@@ -94,6 +99,7 @@ class TopicService:
         async with self._uow.begin():
             if await self._topics.get_by_identity(namespace=request.namespace, name=request.name) is not None:
                 raise MsgTopicExistsError(f"主题已存在：{request.namespace}/{request.name}")
+            await self._ensure_quota(tenant=tenant, namespace=request.namespace)
             topic = await self._topics.create(
                 tenant_id=int(tenant.tenant_id),
                 namespace=request.namespace,
@@ -222,6 +228,29 @@ class TopicService:
             return
         self._cache.invalidate(tenant_id=tenant_id, namespace=namespace, name=name)
         _LOGGER.info("msg_topic_cache", outcome="invalidate", tenant_id=tenant_id, namespace=namespace, topic=name)
+
+    async def _ensure_quota(self, *, tenant: CurrentTenant, namespace: str) -> None:
+        """校验主题数配额（事务内；硬限已到即 `350025`）。
+
+        Args:
+            tenant: 当前租户。
+            namespace: 命名空间（主题数按租户 / 命名空间维度计）。
+
+        Raises:
+            MsgTopicQuotaExceededError: 主题数已达硬限（350025 / 429）。
+        """
+        if self._quota is None:
+            return
+        limit = await self._quota.effective(int(tenant.tenant_id), namespace, "topic_count")
+        if limit.limit <= 0:
+            return
+        used = await self._topics.count_topics(namespace=namespace, keyword=None)
+        if used >= limit.limit:
+            raise MsgTopicQuotaExceededError(
+                f"主题数已达配额上限（{namespace or '租户级'}）：{used}/{limit.limit}",
+                limit=limit.limit,
+                usage=used,
+            )
 
     def _ensure_namespace(self, tenant: CurrentTenant, namespace: str) -> None:
         """校验命名空间形态与可用性（`350010`；单点复用 `CurrentTenant.ensure_namespace`）。

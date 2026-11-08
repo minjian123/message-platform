@@ -45,19 +45,22 @@ from bms_msg.api.deps import (
     DeadLetterQueueDep,
     DelaySchedulerDep,
     DelayStoreDep,
+    DeliveryCounterDep,
     DeliveryStateDep,
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
     PartitionDirectoryDep,
+    QuotaServiceDep,
     RateLimiterDep,
     RetentionThrottleDep,
     StorageGateDep,
     TopicCacheDep,
+    UsageSnapshotDep,
     WaiterDep,
 )
 from bms_msg.api.frame.guard import CONNECTION_GUARD
-from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage, retry_after_ms
+from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage, RateLimiter, retry_after_ms
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayService, DelayStore
@@ -65,6 +68,7 @@ from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState
 from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
+from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.retention import RetentionService, RetentionThrottle
 from bms_msg.broker.router import TopicRouter
@@ -73,7 +77,8 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
 from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import MS_PER_SECOND
-from bms_msg.errors import MsgErrorCode, MsgRateLimitedError
+from bms_msg.errors import MsgErrorCode, MsgRateLimitedError, MsgStorageWatermarkExceededError
+from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
     AckRequest,
@@ -87,6 +92,7 @@ from bms_msg.schemas.message import (
     PublishResult,
 )
 from bms_msg.tenant.context import CurrentTenant
+from bms_msg.usage.counter import DeliveryCounter
 
 __all__ = [
     "ACK_ERROR_CODES",
@@ -234,6 +240,7 @@ def delivery_service(
     waiter: DeliveryWaiter | None = None,
     directory: PartitionDirectory | None = None,
     gate: StorageGate | None = None,
+    counter: DeliveryCounter | None = None,
 ) -> DeliveryService:
     """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态 / 背压参数）。
 
@@ -251,6 +258,7 @@ def delivery_service(
         waiter: 分区唤醒器（None 表示不唤醒，仅单测直连时出现）。
         directory: 分区目录登记表（02-1）。
         gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
+        counter: 今日投递计数（05-2；None 表示不计数）。
 
     Returns:
         DeliveryService: 投递服务。
@@ -264,6 +272,7 @@ def delivery_service(
         backpressure=backpressure,
         waiter=waiter,
         gate=gate,
+        counter=counter,
     )
 
 
@@ -458,6 +467,126 @@ def message_item(message: StoredMessage, topic: str, delivery_count: int) -> Mes
     return item
 
 
+async def _ensure_quota_rate(
+    *,
+    quota: QuotaService,
+    limiter: RateLimiter,
+    metrics: BackpressureMetrics,
+    tenant: CurrentTenant,
+    namespace: str,
+    topic: str,
+) -> None:
+    """生产速率双闸门：静态两级桶（既有）+ 租户配额速率（05-2）。
+
+    Args:
+        quota: 配额服务（取当前生效 `produce_rate`）。
+        limiter: 生产限流器。
+        metrics: 背压指标（记录拒绝）。
+        tenant: 当前租户。
+        namespace: 命名空间。
+        topic: 主题名（静态主题桶键用）。
+
+    Raises:
+        MsgRateLimitedError: 任一闸门拒绝（350005 / 429）。
+    """
+    verdict = limiter.check(tenant=tenant.code, topic=(tenant.code, namespace, topic))
+    if not verdict.allowed:
+        metrics.record_rate_rejected(scope=verdict.scope, tenant=tenant.code, topic=topic)
+        raise MsgRateLimitedError(
+            f"生产速率超出配额（{verdict.scope}），请稍后重试",
+            retry_after_ms=retry_after_ms(verdict),
+        )
+    limit = await quota.effective(int(tenant.tenant_id), namespace, "produce_rate")
+    quota_verdict = limiter.check_quota(
+        tenant=tenant.code,
+        namespace=namespace,
+        rate_per_second=limit.limit,
+    )
+    if not quota_verdict.allowed:
+        metrics.record_rate_rejected(scope=quota_verdict.scope, tenant=tenant.code, topic=topic)
+        raise MsgRateLimitedError(
+            f"生产速率超出配额（{namespace or '租户级'}），请稍后重试",
+            retry_after_ms=retry_after_ms(quota_verdict),
+        )
+
+
+def _payload_bytes(request: PublishRequest) -> int:
+    """取本次发布的消息体字节数（帧走原始字节，JSON 走 base64 估算）。
+
+    Args:
+        request: 发布请求。
+
+    Returns:
+        int: 字节数。
+    """
+    raw = request.raw_payload
+    if raw is not None:
+        return len(raw)
+    return len(request.payload) * 3 // 4
+
+
+async def _ensure_storage_quota(
+    *,
+    quota: QuotaService,
+    usage: UsageSnapshotDep,
+    tenant_id: int,
+    namespace: str,
+    incoming: int,
+) -> None:
+    """存储配额闸门（在存储水位闸门之前判；硬限已到即 `350022`）。
+
+    Args:
+        quota: 配额服务。
+        usage: 用量快照（存储字节数）。
+        tenant_id: 租户主键。
+        namespace: 命名空间。
+        incoming: 本次新增字节数。
+
+    Raises:
+        MsgStorageWatermarkExceededError: 当前用量 + 本次新增超过硬限（507）。
+    """
+    limit = await quota.effective(tenant_id, namespace, "storage_bytes")
+    if limit.limit <= 0:
+        return
+    stored = await usage.storage_bytes(tenant_id)
+    if stored is None:
+        return
+    if stored + incoming <= limit.limit:
+        return
+    raise MsgStorageWatermarkExceededError(
+        f"消息存储已达租户配额上限：{stored + incoming}/{limit.limit}",
+        data={
+            "used_ratio": round((stored + incoming) / limit.limit, 4),
+            "threshold": 1.0,
+            "volume": "tenant_quota",
+            "free_bytes": max(limit.limit - stored, 0),
+            "reason": "tenant_quota",
+        },
+    )
+
+
+async def _ensure_unacked_quota(
+    *,
+    quota: QuotaService,
+    usage: UsageSnapshotDep,
+    tenant_id: int,
+) -> bool:
+    """未确认配额闸门（已到硬限返回 True，调用方返空批 + `paused=true`）。
+
+    Args:
+        quota: 配额服务。
+        usage: 用量快照。
+        tenant_id: 租户主键。
+
+    Returns:
+        bool: 已达硬限返回 True。
+    """
+    limit = await quota.effective(tenant_id, "", "unacked_count")
+    if limit.limit <= 0:
+        return False
+    return await usage.unacked_count(tenant_id) >= limit.limit
+
+
 async def publish(
     req: PublishRequest,
     tenant: DataPlaneTenantDep,
@@ -474,6 +603,9 @@ async def publish(
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
     gate: StorageGateDep,
+    quota: QuotaServiceDep,
+    usage: UsageSnapshotDep,
+    counter: DeliveryCounterDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -482,18 +614,27 @@ async def publish(
     延迟发布：`offset` 为 null、返回 `deliver_at` 与 `log_id`；档位非法 10001，延迟区已满 350015。
     首个延迟发布会惰性启动到期推进任务（无延迟消息的进程不起后台任务）。
     入口按主题保留口径清理本分区到期段（幂等；见 01-6）。
-    **限流在两条分支之前**（03-5）：延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；
-    超出租户 / 主题配额返回 350005（429 + `Retry-After`）。
-    **存储水位在两条分支里各判一次**（02-6）：盘满或数据卷不可用返回 350022（507），延迟发布同样拒绝
-    （不得先收进延迟区再丢）；`data` 带当前水位、阈值、数据卷与剩余字节。
+    **首次发布懒初始化配额缺省行**（05-2）；**限流在两条分支之前**（03-5 + 05-2）：
+    延迟发布同样是生产，不限会让「延迟档」成为绕过限流的旁路；超出速率返回 350005（429 + `Retry-After`）。
+    **存储配额在存储水位之前判**（05-2 / 02-6）：超租户存储硬限返回 350022（507，
+    `data.reason=tenant_quota`）；盘满同样 350022（`data.reason=watermark`）。
     """
-    verdict = limiter.check(tenant=tenant.code, topic=(tenant.code, req.namespace, req.topic))
-    if not verdict.allowed:
-        metrics.record_rate_rejected(scope=verdict.scope, tenant=tenant.code, topic=req.topic)
-        raise MsgRateLimitedError(
-            f"生产速率超出配额（{verdict.scope}），请稍后重试",
-            retry_after_ms=retry_after_ms(verdict),
-        )
+    await quota.ensure_initialized(int(tenant.tenant_id))
+    await _ensure_quota_rate(
+        quota=quota,
+        limiter=limiter,
+        metrics=metrics,
+        tenant=tenant,
+        namespace=req.namespace,
+        topic=req.topic,
+    )
+    await _ensure_storage_quota(
+        quota=quota,
+        usage=usage,
+        tenant_id=int(tenant.tenant_id),
+        namespace=req.namespace,
+        incoming=_payload_bytes(req),
+    )
     if req.delay_level is not None:
         order = await _delay_service(
             uow,
@@ -536,6 +677,7 @@ async def publish(
         tenant_id=int(tenant.tenant_id),
         directory=directory,
         gate=gate,
+        counter=counter,
     ).publish(tenant=tenant, request=req)
     return ApiResponse.ok(
         PublishResult(
@@ -594,6 +736,9 @@ async def consume(
     cache: TopicCacheDep,
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
+    quota: QuotaServiceDep,
+    usage: UsageSnapshotDep,
+    counter: DeliveryCounterDep,
 ) -> ApiResponse[ConsumeResult]:
     """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
@@ -634,6 +779,10 @@ async def consume(
         await ensure_member(
             tenant=tenant, uow=uow, groups=groups, state=state, cache=cache, request=req, directory=directory
         )
+        if await _ensure_unacked_quota(quota=quota, usage=usage, tenant_id=int(tenant.tenant_id)):
+            measured = state.usage(state_key)
+            metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)
+            return _consume_result(ConcurrentStableList(), req, paused=True, usage=measured)
         delivered = await delivery_service(
             uow,
             store,
@@ -645,6 +794,7 @@ async def consume(
             backpressure=backpressure,
             waiter=waiter,
             directory=directory,
+            counter=counter,
         ).consume(tenant=tenant, request=req)
         measured = state.usage(state_key)
         metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)

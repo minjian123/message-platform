@@ -55,18 +55,44 @@ status = "enabled"
 
 # ---- 配额只读投影（07D 任务 03 附录 C；与上面的 form 声明并存，不互相取代）----
 # 单一事实源在 msg 侧；平台经配额投影读取器实时只读取数，不双写、不落库。
-# path 为内部公开契约完整路径（从 /api/v1 起），端点由 msg 最小实现返回 {items: []}。
-# quota_unit 为声明级单值，四维度单位不统一属 02-3 契约现状，见实施记录「偏差与遗留」。
+# 按单位拆三条声明（02-3 契约的 `quota_unit` 是声明级单值，六维单位不统一）：
+# count / bytes / qps 各一条，路径共用 `/tenant-usage/quota` 前缀下的三个物理端点。
 [[data_sources]]
-data_source_key = "msg_quota_projection"
-name = "消息平台配额投影"
+data_source_key = "msg_quota_count"
+name = "消息平台配额投影（条数）"
 kind = "quota"
-data_source = "msg.msg.quota_projection"
+data_source = "msg.msg.quota_count"
 origin = "product"
 product_key = "msg"
 path = "/api/v1/msg/tenant-usage/quota"
-quota_dimensions = ["topic_count", "storage_bytes", "throughput", "connections"]
+quota_dimensions = ["topic_count", "group_count", "unacked_count", "connection_count"]
 quota_unit = "count"
+quota_period = "none"
+status = "enabled"
+
+[[data_sources]]
+data_source_key = "msg_quota_bytes"
+name = "消息平台配额投影（存储）"
+kind = "quota"
+data_source = "msg.msg.quota_bytes"
+origin = "product"
+product_key = "msg"
+path = "/api/v1/msg/tenant-usage/quota/bytes"
+quota_dimensions = ["storage_bytes"]
+quota_unit = "bytes"
+quota_period = "none"
+status = "enabled"
+
+[[data_sources]]
+data_source_key = "msg_quota_rate"
+name = "消息平台配额投影（速率）"
+kind = "quota"
+data_source = "msg.msg.quota_rate"
+origin = "product"
+product_key = "msg"
+path = "/api/v1/msg/tenant-usage/quota/rate"
+quota_dimensions = ["produce_rate"]
+quota_unit = "qps"
 quota_period = "none"
 status = "enabled"
 
@@ -312,6 +338,23 @@ http_status = 504
 message_key = "msg.error.rpc_stream_idle"
 severity = "warning"
 description = "RPC 流空闲超时（连续 60s 无帧写出，服务端收尾并释放名额）"
+
+# ---- 消息维度配额（05-2：容量到顶，与速率 350005 / 重名 350008 / 组不存在 350013 分工）----
+[[errcodes]]
+code = 350025
+domain = "msg"
+http_status = 429
+message_key = "msg.error.topic_quota_exceeded"
+severity = "warning"
+description = "主题数配额超限（每租户 / 命名空间硬限已到）；应删除主题或申请调整配额"
+
+[[errcodes]]
+code = 350026
+domain = "msg"
+http_status = 429
+message_key = "msg.error.group_quota_exceeded"
+severity = "warning"
+description = "消费组数配额超限（每租户硬限已到）；只拦新建组，已存在组不受影响"
 
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----

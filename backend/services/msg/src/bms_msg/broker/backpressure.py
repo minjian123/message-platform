@@ -21,6 +21,7 @@ import math
 import time
 from dataclasses import dataclass
 
+from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.objects import BaseValueObject
 from bms_core.core.roots import BaseFrameworkObject
 
@@ -294,6 +295,7 @@ class RateLimiter(BaseFrameworkObject):
         self._tenant_buckets: dict[str, TokenBucket] = {}
         self._topic_buckets: dict[TopicKey, TokenBucket] = {}
         self._rpc_buckets: dict[RpcKey, TokenBucket] = {}
+        self._quota_buckets: ConcurrentStableDict[tuple[str, str], tuple[int, TokenBucket]] = ConcurrentStableDict()
 
     @property
     def tuning(self) -> RateLimitTuning:
@@ -310,7 +312,7 @@ class RateLimiter(BaseFrameworkObject):
         Returns:
             int: 桶数量。
         """
-        return len(self._tenant_buckets) + len(self._topic_buckets) + len(self._rpc_buckets)
+        return len(self._tenant_buckets) + len(self._topic_buckets) + len(self._rpc_buckets) + len(self._quota_buckets)
 
     def check(self, *, tenant: str, topic: TopicKey, now: float | None = None) -> RateVerdict:
         """判一次生产请求是否放行（放行时同时扣两级令牌）。
@@ -340,6 +342,38 @@ class RateLimiter(BaseFrameworkObject):
             self._tenant_buckets[tenant].consume(1, moment)
         if self._tuning.topic_per_second > 0:
             self._topic_buckets[topic].consume(1, moment)
+        return RateVerdict(allowed=True, retry_after_ms=0, scope="")
+
+    def check_quota(
+        self,
+        *,
+        tenant: str,
+        namespace: str,
+        rate_per_second: int,
+        now: float | None = None,
+    ) -> RateVerdict:
+        """判一次生产是否放行（05-2 配额速率；与静态两级桶互相独立）。
+
+        速率由配额服务按当前生效限额传入：调整配额后下一次请求即用新值，无需跨键同步。
+        `rate_per_second <= 0` 表示不限（不建桶、不扣令牌）。
+
+        Args:
+            tenant: 租户编码。
+            namespace: 命名空间。
+            rate_per_second: 当前生效速率（条/秒；0 = 不限）。
+            now: 当前 `monotonic` 秒（缺省取当前时刻；用例注入固定值）。
+
+        Returns:
+            RateVerdict: 判定结果（`scope = "tenant"` 表示触发配额速率）。
+        """
+        if rate_per_second <= 0:
+            return RateVerdict(allowed=True, retry_after_ms=0, scope="")
+        moment = time.monotonic() if now is None else now
+        bucket = self._quota_bucket((tenant, namespace), rate_per_second, moment)
+        wait = bucket.can(1, moment)
+        if wait:
+            return RateVerdict(allowed=False, retry_after_ms=wait, scope="tenant")
+        bucket.consume(1, moment)
         return RateVerdict(allowed=True, retry_after_ms=0, scope="")
 
     def check_rpc(self, *, tenant: str, service: str, now: float | None = None) -> RateVerdict:
@@ -420,6 +454,25 @@ class RateLimiter(BaseFrameworkObject):
         self._rpc_buckets[key] = created
         return created
 
+    def _quota_bucket(self, key: tuple[str, str], rate_per_second: int, now: float) -> TokenBucket:
+        """取或建配额速率桶（速率变化即重建，保证调整即时生效）。
+
+        Args:
+            key: 配额键 `(tenant, namespace)`。
+            rate_per_second: 当前生效速率（正数）。
+            now: 当前 `monotonic` 秒。
+
+        Returns:
+            TokenBucket: 桶实例。
+        """
+        existing = self._quota_buckets.get(key)
+        if existing is not None and existing[0] == rate_per_second:
+            return existing[1]
+        self._prune(now)
+        created = TokenBucket(rate_per_second=rate_per_second, burst_seconds=self._tuning.burst_seconds)
+        self._quota_buckets[key] = (rate_per_second, created)
+        return created
+
     def _prune(self, now: float) -> None:
         """桶数达到上限时清理：先清满桶，再按插入序淘汰最旧。
 
@@ -434,6 +487,12 @@ class RateLimiter(BaseFrameworkObject):
             self._topic_buckets.pop(topic_name, None)
         for rpc_name in [name for name, bucket in self._rpc_buckets.items() if bucket.is_full(now)]:
             self._rpc_buckets.pop(rpc_name, None)
+        for quota_key, (_rate, bucket) in list(self._quota_buckets.items()):
+            if bucket.is_full(now):
+                self._quota_buckets.pop(quota_key, None)
+        while self.buckets() >= self._bucket_limit and self._quota_buckets:
+            quota_key = next(iter(self._quota_buckets))
+            self._quota_buckets.pop(quota_key, None)
         while self.buckets() >= self._bucket_limit and self._topic_buckets:
             table_key = next(iter(self._topic_buckets))
             self._topic_buckets.pop(table_key, None)

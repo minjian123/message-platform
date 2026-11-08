@@ -1,0 +1,9 @@
+{
+  "distDir": "dist",
+  "entryGzipKb": 24,
+  "largestGzipKb": 12,
+  "maxEntryFiles": 12,
+  "minAsyncChunks": 1,
+  "pageChunkHints": ["QuotaPanel"],
+  "note": "模块产物单独计量：入口块＝从 remoteEntry.js 出发的引用闭包（种子追静态+动态引用，其余只追静态引用）；QuotaPanel 经动态 import() 引用，不进闭包。首轮构建实测 2026-11-08：入口闭包约 18.8 KB gzip，取整阈值 24 / 12 / 12；异步块 1 个。"
+}

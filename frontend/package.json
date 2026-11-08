@@ -1,0 +1,29 @@
+{
+  "name": "msg-frontend-workspace",
+  "private": true,
+  "type": "module",
+  "description": "msg 产品前端工作区（消息配额只读插件；平台基座包经 file: 引工作区 bms 克隆）",
+  "scripts": {
+    "msg:lint": "pnpm --filter @msg/module_msg run lint",
+    "msg:typecheck": "pnpm --filter @msg/module_msg run typecheck",
+    "msg:test": "pnpm --filter @msg/module_msg run test",
+    "msg:build": "pnpm --filter @msg/module_msg run build",
+    "msg:build:standalone": "pnpm --filter @msg/module_msg run build:standalone",
+    "msg:budget": "pnpm --filter @msg/module_msg run budget",
+    "msg:guard": "pnpm --filter @msg/module_msg run guard:isolation",
+    "msg:check": "pnpm run msg:lint && pnpm run msg:typecheck && pnpm run msg:test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "eslint": "^10.10.0",
+    "eslint-plugin-vue": "^10.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.70.0",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0",
+    "vue-eslint-parser": "^10.4.1"
+  }
+}

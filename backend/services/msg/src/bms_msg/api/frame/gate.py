@@ -55,15 +55,18 @@ from bms_msg.api.deps import (
     DeadLetterQueueDep,
     DelaySchedulerDep,
     DelayStoreDep,
+    DeliveryCounterDep,
     DeliveryStateDep,
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
     PartitionDirectoryDep,
+    QuotaServiceDep,
     RateLimiterDep,
     RetentionThrottleDep,
     StorageGateDep,
     TopicCacheDep,
+    UsageSnapshotDep,
     WaiterDep,
 )
 from bms_msg.api.frame.media import is_frame_request
@@ -91,8 +94,11 @@ from bms_msg.errors import (
     MsgTenantNotFoundError,
     MsgVersionUnsupportedError,
 )
+from bms_msg.quota.service import QuotaService
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
+from bms_msg.usage.counter import DeliveryCounter
+from bms_msg.usage.snapshot import UsageSnapshotService
 
 __all__ = [
     "FrameHandled",
@@ -377,6 +383,9 @@ async def _invoke(
     throttle: RetentionThrottle,
     directory: PartitionDirectory,
     gate: StorageGate | None,
+    quota: QuotaService,
+    usage: UsageSnapshotService,
+    counter: DeliveryCounter,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -424,6 +433,9 @@ async def _invoke(
             throttle=throttle,
             directory=directory,
             gate=gate,
+            quota=quota,
+            usage=usage,
+            counter=counter,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -441,6 +453,9 @@ async def _invoke(
             cache=cache,
             throttle=throttle,
             directory=directory,
+            quota=quota,
+            usage=usage,
+            counter=counter,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -499,6 +514,9 @@ async def _handle_frame(
     throttle: RetentionThrottle,
     directory: PartitionDirectory,
     gate: StorageGate | None,
+    quota: QuotaService,
+    usage: UsageSnapshotService,
+    counter: DeliveryCounter,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -598,6 +616,9 @@ async def _handle_frame(
             throttle=throttle,
             directory=directory,
             gate=gate,
+            quota=quota,
+            usage=usage,
+            counter=counter,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -642,6 +663,9 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         throttle: RetentionThrottleDep,
         directory: PartitionDirectoryDep,
         gate: StorageGateDep,
+        quota: QuotaServiceDep,
+        usage: UsageSnapshotDep,
+        counter: DeliveryCounterDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -694,6 +718,9 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             throttle=throttle,
             directory=directory,
             gate=gate,
+            quota=quota,
+            usage=usage,
+            counter=counter,
         )
         raise FrameHandled(response)
 

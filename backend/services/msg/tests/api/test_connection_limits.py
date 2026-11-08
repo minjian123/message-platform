@@ -28,7 +28,7 @@ from bms_core.services.module_registry import register_error_code_records, reset
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient, Response
 
-from bms_msg.api.deps import get_connection_tuning
+from bms_msg.api.deps import get_connection_tuning, get_quota_service
 from bms_msg.api.frame import guard as guard_module
 from bms_msg.broker.connection import ConnectionTuning
 from bms_msg.errors import MsgErrorCode
@@ -279,3 +279,25 @@ def test_tenant_id_helper_reads_context_and_falls_back_to_none() -> None:
         }
     )
     assert guard_module._tenant_id(parsed) == 7001  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_connection_tenant_quota_rejects_new_connection(api_app: FastAPI) -> None:
+    """租户连接数配额（350020）：已有一条连接时新连接被拒，副本全局上限不参与。"""
+    _use_tuning(
+        api_app,
+        replace(BASE_TUNING, max_connections=10),
+    )
+
+    class _Quota:
+        async def effective(self, tenant_id: int, namespace: str, quota_key: str) -> object:
+            del tenant_id, namespace, quota_key
+            return SimpleNamespace(limit=1)
+
+    api_app.dependency_overrides[get_quota_service] = lambda: _Quota()
+    async with _client(api_app, host="10.0.0.1", port=1) as first:
+        assert (await first.post("/msg/connection/heartbeat", headers=DEMO_HEADERS)).status_code == 200
+    async with _client(api_app, host="10.0.0.2", port=2) as second:
+        rejected = await second.post("/msg/connection/heartbeat", headers=DEMO_HEADERS)
+    assert rejected.status_code == 429
+    assert _body(rejected)["code"] == int(MsgErrorCode.CONNECTION_LIMIT_EXCEEDED)
+    assert _body(rejected)["data"]["quota_key"] == "connection_count"

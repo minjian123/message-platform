@@ -7,7 +7,8 @@
   延迟区已满 `350015`、重放任务不存在 `350016`、重放任务状态非法 `350017`、
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
-  RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`
+  RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`、主题数配额超限 `350025`、
+  消费组数配额超限 `350026`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
@@ -47,6 +48,7 @@ __all__ = [
     "MsgError",
     "MsgErrorCode",
     "MsgFrameInvalidError",
+    "MsgGroupCountQuotaExceededError",
     "MsgGroupNotFoundError",
     "MsgMemberInvalidError",
     "MsgMessageNotFoundError",
@@ -67,6 +69,7 @@ __all__ = [
     "MsgTenantSuspendedError",
     "MsgTopicExistsError",
     "MsgTopicNotFoundError",
+    "MsgTopicQuotaExceededError",
     "MsgVersionUnsupportedError",
     "Outcome",
 ]
@@ -170,6 +173,20 @@ class MsgErrorCode(IntEnum):
     `350006` 是单帧结果超过 1 MiB、`350023` 是方法未注册；本码只表示「这条流半天没吐数据」——
     服务端据此收尾并释放名额，客户端应重开流而不是原地重试。
     与连接心跳（03-4 的 10s / 30s）**不是一件事**：那个判连接死活，本码判流有没有进展。
+    """
+
+    TOPIC_QUOTA_EXCEEDED = 350025
+    """主题数配额超限（每租户 / 命名空间的硬限已到）：429，客户端应删除主题或申请调整配额。
+
+    与 `350008` 分工：那个是「同名主题已存在」（改个名即可），本码是「数量到顶」
+    （不释放就永远建不了）；与 `350005` 分工：那个是速率（退避可解），本码是容量。
+    """
+
+    GROUP_QUOTA_EXCEEDED = 350026
+    """消费组数配额超限（每租户硬限已到）：429，客户端应清理空组或申请调整配额。
+
+    与 `350013` 分工：那个是「组不存在」，本码是「组数量到顶」；只拦新建组，
+    已存在组的心跳 / 拉取 / 离开不受影响。
     """
 
 
@@ -352,6 +369,50 @@ class MsgRpcStreamIdleError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.RPC_STREAM_IDLE
     http_status_: ClassVar[int] = 504
+
+
+class MsgTopicQuotaExceededError(MsgError):
+    """主题数配额超限（350025 / 429）：每租户 / 命名空间硬限已到。
+
+    `data` 三个字段：`quota_key`（固定 `topic_count`）、`limit`、`usage`——客户端据此
+    区分「数量到顶」与「重名」（350008），并决定删除主题还是申请调整配额。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.TOPIC_QUOTA_EXCEEDED
+    http_status_: ClassVar[int] = 429
+
+    def __init__(self, message: str | None = None, *, limit: int = 0, usage: int = 0) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息。
+            limit: 当前硬限（缺省 0：仅用于对账构造）。
+            usage: 当前用量（缺省 0）。
+        """
+        super().__init__(
+            message,
+            data={"quota_key": "topic_count", "limit": limit, "usage": usage},
+        )
+
+
+class MsgGroupCountQuotaExceededError(MsgError):
+    """消费组数配额超限（350026 / 429）：每租户硬限已到，只拦新建组。"""
+
+    code_: ClassVar[int] = MsgErrorCode.GROUP_QUOTA_EXCEEDED
+    http_status_: ClassVar[int] = 429
+
+    def __init__(self, message: str | None = None, *, limit: int = 0, usage: int = 0) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息。
+            limit: 当前硬限（缺省 0：仅用于对账构造）。
+            usage: 当前用量（缺省 0）。
+        """
+        super().__init__(
+            message,
+            data={"quota_key": "group_count", "limit": limit, "usage": usage},
+        )
 
 
 class MsgRpcInProgressError(MsgError):

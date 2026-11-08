@@ -1,0 +1,13 @@
+packages:
+  - 'modules/*'
+  - 'packages/*'
+  # 平台基座包（跨仓，工作区 bms 克隆）：纳入本工作区成员，使其内部 `workspace:*` 依赖可解析
+  # （只声明 file: 而不纳入成员时，pnpm 报 ERR_PNPM_WORKSPACE_PKG_NOT_FOUND）。
+  # 前提：`mdm/` 与 `bms/` 同级克隆（见任务 01_04 详细设计 §3.2「构建前提」）。
+  - '../../bms/frontend/packages/*'
+allowBuilds:
+  '@parcel/watcher': true
+  vue-demi: true
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - vue-demi
