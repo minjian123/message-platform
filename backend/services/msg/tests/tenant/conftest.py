@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.events.base import EventEnvelope
 from bms_core.models.base import Base
 from bms_core.tenant.lifecycle import build_tenant_lifecycle_event
@@ -28,7 +28,7 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger, SessionScope
-from bms_msg.tenant.purge import reset_tenant_purge_metrics
+from bms_msg.tenant.purge import TenantPurgeService, reset_tenant_purge_metrics
 from bms_msg.tenant.runtime import TenantLifecycleRuntime, reset_tenant_lifecycle_metrics
 
 TENANT_ID = 7001
@@ -177,20 +177,44 @@ def runtime(root: Path, ledger: DbTenantLifecycleLedger, audit: RecordingAudit) 
     )
 
 
+@pytest.fixture
+def purge_service(runtime: TenantLifecycleRuntime, ledger: DbTenantLifecycleLedger, root: Path) -> TenantPurgeService:
+    """物理清理服务，并挂到运行时上（`on_purged` 经运行时入口调用）。
+
+    Args:
+        runtime: 生命周期运行时。
+        ledger: 账本。
+        root: 数据根。
+
+    Returns:
+        TenantPurgeService: 清扫 / 清理服务。
+    """
+    service = TenantPurgeService(
+        ledger=ledger,
+        runtime=runtime,
+        data_root=root / "data",
+        offsets_root=root / "offsets",
+    )
+    runtime.attach_purge(service)
+    return service
+
+
 def lifecycle_event(
     event_type: str,
     *,
     tenant_id: int = TENANT_ID,
-    version: int = 1,
+    version: int | None = 1,
     status: str = "active",
+    extra: ConcurrentStableDict[str, object] | None = None,
 ) -> EventEnvelope:
     """构造一条租户生命周期事件。
 
     Args:
         event_type: 事件类型。
         tenant_id: 租户主键。
-        version: 版本戳。
+        version: 版本戳（`tenant.purged` 契约无该字段，传 None 即不写载荷）。
         status: 租户状态。
+        extra: 事件专属附加载荷。
 
     Returns:
         EventEnvelope: 事件信封。
@@ -201,6 +225,7 @@ def lifecycle_event(
         db_key="tenant_demo",
         status=status,
         version=version,
+        extra=extra,
     )
 
 

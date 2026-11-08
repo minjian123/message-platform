@@ -1,9 +1,11 @@
-"""租户到期清理：计划（dry-run）、执行与后台清扫（05-5 详细设计 §8 / §9）。
+"""租户资源物理清理：`tenant.purged` 触发的一次性清理 + 存量行周期收敛（05-5 详细设计 §8 / §9）。
 
-- **按主题保留期**：每个主题 `deleted_event_at + retention_ms` 到期；`purge_after` 取最早到期点。
+- **两条入口**：`purge_tenant()` 由平台 `tenant.purged` 触发（授权删除，强制全量，不看保留期）；
+  `run_once()` 是按 `purge_after` 的周期清扫，**只服务 05-5 存量行**（新行 `purge_after` 恒 NULL）。
+- **按主题**：每个主题 `deleted_event_at + retention_ms` 为存量路径的到期点；强制路径一律按当前时刻到期。
 - **先关句柄、再删目录**：`FileMessageStore.close_tenant()` / `FileOffsetStore.purge_topic()` 依赖
   `PartitionDirectory` 定位租户，因此目录登记留到删位点之后。
-- **失败不阻塞基座删除**：事件动作只做易失清理与排期；物理删除由本服务重试。清扫失败记
+- **失败不阻塞基座删除**：`tenant.deleted` 只做易失清理与记账；物理删除由本服务重试。清扫失败记
   `failure_count` / `last_error`，下轮继续；审计失败不标记 `purged_at`，下轮补审计。
 - **不新增 HTTP 端点**：`plan()` 是进程内 dry-run，供测试与运维脚本调用；`run_once()` 由启动钩子
   周期驱动。
@@ -40,8 +42,8 @@ from bms_msg.quota.cache import QuotaCache
 from bms_msg.repositories.quota import QuotaRepository
 from bms_msg.repositories.tenant_lifecycle import TenantReplayRef, TenantTopicRef
 from bms_msg.repositories.topic_acl import MsgTopicAclRepository, MsgTopicAclScopeRepository
-from bms_msg.tenant.ledger import TenantLifecycleLedger
-from bms_msg.tenant.runtime import TenantLifecycleRuntime
+from bms_msg.tenant.ledger import TenantDeletedState, TenantLifecycleLedger
+from bms_msg.tenant.runtime import PurgeOutcome, TenantLifecycleRuntime
 from bms_msg.usage.snapshot import StorageUsageSampler
 
 __all__ = [
@@ -53,6 +55,12 @@ __all__ = [
     "get_tenant_purge_metrics",
     "reset_tenant_purge_metrics",
 ]
+
+TRIGGER_EVENT = "tenant.purged"
+"""审计载荷的触发来源：平台授权清理。"""
+
+TRIGGER_SWEEPER = "sweeper"
+"""审计载荷的触发来源：存量行周期清扫。"""
 
 _LOGGER = get_logger("bms_msg.tenant_purge")
 
@@ -185,6 +193,9 @@ class TenantPurgePlan(BaseValueObject):
     deferred_reason: str | None = None
     """延后原因（`active_replay`）；None 表示可执行。"""
 
+    trigger: str = TRIGGER_SWEEPER
+    """触发来源（`tenant.purged` / `sweeper`；写审计载荷便于区分两条入口）。"""
+
     @property
     def due_topics(self) -> ConcurrentStableList[TenantPurgeTopic]:
         """本轮到期主题（含孤儿目录）。
@@ -225,6 +236,7 @@ class TenantPurgePlan(BaseValueObject):
                 "data_root_exists": self.data_root_exists,
                 "offsets_root_exists": self.offsets_root_exists,
                 "deferred_reason": self.deferred_reason,
+                "trigger": self.trigger,
             }
         )
 
@@ -263,6 +275,9 @@ class TenantPurgeResult(BaseValueObject):
     purged: bool = False
     """是否完成该租户全部清理。"""
 
+    skipped: bool = False
+    """是否因「此前已清理」（`purged_at` 已有值）跳过。"""
+
     errors: ConcurrentStableFrozenList[str] = field(default_factory=_empty_errors)
     """失败原因（空表示成功）。"""
 
@@ -281,8 +296,25 @@ class TenantPurgeResult(BaseValueObject):
                 "deleted_db_rows": self.deleted_db_rows,
                 "deferred": self.deferred,
                 "purged": self.purged,
+                "skipped": self.skipped,
                 "errors": tuple(self.errors),
             }
+        )
+
+    def to_outcome(self) -> PurgeOutcome:
+        """转为跨模块清理结果（`on_purged` 返回值 / 日志用）。
+
+        Returns:
+            PurgeOutcome: 精简结果。
+        """
+        return PurgeOutcome(
+            tenant_id=self.tenant_id,
+            purged=self.purged,
+            deleted_topics=self.deleted_topics,
+            deleted_data_dirs=self.deleted_data_dirs,
+            deleted_offset_files=self.deleted_offset_files,
+            deleted_db_rows=self.deleted_db_rows,
+            skipped=self.skipped,
         )
 
 
@@ -401,7 +433,9 @@ class TenantPurgeService:
             return len(due)
 
     async def plan(self, tenant_id: int, *, now: datetime | None = None) -> TenantPurgePlan:
-        """构建清理计划（纯读，dry-run）。
+        """构建存量路径的清理计划（纯读，dry-run）。
+
+        只服务 05-5 存量行（`purge_after` 非空）；两步口径下新数据由 `purge_tenant()` 直接清理。
 
         Args:
             tenant_id: 租户主键。
@@ -414,17 +448,76 @@ class TenantPurgeService:
         state = await self._ledger.get_deleted(tenant_id=tenant_id)
         if state is None or state.purged_at is not None:
             return self._empty_plan(tenant_id=tenant_id, current=current)
-        base_at = state.deleted_event_at or current
+        return await self._build_plan(tenant_id=tenant_id, current=current, state=state, force=False)
+
+    async def purge_tenant(self, *, tenant_id: int, at: datetime | None = None) -> PurgeOutcome:
+        """按 `tenant.purged` 一次性物理清理该租户全部消息资源（幂等可重入）。
+
+        - **强制全量**：平台已物理清理并授权，忽略逐主题 `retention_ms`，全部主题 + 孤儿目录当轮删除。
+        - **活跃重放先取消**：事件动作若返回「已 applied 但延后」，此后再无驱动，因此同轮取消后立即删。
+        - **幂等**：`purged_at` 已有值即返回 `skipped`；删除本身按 `tenant_id` 定位、重复执行不报错。
+        - **无 `deleted` 行也照常清理**：`mark_purged` 会补建行留证（事件丢序 / 重装后重投）。
+
+        Args:
+            tenant_id: 租户主键。
+            at: 清理时刻（缺省取注入时钟）。
+
+        Returns:
+            PurgeOutcome: 清理结果。
+        """
+        current = _utc_naive(at) or self._now()
+        state = await self._ledger.get_deleted(tenant_id=tenant_id)
+        if state is not None and state.purged_at is not None:
+            _LOGGER.info("msg_tenant_purge_skipped", tenant_id=tenant_id, purged_at=state.purged_at.isoformat())
+            return PurgeOutcome(tenant_id=int(tenant_id), purged=True, skipped=True)
+        cancelled = await self._ledger.cancel_active_replay_tasks(tenant_id=tenant_id, at=current)
+        if cancelled:
+            _LOGGER.info("msg_tenant_purge_replay_cancelled", tenant_id=tenant_id, replay_tasks_cancelled=cancelled)
+        plan = await self._build_plan(tenant_id=tenant_id, current=current, state=state, force=True)
+        result = await self.execute(plan)
+        if result.purged:
+            self._metrics.purged += 1
+        else:
+            self._metrics.failed += 1
+        return result.to_outcome()
+
+    async def _build_plan(
+        self,
+        *,
+        tenant_id: int,
+        current: datetime,
+        state: TenantDeletedState | None,
+        force: bool,
+    ) -> TenantPurgePlan:
+        """构建清理计划（`force=False` 按保留期判到期，`force=True` 全部当轮到期）。
+
+        Args:
+            tenant_id: 租户主键。
+            current: 计划时刻（UTC naive）。
+            state: `deleted` 行快照（可能为 None：孤立 `tenant.purged`）。
+            force: 是否强制全量清理（平台授权路径）。
+
+        Returns:
+            TenantPurgePlan: 计划。
+        """
+        base_at = (state.deleted_event_at if state is not None else None) or current
         topics = await self._ledger.list_topics(tenant_id=tenant_id)
         known = ConcurrentStableSet(topic.topic_id for topic in topics)
-        planned = [self._topic_plan(topic=topic, base_at=base_at, current=current) for topic in topics]
+        planned = [self._topic_plan(topic=topic, base_at=base_at, current=current, force=force) for topic in topics]
         planned.extend(self._orphan_topics(tenant_id=tenant_id, known=known, current=current))
         remaining = [topic.deadline for topic in planned if not topic.due]
         replay_tasks = await self._ledger.list_replay_tasks(tenant_id=tenant_id)
         due_ids = {topic.topic_id for topic in planned if topic.due}
-        active = [
-            task for task in replay_tasks if task.topic_id in due_ids and task.status in (TASK_PENDING, TASK_RUNNING)
-        ]
+        # 强制路径已在入口取消活跃任务，不再延后（延后会让事件「已 applied 但数据滞留」）。
+        active = (
+            []
+            if force
+            else [
+                task
+                for task in replay_tasks
+                if task.topic_id in due_ids and task.status in (TASK_PENDING, TASK_RUNNING)
+            ]
+        )
         return TenantPurgePlan(
             tenant_id=int(tenant_id),
             as_of=current,
@@ -447,6 +540,7 @@ class TenantPurgeService:
             data_root_exists=(self._data_root / str(int(tenant_id))).is_dir(),
             offsets_root_exists=(self._offsets_root / str(int(tenant_id))).is_dir(),
             deferred_reason="active_replay" if active else None,
+            trigger=TRIGGER_EVENT if force else TRIGGER_SWEEPER,
         )
 
     async def execute(self, plan: TenantPurgePlan) -> TenantPurgeResult:
@@ -637,19 +731,27 @@ class TenantPurgeService:
             offsets_root_exists=(self._offsets_root / str(int(tenant_id))).is_dir(),
         )
 
-    def _topic_plan(self, *, topic: TenantTopicRef, base_at: datetime, current: datetime) -> TenantPurgeTopic:
+    def _topic_plan(
+        self,
+        *,
+        topic: TenantTopicRef,
+        base_at: datetime,
+        current: datetime,
+        force: bool = False,
+    ) -> TenantPurgeTopic:
         """把一个 DB 主题转成计划项。
 
         Args:
             topic: 主题最小视图。
-            base_at: 删除事件生效时刻。
+            base_at: 删除事件生效时刻（存量路径判到期用）。
             current: 当前时刻。
+            force: 强制到期（平台授权清理，忽略保留期）。
 
         Returns:
             TenantPurgeTopic: 计划项。
         """
         retention = topic.retention_ms if topic.retention_ms > 0 else DEFAULT_RETENTION_MS
-        deadline = base_at + timedelta(milliseconds=retention)
+        deadline = current if force else base_at + timedelta(milliseconds=retention)
         return TenantPurgeTopic(
             topic_id=topic.topic_id,
             namespace=topic.namespace,
@@ -657,7 +759,7 @@ class TenantPurgeService:
             partition_count=topic.partition_count,
             retention_ms=retention,
             deadline=deadline,
-            due=deadline <= current,
+            due=force or deadline <= current,
             data_path=(self._data_root / str(topic.tenant_id) / topic.namespace / f"{topic.name}.{topic.topic_id}"),
         )
 

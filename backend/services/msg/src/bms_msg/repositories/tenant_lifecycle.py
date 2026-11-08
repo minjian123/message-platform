@@ -159,18 +159,22 @@ class TenantLifecycleRepository:
         tenant_id: int,
         version: int,
         deleted_event_at: datetime,
-        purge_after: datetime,
+        purge_after: datetime | None = None,
     ) -> MsgTenantLifecycle:
-        """写 / 更新 `deleted` 行的清理排期（不推进 `applied_version`）。
+        """写 / 更新 `deleted` 行的删除事件时刻（不推进 `applied_version`）。
 
         **不在这里写 `applied_version`**：动作完整成功（含易失资源清理与审计）后由分发器统一
-        `mark_applied`；否则「排期已写、动作失败」会被误判为已处理而跳过重试。
+        `mark_applied`；否则「已写删除时刻、动作失败」会被误判为已处理而跳过重试。
+
+        两步删除口径下 `purge_after` 只是**存量兼容位**：`tenant.deleted` 不再自算清理时点
+        （由平台 `tenant.purged` 触发），生产路径传 `None` 即清空旧排期；仅 05-5 旧数据行
+        收敛用例会显式传入。
 
         Args:
             tenant_id: 租户主键。
             version: 事件版本戳。
             deleted_event_at: 删除事件生效时刻（UTC naive）。
-            purge_after: 最早到期点（UTC naive）。
+            purge_after: 存量排期（UTC naive）；None 表示不排期。
 
         Returns:
             MsgTenantLifecycle: 当前账本行。
@@ -190,11 +194,13 @@ class TenantLifecycleRepository:
             self._session.add(row)
             await self._session.flush()
             return row
-        # 同版本重试不延长保留期；新版本以最新删除事件为准。
+        # 同版本重试不改变已记时刻；新版本以最新删除事件为准。
         if int(version) > int(row.applied_version):
+            # 晚到的删除事件（发生在已清理之前）不开新周期：不得抹掉 purged_at 这一幂等证据。
+            kept_purged = row.purged_at if row.purged_at is not None and deleted_event_at <= row.purged_at else None
             row.deleted_event_at = deleted_event_at
             row.purge_after = purge_after
-            row.purged_at = None
+            row.purged_at = kept_purged
             row.failure_count = 0
             row.last_error = None
             await self._session.flush()
@@ -232,14 +238,29 @@ class TenantLifecycleRepository:
         await self._session.flush()
 
     async def mark_purged(self, *, tenant_id: int, at: datetime) -> None:
-        """标记该租户全部主题清理完成。
+        """标记该租户物理清理完成（缺失账本行时补建，供孤立 `tenant.purged` 留证）。
 
         Args:
             tenant_id: 租户主键。
             at: 完成时刻（UTC naive）。
         """
         row = await self.get_by_action(tenant_id=tenant_id, action=ACTION_DELETED)
-        if row is None:  # pragma: no cover - 清扫入口必先读到行
+        if row is None:
+            # `tenant.purged` 先于 `deleted` 到达（事件丢序 / 重装后重投）：补建行留 purged_at 证据，
+            # 否则重复投递无法判定「已清理」，运维也看不到清理结论。
+            self._session.add(
+                MsgTenantLifecycle(
+                    tenant_id=int(tenant_id),
+                    action=ACTION_DELETED,
+                    applied_version=-1,
+                    deleted_event_at=None,
+                    purge_after=None,
+                    purged_at=at,
+                    failure_count=0,
+                    last_error=None,
+                )
+            )
+            await self._session.flush()
             return
         row.purged_at = at
         row.purge_after = None
@@ -262,7 +283,10 @@ class TenantLifecycleRepository:
         await self._session.flush()
 
     async def list_due_purges(self, *, now: datetime, limit: int = 100) -> ConcurrentStableList[TenantPurgeDue]:
-        """取到期待清理的租户（按 `purge_after` 升序）。
+        """取到期待清理的租户（**仅 05-5 存量行**：`purge_after` 非空）。
+
+        两步删除口径下 `tenant.deleted` 不再写 `purge_after`，新行恒为空、不进本查询；物理删除
+        由 `tenant.purged` 事件直接触发（`TenantPurgeService.purge_tenant`）。
 
         Args:
             now: 当前时刻（UTC naive）。

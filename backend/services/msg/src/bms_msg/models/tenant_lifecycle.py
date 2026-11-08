@@ -1,12 +1,14 @@
-"""租户生命周期动作账本（`msg_tenant_lifecycle`）：四动作版本戳与删除清理进度。
+"""租户生命周期动作账本（`msg_tenant_lifecycle`）：五动作版本戳与物理清理进度。
 
 口径（05-5 详细设计 §5）：
 
 - **一条 `(tenant_id, action)` 一行**：`action` 为 `created` / `suspended` / `activated` /
-  `deleted`；业务级幂等键是 `(tenant_id, action, version)`。
+  `deleted` / `purged`；业务级幂等键是 `(tenant_id, action, version)`。
 - **不是租户状态表**：数据面不读本表做状态判定；租户状态仍以基座租户源为准。
-- **删除进度挂在 `deleted` 行**：`deleted_event_at` / `purge_after` / `purged_at` /
-  `failure_count` / `last_error`；到期清扫按 `purge_after` 取待清理行。
+- **两步删除**：`deleted` 只停写（写 `deleted_event_at`，**不自算清理时点**）；`purged` 由平台
+  授权后才物理删除并写 `purged_at`。
+- **删除进度挂在 `deleted` 行**：`deleted_event_at` / `purge_after` / `purged_at` / `failure_count` /
+  `last_error`；`purge_after` 仅作 05-5 旧数据行的存量收敛位，新行恒 NULL。
 - **永久保留**：本表不做软删除（`deleted_at` 恒 NULL），不随租户资源删除；它是幂等证据与
   清理进度，不是业务数据。
 """
@@ -28,7 +30,10 @@ ACTION_ACTIVATED = "activated"
 """动作：租户启用。"""
 
 ACTION_DELETED = "deleted"
-"""动作：租户删除（停写 + 按保留期排定清理）。"""
+"""动作：租户注销（只停写 + 清易失资源；数据保留至平台授权清理）。"""
+
+ACTION_PURGED = "purged"
+"""动作：平台已物理清理（授权产品删数据）。"""
 
 LIFECYCLE_ACTIONS: ConcurrentStableList[str] = ConcurrentStableList(
     (
@@ -36,9 +41,10 @@ LIFECYCLE_ACTIONS: ConcurrentStableList[str] = ConcurrentStableList(
         ACTION_SUSPENDED,
         ACTION_ACTIVATED,
         ACTION_DELETED,
+        ACTION_PURGED,
     )
 )
-"""合法动作集合（与 bms 四类事件一一对应）。"""
+"""合法动作集合（与 bms 五类事件一一对应）。"""
 
 
 class MsgTenantLifecycle(BaseModel):
@@ -51,7 +57,9 @@ class MsgTenantLifecycle(BaseModel):
     )
 
     tenant_id: Mapped[int] = mapped_column(SnowflakeId, comment="租户内部身份（雪花主键，不可变；取自事件载荷）")
-    action: Mapped[str] = mapped_column(String(16), comment="生命周期动作（created / suspended / activated / deleted）")
+    action: Mapped[str] = mapped_column(
+        String(16), comment="生命周期动作（created / suspended / activated / deleted / purged）"
+    )
     applied_version: Mapped[int] = mapped_column(
         Integer, default=0, comment="已成功处理的事件版本戳（sys_tenant.version；旧事件按 0；未处理为 -1）"
     )
@@ -59,10 +67,10 @@ class MsgTenantLifecycle(BaseModel):
         DateTime, nullable=True, comment="删除事件生效时刻（UTC；仅 deleted 行）"
     )
     purge_after: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True, comment="下一次到期清理时刻（UTC；未清理主题最早到期点；NULL = 无待清理）"
+        DateTime, nullable=True, comment="存量兼容位：两步删除下不再自算，仅 05-5 旧数据行有值（NULL = 无）"
     )
     purged_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True, comment="全部主题清理完成时刻（UTC；NULL = 未完成）"
+        DateTime, nullable=True, comment="收到 tenant.purged 后物理清理完成时刻（UTC；NULL = 未完成；幂等判据）"
     )
     failure_count: Mapped[int] = mapped_column(Integer, default=0, comment="连续清理失败次数（成功清零）")
     last_error: Mapped[str | None] = mapped_column(

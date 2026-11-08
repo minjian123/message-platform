@@ -1,7 +1,8 @@
-"""05-5 四类生命周期动作（Kiwi 2453）：停用断连、启用取消清理、删除排期与易失清理。"""
+"""05-5 生命周期动作（Kiwi 2453）：停用断连、启用取消清理、注销停写（不排期）与易失清理。"""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -216,31 +217,42 @@ async def test_activate_cancels_purge(runtime: TenantLifecycleRuntime) -> None:
     assert state.deleted_event_at == deleted_at
 
 
-async def test_delete_schedules_and_clears_volatile(engine: AsyncEngine, runtime: TenantLifecycleRuntime) -> None:
-    """删除：立即清连接 / 流 / 延迟 / 组 / 死信，按主题保留期写 purge_after，数据目录保留。"""
+async def test_delete_stops_writes_without_scheduling_purge(
+    engine: AsyncEngine, runtime: TenantLifecycleRuntime, root: Path
+) -> None:
+    """删除（第一步）：清连接 / 流 / 延迟 / 组 / 死信并写 deleted_event_at，**不排定数据清理**。"""
     await _seed_topic(engine, retention_ms=1_000)
     stream_id = _seed_connection(runtime)
     await _seed_volatile(runtime)
+    data_dir = root / "data" / str(TENANT_ID) / "msg" / f"audit.operation.{_TOPIC_ID}" / "0"
+    data_dir.mkdir(parents=True)
+    (data_dir / "00000000000000000000.log").write_bytes(b"payload")
     handler = MsgTenantResourceHandler(runtime=runtime, ledger=runtime.ledger)
     consumer = TenantLifecycleConsumer(event_type="tenant.deleted", handler=handler)
     await consumer.consume(lifecycle_event("tenant.deleted", version=3, status="deleted"))
 
     state = await runtime.ledger.get_deleted(tenant_id=TENANT_ID)
     assert state is not None
-    assert state.purge_after is not None
+    assert state.deleted_event_at is not None
+    assert state.purge_after is None, "两步口径下 tenant.deleted 不得自算清理时点"
     assert state.purged_at is None
     assert runtime.connections.records() == []
     assert runtime.streams.is_cancelled(stream_id) is True
     assert await runtime.delay_store.count_for_tenant(tenant_id=TENANT_ID) == 0
     assert list(await runtime.groups.list_for_tenant(tenant_id=TENANT_ID)) == []
     assert list(await runtime.dead_letters.list_all()) == []
-    assert [event.payload.get("action") for event, required in _audit_events(runtime) if required] == [
-        "msg:tenant.delete"
-    ]
+    # 数据与元数据保留到 tenant.purged。
+    assert (data_dir / "00000000000000000000.log").exists()
+    assert await runtime.ledger.count_topics(tenant_id=TENANT_ID) == 1
+    audit = [(event, required) for event, required in _audit_events(runtime) if required]
+    assert [event.payload.get("action") for event, _required in audit] == ["msg:tenant.delete"]
+    params = json.loads(str(audit[0][0].payload.get("params")))
+    assert "deleted_event_at" in params
+    assert "purge_after" not in params
 
 
-async def test_delete_same_version_does_not_extend_purge(engine: AsyncEngine, runtime: TenantLifecycleRuntime) -> None:
-    """同版本重复删除：purge_after 不延长。"""
+async def test_delete_same_version_is_idempotent(engine: AsyncEngine, runtime: TenantLifecycleRuntime) -> None:
+    """同版本重复删除：deleted_event_at 不变、不产生排期；新版本以最新事件时刻为准。"""
     await _seed_topic(engine, retention_ms=1_000)
     handler = MsgTenantResourceHandler(runtime=runtime, ledger=runtime.ledger)
     consumer = TenantLifecycleConsumer(event_type="tenant.deleted", handler=handler)
@@ -250,7 +262,9 @@ async def test_delete_same_version_does_not_extend_purge(engine: AsyncEngine, ru
     await consumer.consume(event)
     second = await runtime.ledger.get_deleted(tenant_id=TENANT_ID)
     assert first is not None and second is not None
-    assert second.purge_after == first.purge_after
+    assert second.deleted_event_at == first.deleted_event_at
+    assert second.purge_after is None
+    assert second.applied_version == 3
 
 
 async def test_delete_audit_failure_raises(engine: AsyncEngine, runtime: TenantLifecycleRuntime) -> None:
@@ -265,16 +279,18 @@ async def test_delete_audit_failure_raises(engine: AsyncEngine, runtime: TenantL
 
 
 async def test_actions_require_runtime() -> None:
-    """停用 / 启用 / 删除在未装配运行时 fail-closed。"""
+    """停用 / 启用 / 删除 / 物理清理在未装配运行时 fail-closed。"""
     handler = MsgTenantResourceHandler()
-    for event_type in ("tenant.suspended", "tenant.activated", "tenant.deleted"):
+    for event_type in ("tenant.suspended", "tenant.activated", "tenant.deleted", "tenant.purged"):
         with pytest.raises(ConfigError):
             if event_type == "tenant.suspended":
                 await handler.on_suspended(_context(event_type))
             elif event_type == "tenant.activated":
                 await handler.on_activated(_context(event_type))
-            else:
+            elif event_type == "tenant.deleted":
                 await handler.on_deleted(_context(event_type))
+            else:
+                await handler.on_purged(_context(event_type))
 
 
 def _context(event_type: str):

@@ -39,24 +39,32 @@ class _Source:
         """
         self.suspended = suspended
         self.calls: ConcurrentStableList[str] = ConcurrentStableList()
+        self.readonly_calls: ConcurrentStableList[str] = ConcurrentStableList()
+        """`readonly=True` 的调用记录（管理面只读通道，bms `04_03-01`）。"""
 
-    async def by_code(self, code: str) -> TenantContext:
+    async def by_code(self, code: str, *, readonly: bool = False) -> TenantContext:
         """按编码取上下文（`missing` 恒不存在）。"""
         self.calls.add(f"code:{code}")
+        if readonly:
+            self.readonly_calls.add(f"code:{code}")
         if code == "missing":
             raise TenantNotFoundError("未知租户")
         if self.suspended:
             raise TenantSuspendedError("租户已停用")
         return TenantContext(code=code, db_key=f"tenant_{code}", name=code, tenant_id=_TENANT_ID)
 
-    async def by_domain(self, domain: str) -> TenantContext:
+    async def by_domain(self, domain: str, *, readonly: bool = False) -> TenantContext:
         """按子域名取上下文（数据面不采信 Host，本方法不应被调用）。"""
         self.calls.add(f"domain:{domain}")
+        if readonly:
+            self.readonly_calls.add(f"domain:{domain}")
         raise TenantNotFoundError(f"未知租户域名：{domain}")
 
-    async def by_id(self, tenant_id: str) -> TenantContext:
+    async def by_id(self, tenant_id: str, *, readonly: bool = False) -> TenantContext:
         """按主键取上下文。"""
         self.calls.add(f"id:{tenant_id}")
+        if readonly:
+            self.readonly_calls.add(f"id:{tenant_id}")
         if self.suspended:
             raise TenantSuspendedError("租户已停用")
         return TenantContext(code="acme", db_key="tenant_acme", name="Acme", tenant_id=int(tenant_id))
@@ -83,6 +91,8 @@ def _app(source: _Source) -> FastAPI:
             allow_demo_fallback=False,
         ),
         error_mapper=types.SimpleNamespace(provider=""),
+        # 基座 04_03-01 只读放行口：白名单空即全拒（本用例走原口径，非只读窗口）。
+        tenant_guard=types.SimpleNamespace(readonly_routes=ConcurrentStableList()),
     )
     app.state.tenant_source = source
     app.add_middleware(TenantMiddleware)

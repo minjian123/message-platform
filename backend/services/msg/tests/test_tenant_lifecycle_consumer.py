@@ -74,14 +74,15 @@ def _event(version: int) -> EventEnvelope:
     )
 
 
-def test_event_consumer_records_declares_four_lifecycle_events() -> None:
-    """消费组声明四条生命周期事件，工厂可调用，声明通过基座校验。"""
+def test_event_consumer_records_declares_five_lifecycle_events() -> None:
+    """消费组声明五条生命周期事件，工厂可调用，声明通过基座校验。"""
     records = event_consumer_records()
     assert [record.event_type for record in records] == [
         "tenant.created",
         "tenant.suspended",
         "tenant.activated",
         "tenant.deleted",
+        "tenant.purged",
     ]
     for record in records:
         assert record.consumer == MSG_TENANT_LIFECYCLE_GROUP
@@ -92,13 +93,14 @@ def test_event_consumer_records_declares_four_lifecycle_events() -> None:
 
 
 def test_factory_event_consumer_records_hook() -> None:
-    """应用工厂 `event_consumer_records()` 钩子返回四条租户生命周期声明。"""
+    """应用工厂 `event_consumer_records()` 钩子返回五条租户生命周期声明。"""
     records = ApplicationFactory().event_consumer_records()
     assert [record.event_type for record in records] == [
         "tenant.created",
         "tenant.suspended",
         "tenant.activated",
         "tenant.deleted",
+        "tenant.purged",
     ]
     assert list(validate_event_consumer_records(records)) == []
 

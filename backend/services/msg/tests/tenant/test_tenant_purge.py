@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -148,7 +149,7 @@ def _create_offset(root: Path, *, topic_id: int = _TOPIC_ID, tenant_id: int = TE
 
 
 async def _deleted(ledger: DbTenantLifecycleLedger, *, purge_after: datetime) -> None:
-    """写一条删除排期。
+    """写一条 05-5 存量删除排期（`purge_after` 非空才进周期清扫）。
 
     Args:
         ledger: 账本。
@@ -532,3 +533,142 @@ async def _replay_status(engine: AsyncEngine) -> str:
     async with factory() as session:
         row = (await session.execute(select(MsgReplayTask).where(MsgReplayTask.tenant_id == TENANT_ID))).scalar_one()
         return str(row.status)
+
+
+async def _replay_count(engine: AsyncEngine) -> int:
+    """统计测试重放任务行数。
+
+    Args:
+        engine: 内存库引擎。
+
+    Returns:
+        int: 行数。
+    """
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        rows = (await session.execute(select(MsgReplayTask).where(MsgReplayTask.tenant_id == TENANT_ID))).all()
+        return len(rows)
+
+
+async def test_purge_tenant_ignores_retention(engine: AsyncEngine, service: TenantPurgeService, root: Path) -> None:
+    """`purge_tenant` 强制全量：保留期再长也当轮删除（平台已授权）。"""
+    await _seed_topic(engine, retention_ms=30 * 24 * 3600 * 1000)
+    topic_dir = _create_data_dir(root)
+    offset = _create_offset(root)
+    await service._ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+
+    outcome = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    assert outcome.purged is True
+    assert outcome.skipped is False
+    assert outcome.deleted_topics == 1
+    assert not topic_dir.exists()
+    assert not offset.exists()
+    assert await service._ledger.count_topics(tenant_id=TENANT_ID) == 0
+    state = await service._ledger.get_deleted(tenant_id=TENANT_ID)
+    assert state is not None and state.purged_at == _NOW and state.purge_after is None
+    audit = [event for event, required in _audit_events(service) if required]
+    actions = [event.payload.get("action") for event in audit]
+    assert "msg:tenant.purge" in actions
+    tenant_purge = [event for event in audit if event.payload.get("action") == "msg:tenant.purge"]
+    assert json.loads(str(tenant_purge[0].payload.get("params"))).get("trigger") == "tenant.purged"
+
+
+async def test_purge_tenant_is_idempotent(engine: AsyncEngine, service: TenantPurgeService, root: Path) -> None:
+    """重复 purged：第二次按 `purged_at` 跳过，不再删、不再写审计。"""
+    await _seed_topic(engine)
+    _create_data_dir(root)
+    await service._ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+    first = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+    second = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW + timedelta(minutes=5))
+
+    assert first.purged is True and first.skipped is False
+    assert second.skipped is True and second.deleted_topics == 0
+    assert len([event for event, _required in _audit_events(service)]) == 1
+    state = await service._ledger.get_deleted(tenant_id=TENANT_ID)
+    assert state is not None and state.purged_at == _NOW
+
+
+async def test_purge_tenant_without_deleted_row_creates_ledger(
+    engine: AsyncEngine, service: TenantPurgeService, root: Path
+) -> None:
+    """孤立 `tenant.purged`（无 deleted 行）：照常清理并补建账本行留 purged_at。"""
+    await _seed_topic(engine)
+    topic_dir = _create_data_dir(root)
+    assert await service._ledger.get_deleted(tenant_id=TENANT_ID) is None
+
+    outcome = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    assert outcome.purged is True
+    assert not topic_dir.exists()
+    assert await service._ledger.count_topics(tenant_id=TENANT_ID) == 0
+    state = await service._ledger.get_deleted(tenant_id=TENANT_ID)
+    assert state is not None
+    assert state.purged_at == _NOW
+    assert state.deleted_event_at is None
+    assert state.applied_version == -1
+
+
+async def test_purge_tenant_cancels_active_replay_and_deletes_same_round(
+    engine: AsyncEngine, service: TenantPurgeService, root: Path
+) -> None:
+    """活跃重放任务：先取消、同轮删除（不 deferred，避免「已 applied 但数据滞留」）。"""
+    await _seed_topic(engine)
+    await _seed_replay(engine)
+    topic_dir = _create_data_dir(root)
+    await service._ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+
+    outcome = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    assert outcome.purged is True
+    assert not topic_dir.exists()
+    # 非终态任务先取消、随后随主题行一并删除（同轮清理，不留 deferred）。
+    assert await _replay_count(engine) == 0
+    assert await service._ledger.count_topics(tenant_id=TENANT_ID) == 0
+
+
+async def test_purge_tenant_cleans_orphan_directory(
+    ledger: DbTenantLifecycleLedger, service: TenantPurgeService, root: Path
+) -> None:
+    """孤儿目录（DB 无主题行）在强制路径同样被清掉。"""
+    orphan = _create_data_dir(root, topic_id=9999)
+    await ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+
+    outcome = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    assert outcome.purged is True
+    assert not orphan.exists()
+
+
+async def test_purge_tenant_audit_failure_keeps_purged_at_empty(
+    engine: AsyncEngine, service: TenantPurgeService, root: Path
+) -> None:
+    """强审计失败：异常上抛、`purged_at` 不写（重投可重入补审计）。"""
+    await _seed_topic(engine)
+    _create_data_dir(root)
+    await service._ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+    service._runtime.audit_sink.fail = True  # type: ignore[attr-defined]
+
+    with pytest.raises(Exception, match=r"msg:tenant\.purge"):
+        await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    state = await service._ledger.get_deleted(tenant_id=TENANT_ID)
+    assert state is not None and state.purged_at is None
+
+
+async def test_purge_tenant_partial_counts_failure(
+    service: TenantPurgeService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """未完全清理（计划外观测到残留）：计失败、`purged=False`，不谎报完成。"""
+    await service._ledger.mark_deleted(tenant_id=TENANT_ID, version=3, deleted_event_at=_NOW)
+
+    async def _fake_execute(plan: object) -> TenantPurgeResult:
+        del plan
+        return TenantPurgeResult(tenant_id=TENANT_ID, deleted_topics=1)
+
+    monkeypatch.setattr(service, "execute", _fake_execute)
+    outcome = await service.purge_tenant(tenant_id=TENANT_ID, at=_NOW)
+
+    assert outcome.purged is False
+    assert outcome.skipped is False
+    assert service._metrics.snapshot()["failed"] == 1

@@ -5,6 +5,10 @@
 `load()` 之前执行，因此把 `app.state` 的引用收进本对象并登记为进程级运行时，处理器即可在后台
 安全取用。
 
+**物理清理入口由外部挂载**：`TenantPurgeService` 依赖本对象（要拿到文件 / 进程内资源句柄），
+不能在构造期反向注入。装配期先建运行时、再建清扫服务，然后 `attach_purge()` 挂上；
+`on_purged` 只经运行时入口调用，未挂载即 fail-closed（不静默跳过清理）。
+
 **不建租户状态**：本对象只持有资源句柄，不保存「某租户是否停用」；状态判定一律走基座租户守卫 /
 租户源。
 """
@@ -13,12 +17,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Protocol
 
 from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableDict
-from bms_core.core.exceptions import TenantNotFoundError, TenantSuspendedError
+from bms_core.core.exceptions import ConfigError, TenantNotFoundError, TenantSuspendedError
 from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
 from bms_core.tenant.guard import BaseTenantGuard, TenantTarget
@@ -42,10 +46,12 @@ __all__ = [
     "ActivateOutcome",
     "DeleteOutcome",
     "GuardTenantAvailability",
+    "PurgeOutcome",
     "SuspendOutcome",
     "TenantLifecycleAuditError",
     "TenantLifecycleMetrics",
     "TenantLifecycleRuntime",
+    "TenantPurgeEntry",
     "get_tenant_lifecycle_metrics",
     "get_tenant_lifecycle_runtime",
     "reset_tenant_lifecycle_metrics",
@@ -157,7 +163,7 @@ class ActivateOutcome(BaseValueObject):
 
 @dataclass(frozen=True)
 class DeleteOutcome(BaseValueObject):
-    """删除动作结果（易失资源清理 + 排期）。"""
+    """删除动作结果（只停写 + 易失资源清理；**不排定数据清理**）。"""
 
     topics: int
     """主题数。"""
@@ -180,8 +186,50 @@ class DeleteOutcome(BaseValueObject):
     replay_tasks_cancelled: int
     """取消的重放任务数。"""
 
-    purge_after: datetime
-    """最早到期点（UTC naive）。"""
+    deleted_event_at: datetime
+    """删除事件生效时刻（UTC naive；保留期与清理时点由平台给）。"""
+
+
+@dataclass(frozen=True)
+class PurgeOutcome(BaseValueObject):
+    """物理清理结果（`tenant.purged` 触发；跨模块传递用，避免运行时反向依赖清扫服务）。"""
+
+    tenant_id: int
+    """租户主键。"""
+
+    purged: bool
+    """是否完成该租户全部清理。"""
+
+    deleted_topics: int = 0
+    """删除的主题数。"""
+
+    deleted_data_dirs: int = 0
+    """删除的数据目录数。"""
+
+    deleted_offset_files: int = 0
+    """删除的位点文件数。"""
+
+    deleted_db_rows: int = 0
+    """删除的 DB 行数。"""
+
+    skipped: bool = False
+    """是否因「此前已清理」（`purged_at` 已有值）跳过。"""
+
+
+class TenantPurgeEntry(Protocol):
+    """物理清理入口契约（实现为 `TenantPurgeService`；装配期由 `attach_purge()` 挂载）。"""
+
+    async def purge_tenant(self, *, tenant_id: int, at: datetime) -> PurgeOutcome:
+        """按 `tenant_id` 一次性物理删除该租户全部消息资源（幂等可重入）。
+
+        Args:
+            tenant_id: 租户主键。
+            at: 清理时刻（UTC naive）。
+
+        Returns:
+            PurgeOutcome: 清理结果。
+        """
+        ...
 
 
 class DelayTenantStore(Protocol):
@@ -232,6 +280,7 @@ class TenantLifecycleRuntime:
         retention_throttle: RetentionThrottle,
         directory: PartitionDirectory,
         metrics: TenantLifecycleMetrics | None = None,
+        purge_entry: TenantPurgeEntry | None = None,
     ) -> None:
         """初始化。
 
@@ -252,6 +301,7 @@ class TenantLifecycleRuntime:
             retention_throttle: 保留节流窗口。
             directory: 分区目录登记表。
             metrics: 生命周期计数（缺省进程级）。
+            purge_entry: 物理清理入口（装配期 `attach_purge()` 也可后挂）。
         """
         self.ledger = ledger
         self.audit_sink = audit_sink
@@ -269,6 +319,15 @@ class TenantLifecycleRuntime:
         self.retention_throttle = retention_throttle
         self.directory = directory
         self.metrics = metrics if metrics is not None else _METRICS
+        self._purge_entry = purge_entry
+
+    def attach_purge(self, entry: TenantPurgeEntry) -> None:
+        """挂载物理清理入口（装配期在清扫服务构造后调用；测试可注入替身）。
+
+        Args:
+            entry: 物理清理入口实现。
+        """
+        self._purge_entry = entry
 
     async def suspend(self, *, tenant_id: int, version: int, context: TenantLifecycleContext) -> SuspendOutcome:
         """停用：取消已建立连接 / 长驻流；不复制租户状态、不动数据。
@@ -324,7 +383,10 @@ class TenantLifecycleRuntime:
         return ActivateOutcome(cancel_purge=cancelled)
 
     async def delete(self, *, tenant_id: int, version: int, context: TenantLifecycleContext) -> DeleteOutcome:
-        """删除：停写 + 易失资源清理 + 按主题保留期排定清理。
+        """删除（第一步）：停写 + 易失资源清理，**不排定数据清理**。
+
+        消息数据 / 位点 / 元数据保留到平台发 `tenant.purged`（保留期与清理时点归平台，本仓不自算）。
+        延迟区立即清空：它属「尚未投递的生产」，留着会在重启重建后继续投。
 
         Args:
             tenant_id: 租户主键。
@@ -332,19 +394,16 @@ class TenantLifecycleRuntime:
             context: 生命周期上下文。
 
         Returns:
-            DeleteOutcome: 清理计数与最早到期点。
+            DeleteOutcome: 清理计数与删除事件时刻。
         """
         topics = await self.ledger.list_topics(tenant_id=tenant_id)
-        base_at = _utc_naive(context.occurred_at) or _utc_now_naive()
-        deadlines = [base_at + timedelta(milliseconds=topic.retention_ms) for topic in topics]
-        purge_after = min(deadlines) if deadlines else base_at
+        deleted_event_at = _utc_naive(context.occurred_at) or _utc_now_naive()
         await self.ledger.mark_deleted(
             tenant_id=tenant_id,
             version=version,
-            deleted_event_at=base_at,
-            purge_after=purge_after,
+            deleted_event_at=deleted_event_at,
         )
-        replay_tasks_cancelled = await self.ledger.cancel_active_replay_tasks(tenant_id=tenant_id, at=base_at)
+        replay_tasks_cancelled = await self.ledger.cancel_active_replay_tasks(tenant_id=tenant_id, at=deleted_event_at)
 
         connections = self.connections.purge_tenant(tenant_id=tenant_id, reason="tenant_deleted")
         streams = self.streams.cancel_tenant(tenant_id=tenant_id)
@@ -368,7 +427,7 @@ class TenantLifecycleRuntime:
             group_records=group_records,
             dead_letters=dead_letters,
             replay_tasks_cancelled=replay_tasks_cancelled,
-            purge_after=purge_after,
+            deleted_event_at=deleted_event_at,
         )
         await self.record_audit(
             action="msg:tenant.delete",
@@ -384,24 +443,59 @@ class TenantLifecycleRuntime:
                     "group_records": outcome.group_records,
                     "dead_letters": outcome.dead_letters,
                     "replay_tasks_cancelled": outcome.replay_tasks_cancelled,
-                    "purge_after": purge_after.isoformat(),
+                    "deleted_event_at": deleted_event_at.isoformat(),
                 }
             ),
             strong=True,
             context=context,
         )
         _LOGGER.info(
-            "msg_tenant_deleted_scheduled",
+            "msg_tenant_deleted",
             tenant_id=tenant_id,
             version=version,
             topics=outcome.topics,
-            purge_after=purge_after.isoformat(),
+            deleted_event_at=deleted_event_at.isoformat(),
             connections=outcome.connections,
             streams=outcome.streams,
             delay_records=outcome.delay_records,
             group_records=outcome.group_records,
             dead_letters=outcome.dead_letters,
             replay_tasks_cancelled=outcome.replay_tasks_cancelled,
+        )
+        return outcome
+
+    async def purge(self, *, tenant_id: int, version: int, context: TenantLifecycleContext) -> PurgeOutcome:
+        """物理清理（第二步）：由平台 `tenant.purged` 授权后一次性删除该租户消息资源。
+
+        只做转发与日志：删除顺序、审计与 `purged_at` 由清扫服务统一负责（`msg:tenant.purge` 强审计），
+        避免同一段删除逻辑出现两份。重复消费的幂等由清扫服务按 `purged_at` 判定。
+
+        Args:
+            tenant_id: 租户主键。
+            version: 事件版本（`tenant.purged` 无 `version` 字段，按 0 处理）。
+            context: 生命周期上下文。
+
+        Returns:
+            PurgeOutcome: 清理结果。
+
+        Raises:
+            ConfigError: 物理清理入口未挂载（装配缺漏，fail-closed 不静默跳过）。
+        """
+        entry = self._purge_entry
+        if entry is None:
+            raise ConfigError("租户物理清理入口未挂载（TenantPurgeService 未登记）")
+        at = _utc_naive(context.occurred_at) or _utc_now_naive()
+        outcome = await entry.purge_tenant(tenant_id=tenant_id, at=at)
+        _LOGGER.info(
+            "msg_tenant_purged",
+            tenant_id=tenant_id,
+            version=version,
+            purged=outcome.purged,
+            skipped=outcome.skipped,
+            deleted_topics=outcome.deleted_topics,
+            deleted_data_dirs=outcome.deleted_data_dirs,
+            deleted_offset_files=outcome.deleted_offset_files,
+            deleted_db_rows=outcome.deleted_db_rows,
         )
         return outcome
 

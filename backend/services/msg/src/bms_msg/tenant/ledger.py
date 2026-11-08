@@ -1,6 +1,6 @@
 """租户生命周期幂等账本：DB 实现（生产）+ 文件实现（05-1 兼容 / 测试替身）。
 
-- **生产写路径是 DB**：`msg_tenant_lifecycle` 按 `(tenant_id, action)` 保存已处理版本与删除排期；
+- **生产写路径是 DB**：`msg_tenant_lifecycle` 按 `(tenant_id, action)` 保存已处理版本与删除进度；
   账本独立于租户数据目录，删除资源后仍保留幂等证据。
 - **文件只兼容读**：05-1 的 `data/{tenant_id}/.lifecycle.json` 仍可读出旧版本（DB 无行时回退），
   但不再写回；首次新事件后自然迁移到 DB。
@@ -59,10 +59,10 @@ class TenantDeletedState:
     """删除事件生效时刻（UTC naive）。"""
 
     purge_after: datetime | None
-    """最早到期点（UTC naive）。"""
+    """存量清理排期（UTC naive；两步口径下新行恒 None）。"""
 
     purged_at: datetime | None
-    """清理完成时刻（UTC naive）。"""
+    """物理清理完成时刻（UTC naive；收到 `tenant.purged` 后写入）。"""
 
     failure_count: int
     """连续失败次数。"""
@@ -88,9 +88,9 @@ class TenantLifecycleLedger(Protocol):
         tenant_id: int,
         version: int,
         deleted_event_at: datetime,
-        purge_after: datetime,
+        purge_after: datetime | None = None,
     ) -> None:
-        """写删除排期（不推进 applied_version）。"""
+        """写删除事件时刻（不推进 applied_version；`purge_after` 仅存量兼容）。"""
         ...
 
     async def get_deleted(self, *, tenant_id: int) -> TenantDeletedState | None:
@@ -183,15 +183,15 @@ class DbTenantLifecycleLedger:
         tenant_id: int,
         version: int,
         deleted_event_at: datetime,
-        purge_after: datetime,
+        purge_after: datetime | None = None,
     ) -> None:
-        """写删除排期（同版本重试不延长保留期）。
+        """写删除事件时刻（同版本重试不改变已记时刻）。
 
         Args:
             tenant_id: 租户主键。
             version: 事件版本。
             deleted_event_at: 删除事件生效时刻。
-            purge_after: 最早到期点。
+            purge_after: 存量排期（两步口径下生产路径传 None）。
         """
         async with self._session_scope() as session, session.begin():
             await TenantLifecycleRepository(session).mark_deleted(
@@ -386,15 +386,15 @@ class FileTenantLifecycleLedger:
         tenant_id: int,
         version: int,
         deleted_event_at: datetime,
-        purge_after: datetime,
+        purge_after: datetime | None = None,
     ) -> None:
-        """文件账本不支持删除排期。
+        """文件账本不支持删除事件时刻。
 
         Raises:
             ConfigError: 恒抛（生产必须装配 DB 账本）。
         """
         del tenant_id, version, deleted_event_at, purge_after
-        raise ConfigError("文件账本不支持删除排期；生产须装配 DbTenantLifecycleLedger")
+        raise ConfigError("文件账本不支持删除事件时刻；生产须装配 DbTenantLifecycleLedger")
 
     async def get_deleted(self, *, tenant_id: int) -> TenantDeletedState | None:
         """文件账本没有删除排期。

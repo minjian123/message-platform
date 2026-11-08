@@ -1,12 +1,13 @@
-"""消息平台租户生命周期消费（05-1 第 7 条 + 05-5 四动作）。
+"""消息平台租户生命周期消费（05-1 第 7 条 + 05-5 五动作 · 两步删除）。
 
-- **四类事件**：`tenant.created` / `tenant.suspended` / `tenant.activated` / `tenant.deleted`；
-  同一消费组 `msg-tenant-lifecycle`，`ordered=True` 保证同租户事件串行。
+- **五类事件**：`tenant.created` / `tenant.suspended` / `tenant.activated` / `tenant.deleted` /
+  `tenant.purged`；同一消费组 `msg-tenant-lifecycle`，`ordered=True` 保证同租户事件串行。
 - **动作**：`created` 只建租户目录（不建命名空间 / 配额，仍按首次发布懒创建）；`suspended`
-  取消已建立连接 / 长驻流；`activated` 取消待清理；`deleted` 停写 + 易失资源清理 + 按主题
-  保留期排定清理。
+  取消已建立连接 / 长驻流；`activated` 取消待清理；`deleted` 停写 + 清易失资源（**不排定数据清理**，
+  保留期与清理时点归平台）；`purged` 平台已物理清理 → 一次性删除该租户消息数据 / 位点 / 元数据。
 - **幂等**：业务级 `(tenant_id, action, version)` 落 `msg_tenant_lifecycle`（生产）或
   `.lifecycle.json`（仅 05-1 兼容读 / 测试替身）；投递级沿用基座 `sys_event_consumed`。
+  `tenant.purged` 无 `version` 字段（按 0 处理），重复消费由分发器版本判定 + 清扫服务 `purged_at` 双保险。
 - **失败语义**：动作抛错**不记账、原样上抛**，由基座消费组退避重试 / 死信；租户开通事务已由
   基座提交，事件消费不阻塞开通。
 """
@@ -27,6 +28,7 @@ from bms_core.tenant.lifecycle import (
     TENANT_CREATED,
     TENANT_DELETED,
     TENANT_LIFECYCLE_EVENT_TYPES,
+    TENANT_PURGED,
     TENANT_SUSPENDED,
     BaseTenantResourceHandler,
     TenantLifecycleContext,
@@ -69,10 +71,11 @@ _EVENT_DESCRIPTIONS: ConcurrentStableDict[str, str] = ConcurrentStableDict(
         TENANT_CREATED: "租户开通初始化：tenant.created → 租户数据目录 + 幂等账本",
         TENANT_SUSPENDED: "租户停用：tenant.suspended → 取消已建立连接 / 长驻流",
         TENANT_ACTIVATED: "租户启用：tenant.activated → 取消待清理",
-        TENANT_DELETED: "租户删除：tenant.deleted → 易失资源清理 + 按保留期排定清理",
+        TENANT_DELETED: "租户注销：tenant.deleted → 停写 + 易失资源清理（不排定数据清理）",
+        TENANT_PURGED: "平台已物理清理：tenant.purged → 一次性删除消息数据 / 位点 / 元数据",
     }
 )
-"""四条事件声明的说明文案（顺序与 `_LIFECYCLE_EVENTS` 一致）。"""
+"""五条事件声明的说明文案（顺序与 `_LIFECYCLE_EVENTS` 一致）。"""
 
 _LIFECYCLE_EVENTS: ConcurrentStableList[str] = ConcurrentStableList(
     (
@@ -80,16 +83,18 @@ _LIFECYCLE_EVENTS: ConcurrentStableList[str] = ConcurrentStableList(
         TENANT_SUSPENDED,
         TENANT_ACTIVATED,
         TENANT_DELETED,
+        TENANT_PURGED,
     )
 )
-"""本消费组订阅的四类事件（与 bms 契约一一对应）。"""
+"""本消费组订阅的五类事件（与 bms 契约一一对应）。"""
 
 
 class MsgTenantResourceHandler(BaseTenantResourceHandler):
-    """msg 产品资源动作实现：目录 / 连接 / 延迟 / 删除排期。
+    """msg 产品资源动作实现：目录 / 连接 / 延迟 / 停写 / 物理清理。
 
     `root` / `ledger` 可注入用于测试；生产由 `tenant_lifecycle_consumer()` 取进程级运行时，
-    运行时持有 DB 账本与各资源句柄。`on_created` 不依赖运行时（05-1 回归）。
+    运行时持有 DB 账本与各资源句柄（物理清理入口由装配期挂到运行时上）。`on_created` 不依赖运行时
+    （05-1 回归）。
     """
 
     plugin_name = "msg.file"
@@ -172,7 +177,7 @@ class MsgTenantResourceHandler(BaseTenantResourceHandler):
         await self._require_runtime().activate(tenant_id=context.tenant_id, version=context.version, context=context)
 
     async def on_deleted(self, context: TenantLifecycleContext) -> None:
-        """删除：停写 + 易失资源清理 + 按主题保留期排定清理。
+        """注销（第一步）：停写 + 易失资源清理；**不排定数据清理**。
 
         Args:
             context: 生命周期上下文。
@@ -181,6 +186,17 @@ class MsgTenantResourceHandler(BaseTenantResourceHandler):
             ConfigError: 未装配运行时（后台消费必需）。
         """
         await self._require_runtime().delete(tenant_id=context.tenant_id, version=context.version, context=context)
+
+    async def on_purged(self, context: TenantLifecycleContext) -> None:
+        """物理清理（第二步）：平台已物理清理，此刻删除本仓消息数据 / 位点 / 元数据。
+
+        Args:
+            context: 生命周期上下文。
+
+        Raises:
+            ConfigError: 未装配运行时 / 物理清理入口未挂载（后台消费必需，fail-closed）。
+        """
+        await self._require_runtime().purge(tenant_id=context.tenant_id, version=context.version, context=context)
 
     def _require_runtime(self) -> TenantLifecycleRuntime:
         """取运行时；未装配即 fail-closed。
@@ -261,7 +277,7 @@ def tenant_lifecycle_consumer() -> EventConsumer:
 
 
 def event_consumer_records() -> ConcurrentStableList[EventConsumerRecord]:
-    """msg 自持的租户生命周期消费组声明（四类事件各一条）。
+    """msg 自持的租户生命周期消费组声明（五类事件各一条）。
 
     Returns:
         ConcurrentStableList[EventConsumerRecord]: 消费组声明。

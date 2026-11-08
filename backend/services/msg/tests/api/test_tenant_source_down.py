@@ -31,16 +31,19 @@ _SERVICE_UNAVAILABLE = 10007
 class _UnavailableSource:
     """租户源替身：任何取数都不可达（模拟租户服务宕机 / 契约超时）。"""
 
-    async def by_code(self, code: str) -> TenantContext:
+    async def by_code(self, code: str, *, readonly: bool = False) -> TenantContext:
         """按编码取上下文（恒不可达）。"""
+        del readonly
         raise ServiceUnavailableError(f"租户注册契约不可达：{code}")
 
-    async def by_domain(self, domain: str) -> TenantContext:
+    async def by_domain(self, domain: str, *, readonly: bool = False) -> TenantContext:
         """按子域名取上下文（恒不可达）。"""
+        del readonly
         raise ServiceUnavailableError(f"租户注册契约不可达：{domain}")
 
-    async def by_id(self, tenant_id: str) -> TenantContext:
+    async def by_id(self, tenant_id: str, *, readonly: bool = False) -> TenantContext:
         """按主键取上下文（恒不可达）。"""
+        del readonly
         raise ServiceUnavailableError(f"租户注册契约不可达：{tenant_id}")
 
     async def single_active(self) -> TenantContext | None:
@@ -77,6 +80,8 @@ def _app() -> FastAPI:
             allow_demo_fallback=False,
         ),
         error_mapper=types.SimpleNamespace(provider=""),
+        # 基座 04_03-01 只读放行口：白名单空即全拒（本用例走原口径，非只读窗口）。
+        tenant_guard=types.SimpleNamespace(readonly_routes=ConcurrentStableList()),
     )
     app.state.tenant_source = _UnavailableSource()
     app.add_middleware(TenantMiddleware)

@@ -147,7 +147,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         return msg_form_records()
 
     def event_consumer_records(self) -> ConcurrentStableList[EventConsumerRecord]:
-        """本服务自持的事件消费组声明（05-1：`tenant.created` → 租户目录 + 幂等账本）。
+        """本服务自持的事件消费组声明（05-1 / 05-5：五类租户生命周期事件各一条）。
 
         Returns:
             ConcurrentStableList[EventConsumerRecord]: 消费组声明（插入序）。
@@ -290,7 +290,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         )
         set_tenant_lifecycle_runtime(lifecycle_runtime)
         app.state.tenant_lifecycle_runtime = lifecycle_runtime
-        app.state.tenant_purge_service = TenantPurgeService(
+        tenant_purge_service = TenantPurgeService(
             ledger=lifecycle_ledger,
             runtime=lifecycle_runtime,
             data_root=root / DATA_ROOT_SUBDIR,
@@ -301,6 +301,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             acl_session_scope=lambda: lifecycle_session_scope(app),
             acl_cache=app.state.topic_acl_cache,
         )
+        app.state.tenant_purge_service = tenant_purge_service
+        # `tenant.purged` → 一次性物理清理：清扫服务依赖运行时，故建好后回挂到运行时上（不反向注入）。
+        lifecycle_runtime.attach_purge(tenant_purge_service)
         # 04-1：RPC 方法注册表（装配期静态登记；重复 (service, method) 在 register 里抛错即拒启）。
         app.state.rpc_registry = default_rpc_registry()
         # 04-4：幂等去重存储（进程内；不跨实例 / 不跨重启，8B_05 换共享存储时只改这一行）。
