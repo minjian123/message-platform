@@ -34,3 +34,34 @@ export async function fetchQuotas(namespace = ''): Promise<Schema['QuotaView']> 
   )
   return response.data ?? { items: [] }
 }
+
+/**
+ * 批量调整配额（整批校验、整批失败；保存后即时生效）。
+ *
+ * @param items 调整项（`limit` 为 0 表示不限，`soft_limit` 为 null 表示按硬限派生）。
+ * @returns 调整后的配额视图。
+ * @throws Error 业务码非 0（由调用方按 `errorCodeOf` 取码映射文案）。
+ */
+export async function updateQuotas(items: readonly Schema['QuotaUpdateItem'][]): Promise<Schema['QuotaView']> {
+  const body: Schema['QuotaUpdateRequest'] = { items: [...items] }
+  const response = await scope().put<Schema['ApiResponse_QuotaView_']>('/admin/quotas', body)
+  if (response.code !== 0) {
+    throw new QuotaUpdateError(response.code)
+  }
+  return response.data ?? { items: [] }
+}
+
+/** 配额调整失败（携带后端业务码，供页面映射文案键）。 */
+export class QuotaUpdateError extends Error {
+  /** 后端业务码。 */
+  readonly code: number
+
+  /**
+   * @param code 后端业务码。
+   */
+  constructor(code: number) {
+    super(String(code))
+    this.name = 'QuotaUpdateError'
+    this.code = code
+  }
+}

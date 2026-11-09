@@ -395,6 +395,14 @@ severity = "warning"
 description = "主题 ACL 拒绝（主体对该主题的该动作无授权，含显式 deny）；ACL 先于归属，不泄露主题存在性"
 maps_from = [82013]
 
+[[errcodes]]
+code = 350028
+domain = "msg"
+http_status = 409
+message_key = "msg.error.topic_state_invalid"
+severity = "warning"
+description = "主题状态不允许该操作（disabled / deleting 下的写操作）；deleting 应等清理完成，disabled 应先启用"
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。

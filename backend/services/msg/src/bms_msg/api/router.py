@@ -21,6 +21,7 @@ from bms_msg.api.admin import delayed as admin_delayed
 from bms_msg.api.admin import delayed_summary as admin_delayed_summary
 from bms_msg.api.admin import groups as admin_groups
 from bms_msg.api.admin import messages as admin_messages
+from bms_msg.api.admin import offsets as admin_offsets
 from bms_msg.api.admin import overview as admin_overview
 from bms_msg.api.admin import partitions as admin_partitions
 from bms_msg.api.admin import quota as admin_quota
@@ -49,6 +50,7 @@ api_router = mount_service_routers(
             admin_replay.router,
             admin_quota.router,
             admin_quota.admin_router,
+            admin_offsets.router,
         ]
     )
 )

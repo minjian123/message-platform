@@ -307,6 +307,23 @@ class MessageStore(BaseFrameworkObject, ABC):
             ConcurrentStableList[MessageHeaderView]: 按 offset 升序的头视图。
         """
 
+    @abstractmethod
+    async def drop_topic(self, *, topic_id: int) -> int:
+        """删除该主题的全部日志数据（删主题清理的第一步，06-2）。
+
+        **不做保留期截断**：这是「整个主题不要了」，不是「删最老段」；实现须先关闭写句柄再删文件
+        （Windows 下打开中的句柄删不掉），并清掉该主题的 `log_id` 索引条目。
+
+        拒绝在调用方做：清理任务只经本端口动手，不直接改日志文件（需求 06-2）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 受影响的分区数（无数据返回 0，幂等）。
+        """
+        ...
+
 
 class InMemoryMessageStore(MessageStore):
     """内存消息存储（首期实现；8B_02 换文件段实现，端口与装配点不变）。
@@ -518,6 +535,22 @@ class InMemoryMessageStore(MessageStore):
             max_messages=max_messages,
         )
         return ConcurrentStableList(message_header_view(message) for message in messages)
+
+    async def drop_topic(self, *, topic_id: int) -> int:
+        """删除该主题在内存中的全部桶（幂等；返回受影响的分区数）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 受影响的分区数（无数据返回 0）。
+        """
+        target = int(topic_id)
+        keys = [key for key in self._logs if key[0] == target]
+        for key in keys:
+            self._logs.pop(key, None)
+            self._starts.pop(key, None)
+        return len(keys)
 
 
 def _record_bytes(message: StoredMessage) -> int:

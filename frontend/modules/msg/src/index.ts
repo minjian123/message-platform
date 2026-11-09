@@ -72,6 +72,11 @@ export const msgModule = defineModule({
           meta: menu('延迟消息', 60),
         },
         {
+          path: '/msg/quotas',
+          component: () => import('./views/QuotasPage.vue'),
+          meta: menu('配额管理', 65),
+        },
+        {
           path: '/msg/dlq',
           component: () => import('./views/DlqPage.vue'),
           meta: menu('死信与重放', 70),

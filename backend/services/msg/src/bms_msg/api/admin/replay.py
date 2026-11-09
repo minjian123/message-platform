@@ -13,6 +13,8 @@ from typing import Annotated, cast
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.context import get_current_client_ip, get_current_trace_id, get_current_user_id
+from bms_core.core.exceptions import ParamError
+from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
@@ -31,6 +33,8 @@ from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.replay import ReplayRequest, ReplayTaskItem
 
 __all__ = ["router"]
+
+_LOGGER = get_logger("bms_msg.admin_replay")
 
 _MANAGE = Depends(require_permission("msg:manage"))
 _QUERY = Depends(require_permission("msg:query"))
@@ -64,6 +68,27 @@ PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 
 TaskIdPath = Annotated[int, Path(description="重放任务 ID（雪花）")]
 """任务 ID 路径参数。"""
+
+
+def _require_confirm(confirm: bool, *, action: str, **scope: str) -> None:
+    """校验高危写操作的显式确认参数（缺失即拒绝并留痕）。
+
+    **为什么用 10001 而不是产品码**：缺参数是请求契约问题（改请求即可解），不是业务状态问题；
+    留痕走结构化日志而不是审计——审计的「动作 ↔ 留痕」映射针对**已生效**的操作，被拒的请求写进去
+    会与真实操作混在一起（05-4 口径）。
+
+    Args:
+        confirm: 请求携带的确认值。
+        action: 被拒动作（日志分类用）。
+        scope: 作用域字段（命名空间 / 主题等，日志定位用）。
+
+    Raises:
+        ParamError: `confirm` 不为 true（10001）。
+    """
+    if confirm:
+        return
+    _LOGGER.warning("msg_write_confirm_missing", action=action, **scope)
+    raise ParamError("高危写操作须显式确认（confirm=true）")
 
 
 def _service(uow: UnitOfWork, store: MessageStore) -> ReplayService:
@@ -144,12 +169,14 @@ async def create_replay(
     命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。
     入口先写「建任务」审计，再惰性启动执行器（保证留痕顺序先创建后终态）。
     """
+    # 鉴权先于确认校验：无权限的调用方不该先拿到「缺 confirm」这类参数级提示。
     await acl.authorize(
         tenant_id=int(tenant.tenant_id),
         namespace=req.namespace,
         topic=req.topic,
         action=ACL_ACTION_MANAGE,
     )
+    _require_confirm(req.confirm, action="msg:replay", namespace=req.namespace, topic=req.topic)
     task = await _service(uow, store).create(tenant=tenant, request=req)
     await _auditor(sink).record_created(
         task=task,

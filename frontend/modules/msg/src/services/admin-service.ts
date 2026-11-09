@@ -242,3 +242,128 @@ export const loadPartitions: ReadOnlyLoader<PartitionItem> = async (params: Read
   const items = page?.items ?? []
   return { items, total: items.length }
 }
+
+/** 删除受理结果。 */
+export type TopicCleanupView = Schema['TopicCleanupView']
+/** 影响预检五项。 */
+export type DeleteImpact = Schema['DeleteImpact']
+/** 位点重置结果。 */
+export type OffsetResetResult = Schema['OffsetResetResult']
+/** 新建主题请求体。 */
+export type TopicCreateBody = Schema['TopicCreateRequest']
+/** 保留期调整请求体。 */
+export type RetentionPatch = Schema['TopicRetentionUpdate']
+/** 位点重置请求体。 */
+export type OffsetResetBody = Schema['OffsetResetRequest']
+
+/**
+ * 写请求统一解包（与读请求同一套业务码判定）。
+ *
+ * @param path 相对产品域的资源路径。
+ * @param call 发起一次写请求（`post` / `patch` / `del` 由调用方绑定）。
+ * @returns 统一响应体。
+ * @throws MsgQueryError 业务码非 0。
+ */
+async function requestWrite<E extends { code: number }>(path: string, call: (path: string) => Promise<E>): Promise<E> {
+  const envelope = await call(path)
+  if (envelope.code !== 0) {
+    throw new MsgQueryError(envelope.code)
+  }
+  return envelope
+}
+
+/**
+ * 取必填响应体（`data` 为空视为契约违背，与业务码非 0 同路处理）。
+ *
+ * @param data 统一响应的 `data` 段。
+ * @returns 非空数据。
+ * @throws MsgQueryError `data` 为空（10000）。
+ */
+function required<T>(data: T | null | undefined): T {
+  if (data === null || data === undefined) {
+    throw new MsgQueryError(10000)
+  }
+  return data
+}
+
+/** 新建主题（返回完整元数据）。 */
+export async function createTopic(body: TopicCreateBody): Promise<TopicItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_TopicItem_']>('/admin/topics', (path) =>
+    scope().post<Schema['ApiResponse_TopicItem_']>(path, body),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 删主题影响预检（五项影响范围；单项失败由后端记 0）。
+ *
+ * @param topicId 主题主键。
+ */
+export async function fetchDeleteImpact(topicId: string): Promise<DeleteImpact> {
+  const envelope = await request<Schema['ApiResponse_DeleteImpact_']>(`/admin/topics/${topicId}/delete-impact`)
+  return (
+    envelope.data ?? {
+      partition_count: 0,
+      message_total: 0,
+      group_count: 0,
+      delayed_total: 0,
+      dlq_total: 0,
+    }
+  )
+}
+
+/**
+ * 删主题（受理即返回：`confirm` 必须显式传 true）。
+ *
+ * @param topicId 主题主键。
+ */
+export async function deleteTopic(topicId: string): Promise<TopicCleanupView> {
+  const envelope = await requestWrite<Schema['ApiResponse_TopicCleanupView_']>(
+    `/admin/topics/${topicId}`,
+    (path) => scope().del<Schema['ApiResponse_TopicCleanupView_']>(path, { confirm: true }),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 扩分区（只增不减；后端复核 `350009`）。
+ *
+ * @param topicId 主题主键。
+ * @param partitionCount 目标分区数。
+ */
+export async function expandPartitions(topicId: string, partitionCount: number): Promise<TopicDetail> {
+  const envelope = await requestWrite<Schema['ApiResponse_TopicDetail_']>(
+    `/admin/topics/${topicId}/partitions`,
+    (path) =>
+      scope().post<Schema['ApiResponse_TopicDetail_']>(path, {
+        partition_count: partitionCount,
+      } satisfies Schema['TopicPartitionExpandRequest']),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 改保留期 / 容量上限（部分更新，至少一项）。
+ *
+ * @param topicId 主题主键。
+ * @param patch 变更项。
+ */
+export async function updateRetention(topicId: string, patch: RetentionPatch): Promise<TopicItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_TopicItem_']>(`/admin/topics/${topicId}`, (path) =>
+    scope().patch<Schema['ApiResponse_TopicItem_']>(path, patch),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 位点重置（`confirm` 由调用方在确认回调里显式置 true）。
+ *
+ * @param body 重置请求。
+ */
+export async function resetOffset(body: OffsetResetBody): Promise<OffsetResetResult> {
+  const envelope = await requestWrite<Schema['ApiResponse_OffsetResetResult_']>(
+    '/admin/offsets/reset',
+    (path) => scope().post<Schema['ApiResponse_OffsetResetResult_']>(path, body),
+  )
+  return required(envelope.data)
+}

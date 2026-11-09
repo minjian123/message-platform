@@ -116,6 +116,60 @@ async def test_notifying_store_forwards_readonly_views() -> None:
     assert len(await store.scan_headers(topic_id=_TOPIC_ID, partition_no=0, from_offset=0, max_messages=5)) == 1
 
 
+async def test_file_store_drop_topic_removes_directory(tmp_path: Path) -> None:
+    """06-2：删主题清理经存储端口删除段目录，重复执行幂等（不抛错、返回 0）。"""
+    store = _file_store(tmp_path)
+    await _append(store, log_id="l1")
+    topic_dir = tmp_path / "data" / str(_TENANT_ID) / _NAMESPACE / f"{_TOPIC_NAME}.{_TOPIC_ID}"
+    assert topic_dir.is_dir()
+
+    assert await store.drop_topic(topic_id=_TOPIC_ID) == 1
+
+    assert not topic_dir.exists()
+    assert await store.drop_topic(topic_id=_TOPIC_ID) == 0
+
+
+async def test_file_store_drop_topic_skips_other_topics(tmp_path: Path) -> None:
+    """只关目标主题的句柄：其它主题的分区不受影响（`continue` 分支）。"""
+    directory = PartitionDirectory(root=tmp_path)
+    directory.bind(tenant_id=_TENANT_ID, namespace=_NAMESPACE, name=_TOPIC_NAME, topic_id=_TOPIC_ID)
+    directory.bind(tenant_id=_TENANT_ID, namespace=_NAMESPACE, name="other.topic", topic_id=2)
+    store = FileMessageStore(directory=directory, fsync_mode="os", clock=lambda: 0.0)
+    await _append(store, log_id="l1")
+    await store.append(
+        topic_id=2,
+        partition_no=0,
+        message_id="message-other",
+        log_id="l2",
+        key=None,
+        payload=b"payload",
+        headers=ConcurrentStableDict({"trace": "t2"}),
+        trace_id="t2",
+        published_at=_NOW,
+    )
+
+    assert await store.drop_topic(topic_id=_TOPIC_ID) == 1
+
+    assert await store.leo(topic_id=2, partition_no=0) == 1
+
+
+async def test_file_store_drop_topic_recovers_unregistered_directory(tmp_path: Path) -> None:
+    """未登记目录（重启后 / 另一实例）：按盘上 `.{topic_id}` 后缀找回后删除。"""
+    first = _file_store(tmp_path)
+    await _append(first, log_id="l1")
+    # 先关句柄再验证删除：Windows 下打开中的文件删不掉（真实场景是另一实例 / 重启后无句柄）。
+    await first.aclose()
+
+    directory = PartitionDirectory(root=tmp_path)
+    store = FileMessageStore(directory=directory, fsync_mode="os", clock=lambda: 0.0)
+    assert directory.locate(_TOPIC_ID) is None
+
+    assert await store.drop_topic(topic_id=_TOPIC_ID) == 0
+
+    topic_dir = tmp_path / "data" / str(_TENANT_ID) / _NAMESPACE / f"{_TOPIC_NAME}.{_TOPIC_ID}"
+    assert not topic_dir.exists()
+
+
 async def test_file_store_header_views_and_lru_fallback(tmp_path: Path) -> None:
     """文件实现：LRU 命中 / 清空 LRU 后段头兜底 / 未命中 / 批读 / 既有坐标入口不回归。"""
     store = _file_store(tmp_path)

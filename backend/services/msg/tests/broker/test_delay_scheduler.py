@@ -271,6 +271,17 @@ class _FailingMessageStore(MessageStore):
             max_messages=max_messages,
         )
 
+    async def drop_topic(self, *, topic_id: int) -> int:
+        """转调真实实现（删主题清理不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 受影响的分区数。
+        """
+        return await self._inner.drop_topic(topic_id=topic_id)
+
 
 class _ExplodingWheel(DelayWheel):
     """时间轮替身：首次推进抛异常，之后转调真实轮（验证单轮异常不终止推进任务）。"""

@@ -299,6 +299,12 @@ METRICS_TOPIC_KEY_LIMIT = 500
 METRICS_SAMPLE_INTERVAL_SECONDS = 15.0
 """指标后台采样周期（秒）：与 Prometheus 缺省抓取间隔同频；不新增业务配置项（06-3-1）。"""
 
+TOPIC_CLEANUP_SCAN_INTERVAL_SECONDS = 30.0
+"""删主题清理的周期扫描间隔（秒）：兜底「首轮未跑完 / 进程重启 / 上一轮失败」，受理时另有即时 kick（06-2）。"""
+
+TOPIC_CLEANUP_FAILURE_ALERT_ATTEMPTS = 3
+"""清理连续失败告警阈值（轮次）：达到即每轮输出 warning 级日志，供 06-3 告警规则消费（06-2）。"""
+
 WINDOW_STALL_THRESHOLD_MS = 50
 """窗口暂停判定阈值（毫秒）：流两次推进间隔超过该值即记一次 `msg_window_stall_total`。
 

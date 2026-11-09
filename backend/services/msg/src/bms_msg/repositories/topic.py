@@ -9,10 +9,10 @@
 
 from bms_core.core.concurrent import ConcurrentStableList, ConcurrentStableSet
 from bms_core.repositories.base_db_repository import BaseDbRepository
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import MsgTopic
+from bms_msg.models.topic import STATUS_DELETING, MsgTopic
 
 __all__ = ["PartitionRepository", "TopicRepository"]
 
@@ -94,16 +94,20 @@ class TopicRepository(BaseDbRepository[MsgTopic]):
         return await self._session.get(MsgTopic, topic_id)
 
     def _filters(self, namespace: str | None, keyword: str | None) -> tuple[ColumnElement[bool], ...]:
-        """构造列表过滤条件（命名空间 / 名称模糊）。
+        """构造列表过滤条件（命名空间 / 名称模糊 / 排除清理中）。
+
+        `deleting` 状态的主题**不进列表也不进计数**（06-2 定稿）：用户已发起删除，列表再展示会让人
+        以为「删了还在」；配额按计数判定，若不排除会卡住「删了建不了新的」。清理进度只能经详情端点查看。
 
         Args:
             namespace: 命名空间过滤；None 不限制。
             keyword: 名称模糊匹配；None / 空串不限制。
 
         Returns:
-            tuple[ColumnElement[bool], ...]: 条件元组（可能为空）。
+            tuple[ColumnElement[bool], ...]: 条件元组（非空）。
         """
         conditions: ConcurrentStableList[ColumnElement[bool]] = ConcurrentStableList()
+        conditions.add(self._column("status") != STATUS_DELETING)
         if namespace is not None:
             conditions.add(self._column("namespace") == namespace)
         if keyword:
@@ -148,3 +152,21 @@ class PartitionRepository(BaseDbRepository[MsgPartition]):
         for partition_no in range(start_no, start_no + count):
             created.add(await self.create(topic_id=topic_id, partition_no=partition_no, leader=leader))
         return created
+
+    async def delete_by_topic(self, topic_id: int) -> int:
+        """删除某主题的全部分区行（**物理删除**，06-2 删主题清理的最后一步）。
+
+        分区行没有软删语义（表只表达「有哪些分区」），删除即真删；调用方负责保证该主题已停止读写。
+
+        Args:
+            topic_id: 主题 ID。
+
+        Returns:
+            int: 删除的行数（无行返回 0，幂等）。
+        """
+        # 先取行再删：`Result.rowcount` 在异步会话类型面不可见（pyright 判 `Result[Any]` 无该属性），
+        # 而分区数上限 1024，取出再删的代价可忽略。
+        targets = await self.list_by_topic(topic_id)
+        await self._session.execute(delete(MsgPartition).where(MsgPartition.topic_id == int(topic_id)))
+        await self._session.flush()
+        return len(targets)

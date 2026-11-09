@@ -14,6 +14,7 @@ from bms_msg.broker.group import (
     GROUP_STATE_STABLE,
     ConsumerGroup,
     GroupMember,
+    GroupStore,
     InMemoryGroupStore,
 )
 
@@ -124,3 +125,19 @@ async def test_save_overwrites_snapshot(group_store: InMemoryGroupStore) -> None
     loaded = await group_store.load(tenant_id=TENANT, topic_id=101, group="audit")
     assert (loaded.state, loaded.generation) == (GROUP_STATE_STABLE, 1)  # type: ignore[union-attr]
     assert len(loaded.members) == 1  # type: ignore[union-attr]
+
+
+async def test_purge_topic_removes_only_target_topic() -> None:
+    """06-2：按主题清理只删该主题的组，其他主题与租户不受影响。"""
+    store = InMemoryGroupStore()
+    await store.save(_record(topic_id=1, group="a"))
+    await store.save(_record(topic_id=2, group="b"))
+
+    assert await store.purge_topic(topic_id=1) == 1
+    assert [record.group for record in await store.list_all()] == ["b"]
+    assert await store.purge_topic(topic_id=1) == 0
+
+
+async def test_purge_topic_default_implementation_is_noop() -> None:
+    """未知存储形态走基类默认实现：无组可清返回 0（清理任务据此继续后续步骤）。"""
+    assert await GroupStore.purge_topic(InMemoryGroupStore(), topic_id=1) == 0

@@ -31,7 +31,7 @@
 | `retention_ms` | BIGINT | 否 | — | 保留时长（毫秒；首期默认 30 天、上限 366 天，常量在 `bms_msg/core/config.py`） |
 | `retention_bytes` | BIGINT | 否 | 默认 0 | 容量上限（字节；`0` = 不限，上限常量 `MAX_RETENTION_BYTES`）。超限从最老段整段删除，**最多删到只剩最后一段**（不把刚写入的数据删空），随 01-6 |
 | `cleanup_policy` | VARCHAR(16) | 否 | 默认 `delete` | 清理策略（`delete` / `compact`；首期只支持 `delete`） |
-| `status` | VARCHAR(16) | 否 | 默认 `active` | 状态（`active` / `disabled`） |
+| `status` | VARCHAR(16) | 否 | 默认 `active` | 状态（`active` / `disabled` / `deleting`）。`deleting` = 已受理删除、正在清理：数据面按 `350001` 拒绝、管理面写操作按 `350028` 拒绝、列表与计数不展示，清理完成即物理删除本行（06-2） |
 | `created_at` | DATETIME | 否 | 审计 | 创建时间（UTC） |
 | `created_by` | DECIMAL(38,0) | 是 | 审计 | 创建人 |
 | `updated_at` | DATETIME | 否 | 审计 | 更新时间（UTC） |
@@ -61,5 +61,6 @@
 | --- | --- | --- | --- |
 | 2026-11-04 | v1 | 新建表结构（平台库；随任务 01-1 定稿：`tenant_id` 由设计初稿 `String(64)` 改为雪花 `DECIMAL(38,0)`，与基座《数据规范》同口径） | minjian |
 | 2026-11-04 | v2 | 增 `retention_bytes`（容量上限，0 = 不限；随任务 01-6「按时间与容量双维度保留」，与 `retention_ms` 同码校验 `350009`） | minjian |
+| 2026-11-09 | v3 | `status` 扩第三个取值 `deleting`（删主题受理后的清理中态；随任务 06-2，配套新表 [msg_topic_cleanup](msg_topic_cleanup.md)）。列定义与默认值不变，属语义扩展，**不改已有行** | minjian |
 
 > 数据表设计 · 与 bms《[数据库开发规范](../../../../bms文档/规范/数据库开发规范.md)》「数据表文件规范」节配套

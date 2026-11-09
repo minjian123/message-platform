@@ -24,6 +24,12 @@ STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
 """主题状态：停用（拒绝生产与消费，数据保留）。"""
 
+STATUS_DELETING = "deleting"
+"""主题状态：已受理删除、正在清理（06-2）。
+
+数据面按 `350001` 拒绝、管理面写操作按 `350028` 拒绝、列表与计数不展示；清理完成即物理删除本行。
+"""
+
 DEFAULT_CLEANUP_POLICY = CLEANUP_DELETE
 """缺省清理策略。"""
 
@@ -57,4 +63,6 @@ class MsgTopic(BaseModel):
     cleanup_policy: Mapped[str] = mapped_column(
         String(16), default=DEFAULT_CLEANUP_POLICY, comment="清理策略（delete / compact；首期只支持 delete）"
     )
-    status: Mapped[str] = mapped_column(String(16), default=DEFAULT_STATUS, comment="状态（active / disabled）")
+    status: Mapped[str] = mapped_column(
+        String(16), default=DEFAULT_STATUS, comment="状态（active / disabled / deleting）"
+    )

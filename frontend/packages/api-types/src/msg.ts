@@ -216,6 +216,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/msg/admin/offsets/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Offset
+         * @description 重置某组在某主题某分区上的已提交位点（可倒退可前跳，需 `confirm=true`）。
+         *
+         *     需要 msg:manage 权限；`confirm` 缺失 10001；主题不存在 350001、状态不允许 350028；
+         *     组不存在 350013；分区号越界 350009；位点早于分区起点 350003（消息已被保留期清理）；
+         *     位点超过 LEO 350002；写审计由 `OffsetResetter` 以 `record_ref=msg.offset` 落库。
+         */
+        post: operations["reset_offset_api_v1_msg_admin_offsets_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/msg/admin/overview": {
         parameters: {
             query?: never;
@@ -456,13 +480,73 @@ export interface paths {
         };
         /**
          * Get Topic
-         * @description 主题详情（含分区列表）。
+         * @description 主题详情（含分区列表；`deleting` 时含清理进度）。
          *
          *     需要 msg:query 权限；不存在或不属于当前租户返回 350001。
          */
         get: operations["get_topic_api_v1_msg_admin_topics__topic_id__get"];
         put?: never;
         post?: never;
+        /**
+         * Delete Topic
+         * @description 删主题（**受理即返回**：置 `deleting` + 落台账 + 后台异步清理）。
+         *
+         *     需要 msg:manage 权限；`confirm` 缺失返回 10001；主题不存在 350001；**重复删除幂等受理**
+         *     （返回已有台账，不产生二次副作用）。审计失败即请求失败（主题不会被置 `deleting`）。
+         */
+        delete: operations["delete_topic_api_v1_msg_admin_topics__topic_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Topic
+         * @description 改保留期 / 容量上限（**部分更新**：只为给出的项写库，至少一项）。
+         *
+         *     需要 msg:manage 权限；主题不存在 350001，状态 `disabled` / `deleting` 时 350028，
+         *     取值越界 350009。即时生效、不回溯删除已保留记录（后续清理按新值执行）。
+         */
+        patch: operations["update_topic_api_v1_msg_admin_topics__topic_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/msg/admin/topics/{topic_id}/delete-impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Topic Delete Impact
+         * @description 删主题影响预检（二次确认弹窗的五项影响范围）。
+         *
+         *     需要 msg:manage 权限；主题不存在 350001。各维度独立容错：单项取数失败记 0 并告警，
+         *     不因预检失败阻断后续删除（真正的保护在后端的状态与二次确认判定）。
+         */
+        get: operations["topic_delete_impact_api_v1_msg_admin_topics__topic_id__delete_impact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/topics/{topic_id}/partitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expand Topic Partitions
+         * @description 扩分区（**只增不减**：目标值不大于现状即 350009）。
+         *
+         *     需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。
+         *     占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。
+         */
+        post: operations["expand_topic_partitions_api_v1_msg_admin_topics__topic_id__partitions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1391,6 +1475,20 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[DeleteImpact] */
+        ApiResponse_DeleteImpact_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["DeleteImpact"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[GroupDetail] */
         ApiResponse_GroupDetail_: {
             /**
@@ -1469,6 +1567,20 @@ export interface components {
              */
             code: number;
             data?: components["schemas"]["NackResult"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[OffsetResetResult] */
+        ApiResponse_OffsetResetResult_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["OffsetResetResult"] | null;
             /**
              * Message
              * @default ok
@@ -1559,6 +1671,20 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[TopicCleanupView] */
+        ApiResponse_TopicCleanupView_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["TopicCleanupView"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[TopicDetail] */
         ApiResponse_TopicDetail_: {
             /**
@@ -1600,6 +1726,42 @@ export interface components {
              * @default ok
              */
             message: string;
+        };
+        /**
+         * CleanupProgress
+         * @description 删主题清理进度（`deleting` 主题的详情里出现；其余状态为 null）。
+         */
+        CleanupProgress: {
+            /**
+             * Attempts
+             * @description 已执行轮次（连续失败 ≥3 会输出告警日志）
+             */
+            attempts: number;
+            /**
+             * Done Steps
+             * @description 已完成步骤键（messages / delay / offsets / groups / dlq / runtime / metadata）
+             */
+            done_steps?: string[];
+            /**
+             * Finished At
+             * @description 完成时刻（UTC；未完成为 null）
+             */
+            finished_at: string | null;
+            /**
+             * Last Error
+             * @description 最后一轮失败原因（未失败为 null）
+             */
+            last_error: string | null;
+            /**
+             * Started At
+             * @description 首轮开始时刻（UTC；未开始为 null）
+             */
+            started_at: string | null;
+            /**
+             * Status
+             * @description 台账状态（pending / running / completed）
+             */
+            status: string;
         };
         /**
          * ConnectionInfo
@@ -1937,6 +2099,37 @@ export interface components {
              * @description 过滤后总数
              */
             total: number;
+        };
+        /**
+         * DeleteImpact
+         * @description 删主题影响预检（二次确认弹窗的「影响范围」唯一数据源）。
+         */
+        DeleteImpact: {
+            /**
+             * Delayed Total
+             * @description 延迟待投条数
+             */
+            delayed_total: number;
+            /**
+             * Dlq Total
+             * @description 死信条数
+             */
+            dlq_total: number;
+            /**
+             * Group Count
+             * @description 该主题的消费组数
+             */
+            group_count: number;
+            /**
+             * Message Total
+             * @description 可读消息总量（Σ(LEO − 起点)）
+             */
+            message_total: number;
+            /**
+             * Partition Count
+             * @description 分区数
+             */
+            partition_count: number;
         };
         /**
          * GroupDetail
@@ -2345,6 +2538,78 @@ export interface components {
             committed_offset: number;
         };
         /**
+         * OffsetResetRequest
+         * @description 位点重置请求。
+         */
+        OffsetResetRequest: {
+            /**
+             * Confirm
+             * @description 显式确认（必须为 true；缺省 / false 一律拒绝，防脚本绕过）
+             */
+            confirm: boolean;
+            /**
+             * Group
+             * @description 消费组名（组元数据与再均衡归 01-4）
+             */
+            group: string;
+            /**
+             * Namespace
+             * @description 命名空间（对齐 bms module_key；须为已登记且启用的模块）
+             */
+            namespace: string;
+            /**
+             * Offset
+             * @description 目标位点（不早于分区起点，且不超过 LEO）
+             */
+            offset: number;
+            /**
+             * Partition
+             * @description 分区号（必带；组内分摊与再均衡归 01-4）
+             */
+            partition: number;
+            /**
+             * Topic
+             * @description 主题名（与创建主题时的 name 同值）
+             */
+            topic: string;
+        };
+        /**
+         * OffsetResetResult
+         * @description 位点重置结果（含重置前值，便于前端与审计对账）。
+         */
+        OffsetResetResult: {
+            /**
+             * Group
+             * @description 消费组名
+             */
+            group: string;
+            /**
+             * Namespace
+             * @description 命名空间
+             */
+            namespace: string;
+            /**
+             * Offset
+             * @description 重置后位点
+             */
+            offset: number;
+            /**
+             * Partition
+             * @description 分区号
+             */
+            partition: number;
+            /**
+             * Previous Offset
+             * @description 重置前位点（该组该分区无已提交位点时为 0）
+             */
+            previous_offset: number;
+            /**
+             * Topic
+             * @description 主题名
+             */
+            topic: string;
+        };
+        /**
          * Overview
          * @description 平台概览四张数字卡 + 快照可用性。
          */
@@ -2614,6 +2879,12 @@ export interface components {
          */
         ReplayRequest: {
             /**
+             * Confirm
+             * @description 显式确认（批量重放属高危写操作；必须为 true，缺省 / false 一律拒绝，防脚本绕过）
+             * @default false
+             */
+            confirm: boolean;
+            /**
              * Key
              * @description 分区键精确匹配；null 不过滤
              */
@@ -2820,6 +3091,34 @@ export interface components {
             payload: string;
         };
         /**
+         * TopicCleanupView
+         * @description 删主题受理结果（**不是**「已删除」：主题进入 `deleting`，清理异步进行）。
+         */
+        TopicCleanupView: {
+            /** @description 清理进度 */
+            cleanup: components["schemas"]["CleanupProgress"];
+            /**
+             * Namespace
+             * @description 命名空间
+             */
+            namespace: string;
+            /**
+             * Status
+             * @description 主题状态（受理后恒为 deleting）
+             */
+            status: string;
+            /**
+             * Topic
+             * @description 主题名
+             */
+            topic: string;
+            /**
+             * Topic Id
+             * @description 主题 ID（雪花，JSON 输出为字符串）
+             */
+            topic_id: string;
+        };
+        /**
          * TopicCreateRequest
          * @description 创建主题请求（`tenant_id` **不在请求体**：由基座解析链注入，防客户端自报冒充）。
          */
@@ -2860,9 +3159,11 @@ export interface components {
         };
         /**
          * TopicDetail
-         * @description 主题详情（含分区列表）。
+         * @description 主题详情（含分区列表；`deleting` 时含清理进度）。
          */
         TopicDetail: {
+            /** @description 删主题清理进度（仅 deleting 状态有值，其余为 null） */
+            cleanup?: components["schemas"]["CleanupProgress"] | null;
             /**
              * Cleanup Policy
              * @description 清理策略
@@ -2911,7 +3212,7 @@ export interface components {
             retention_ms: number;
             /**
              * Status
-             * @description 状态（active / disabled）
+             * @description 状态（active / disabled / deleting）
              */
             status: string;
             /**
@@ -2968,7 +3269,7 @@ export interface components {
             retention_ms: number;
             /**
              * Status
-             * @description 状态（active / disabled）
+             * @description 状态（active / disabled / deleting）
              */
             status: string;
             /**
@@ -3002,6 +3303,33 @@ export interface components {
              * @description 符合条件的总数
              */
             total: number;
+        };
+        /**
+         * TopicPartitionExpandRequest
+         * @description 扩分区请求（**只增不减**：目标值不大于现状即拒绝，`350009`）。
+         */
+        TopicPartitionExpandRequest: {
+            /**
+             * Partition Count
+             * @description 目标分区数（须大于当前分区数且在上界内）
+             */
+            partition_count: number;
+        };
+        /**
+         * TopicRetentionUpdate
+         * @description 改保留期请求（两项均可选、至少给一项；范围校验在服务层，越界为 `350009`）。
+         */
+        TopicRetentionUpdate: {
+            /**
+             * Retention Bytes
+             * @description 容量上限（字节；0 = 不限；null 表示不改）
+             */
+            retention_bytes?: number | null;
+            /**
+             * Retention Ms
+             * @description 保留时长（毫秒；null 表示不改）
+             */
+            retention_ms?: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -4000,6 +4328,84 @@ export interface operations {
             };
         };
     };
+    reset_offset_api_v1_msg_admin_offsets_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OffsetResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_OffsetResetResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
     get_overview_api_v1_msg_admin_overview_get: {
         parameters: {
             query?: never;
@@ -4861,6 +5267,325 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TopicDetail_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    delete_topic_api_v1_msg_admin_topics__topic_id__delete: {
+        parameters: {
+            query?: {
+                /** @description 显式确认（必须为 true；缺省 / false 一律拒绝） */
+                confirm?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TopicCleanupView_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    update_topic_api_v1_msg_admin_topics__topic_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopicRetentionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TopicItem_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    topic_delete_impact_api_v1_msg_admin_topics__topic_id__delete_impact_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DeleteImpact_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    expand_topic_partitions_api_v1_msg_admin_topics__topic_id__partitions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopicPartitionExpandRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

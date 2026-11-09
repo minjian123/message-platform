@@ -11,6 +11,9 @@ import type { ModuleApi, ModuleHostContext } from '@bms/core'
 /** 配额查询权限码（与后端 `msg:query` 同源）。 */
 export const MSG_QUERY_PERMISSION = 'msg:query'
 
+/** 写操作权限码（与后端 `msg:manage` 同源；写按钮按它渲染，不抬升页面权限）。 */
+export const MSG_MANAGE_PERMISSION = 'msg:manage'
+
 /** 宿主请求能力缺失时的哨兵错误。 */
 export const MODULE_API_ABSENT = 'MODULE_API_ABSENT'
 

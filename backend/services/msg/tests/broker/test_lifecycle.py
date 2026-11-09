@@ -94,13 +94,20 @@ class _OffsetFlushStub:
         self.closed = True
 
 
-def _app(scheduler: DelayScheduler, runner: ReplayRunner, *, purge: object | None = None) -> FastAPI:
+def _app(
+    scheduler: DelayScheduler,
+    runner: ReplayRunner,
+    *,
+    purge: object | None = None,
+    cleanup: object | None = None,
+) -> FastAPI:
     """构造只带后台任务与资源管理器的空应用。
 
     Args:
         scheduler: 延迟推进器。
         runner: 重放执行器。
         purge: 租户到期清扫服务替身（05-5；None 表示不装配）。
+        cleanup: 删主题清理扫描替身（06-2；None 表示不装配）。
 
     Returns:
         FastAPI: 应用实例。
@@ -113,6 +120,8 @@ def _app(scheduler: DelayScheduler, runner: ReplayRunner, *, purge: object | Non
     app.state.delay_store = InMemoryDelayStore()
     if purge is not None:
         app.state.tenant_purge_service = purge
+    if cleanup is not None:
+        app.state.topic_cleanup_service = cleanup
     app.state.resources = ResourceManager()
     return app
 
@@ -149,6 +158,23 @@ async def test_start_hook_starts_and_stops_tenant_purge_service(
     await app.state.resources.aclose()
 
     assert purge.stopped is True
+
+
+async def test_start_hook_starts_and_stops_topic_cleanup(
+    delay_scheduler: DelayScheduler, replay_runner: ReplayRunner
+) -> None:
+    """06-2：启动钩子拉起删主题清理扫描，停机随资源管理器停止。"""
+    cleanup = _PurgeStub()
+    app = _app(delay_scheduler, replay_runner, cleanup=cleanup)
+
+    await start_background_tasks(app)
+
+    assert cleanup.ensured is True
+    assert cleanup.stopped is False
+
+    await app.state.resources.aclose()
+
+    assert cleanup.stopped is True
 
 
 async def test_start_hook_starts_loops_and_registers_resource(

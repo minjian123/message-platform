@@ -17,6 +17,7 @@
 
 import asyncio
 import os
+import shutil
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -1707,6 +1708,42 @@ class FileMessageStore(MessageStore):
         for log_id, (topic_id, _partition, _offset) in list(self._log_ids.items()):
             if topic_id in topic_ids:
                 self._log_ids.pop(log_id, None)
+        return closed
+
+    async def drop_topic(self, *, topic_id: int) -> int:
+        """删除该主题的全部段文件与目录（06-2 删主题清理用；幂等）。
+
+        **顺序**：先关句柄（否则 Windows 下删不掉打开中的文件）→ 清 `log_id` LRU → 删主题目录 →
+        移除目录登记。目录不存在时只清内存态并返回 0，保证重复执行无副作用。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 关闭并删除的分区数。
+        """
+        target = int(topic_id)
+        closed = 0
+        for key, partition in list(self._partitions.items()):
+            if key[0] != target:
+                continue
+            async with partition.lock:
+                partition.flush()
+                partition.close()
+            self._partitions.pop(key, None)
+            self._pending_alignment.pop(key, None)
+            closed += 1
+        for log_id, (owner, _partition_no, _offset) in list(self._log_ids.items()):
+            if owner == target:
+                self._log_ids.pop(log_id, None)
+        location = self._directory.locate(target)
+        if location is None:
+            location = self._directory.recover(topic_id=target)
+        if location is not None:
+            topic_dir = self._directory.path_of(location, 0).parent
+            if topic_dir.is_dir():
+                shutil.rmtree(topic_dir, ignore_errors=True)
+        self._directory.forget(target)
         return closed
 
     def _remember_log_id(self, *, log_id: str, topic_id: int, partition_no: int, offset: int) -> None:

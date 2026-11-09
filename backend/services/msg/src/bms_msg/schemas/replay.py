@@ -46,6 +46,10 @@ class ReplayRequest(BaseSchema):
         le=MAX_REPLAY_RATE_PER_SECOND,
         description=f"限速（条/秒，1~{MAX_REPLAY_RATE_PER_SECOND}）",
     )
+    confirm: bool = Field(
+        default=False,
+        description="显式确认（批量重放属高危写操作；必须为 true，缺省 / false 一律拒绝，防脚本绕过）",
+    )
 
     @model_validator(mode="after")
     def _ensure_ranges(self) -> Self:

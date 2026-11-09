@@ -159,6 +159,9 @@ async def test_notifying_store_notifies_on_append_and_delegates() -> None:
     assert await store.start_offset(topic_id=KEY[0], partition_no=KEY[1]) == 1
     # 截断不唤醒（只有写入才唤醒）：版本仍是 1
     assert waiter.version(KEY) == 1
+    # 06-2：删主题清理同样原样委托（包装器不改变端口语义）；放在末尾，避免影响上面的截断断言
+    assert await store.drop_topic(topic_id=KEY[0]) == 1
+    assert await store.leo(topic_id=KEY[0], partition_no=KEY[1]) == 0
 
 
 async def test_notifying_store_forwards_payload_marks() -> None:

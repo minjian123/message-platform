@@ -34,6 +34,7 @@ const MENU_PATHS = [
   '/msg/partitions',
   '/msg/messages',
   '/msg/delayed',
+  '/msg/quotas',
   '/msg/dlq',
 ]
 
@@ -44,10 +45,10 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('九条路由：七项菜单 + 两条详情深链', async () => {
+  it('十条路由：八项菜单 + 两条详情深链', async () => {
     const result = await registration()
     const routes = result.routes ?? []
-    expect(routes).toHaveLength(9)
+    expect(routes).toHaveLength(10)
     expect(routes.map((route) => route.path)).toEqual([
       '/msg/overview',
       '/msg/topics',
@@ -57,6 +58,7 @@ describe('msg 模块注册（Kiwi 2464）', () => {
       '/msg/partitions',
       '/msg/messages',
       '/msg/delayed',
+      '/msg/quotas',
       '/msg/dlq',
     ])
     const menus = routes.filter((route) => route.meta?.menu !== false)
@@ -72,7 +74,7 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     const menus = (result.routes ?? []).filter((route) => route.meta?.menu !== false)
     expect(menus.every((route) => route.meta?.group === MSG_MENU_GROUP)).toBe(true)
     expect(menus.every((route) => route.meta?.perm === MSG_QUERY_PERMISSION)).toBe(true)
-    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 70])
+    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 65, 70])
     expect(ORDER_RESERVED_TOPIC_ACL).toBeGreaterThan(70)
     expect(ORDER_RESERVED_TENANT_USAGE).toBeGreaterThan(ORDER_RESERVED_TOPIC_ACL)
   })

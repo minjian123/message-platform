@@ -332,3 +332,14 @@ class NotifyingMessageStore(MessageStore):
             from_offset=from_offset,
             max_messages=max_messages,
         )
+
+    async def drop_topic(self, *, topic_id: int) -> int:
+        """删除该主题的全部日志数据（原样委托；删主题清理用）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 受影响的分区数。
+        """
+        return await self._inner.drop_topic(topic_id=topic_id)

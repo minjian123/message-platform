@@ -313,7 +313,7 @@ async def _create_replay(client: AsyncClient, **overrides: object) -> Response:
         Response: 响应。
     """
     body: ConcurrentStableDict[str, object] = ConcurrentStableDict(
-        {"namespace": NAMESPACE, "topic": TOPIC_NAME, "partitions": [0]}
+        {"namespace": NAMESPACE, "topic": TOPIC_NAME, "partitions": [0], "confirm": True}
     )
     for key, value in overrides.items():
         body.set(key, value)

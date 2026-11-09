@@ -216,6 +216,21 @@ class GroupStore(BaseFrameworkObject, ABC):
             int: 删除的组记录数。
         """
 
+    async def purge_topic(self, *, topic_id: int) -> int:
+        """删除某主题的全部组记录（删主题清理用）。
+
+        默认实现刻意返回 0 而不是抛错：未知存储形态下这是「没有可清理的组」，清理任务据此继续走
+        后续步骤；内存实现覆盖为真实删除，DB 实现接管时按环境表补齐。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 删除的组记录数。
+        """
+        del topic_id
+        return 0
+
 
 class InMemoryGroupStore(GroupStore):
     """内存组存储（首期实现；8B_02 换 `msg_group` / `msg_group_member`，端口与装配点不变）。"""
@@ -287,6 +302,20 @@ class InMemoryGroupStore(GroupStore):
             int: 删除的组记录数。
         """
         keys = [key for key in self._groups if key[0] == int(tenant_id)]
+        for key in keys:
+            self._groups.pop(key, None)
+        return len(keys)
+
+    async def purge_topic(self, *, topic_id: int) -> int:
+        """删除某主题的全部组记录（幂等）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            int: 删除的组记录数。
+        """
+        keys = [key for key in self._groups if key[1] == int(topic_id)]
         for key in keys:
             self._groups.pop(key, None)
         return len(keys)

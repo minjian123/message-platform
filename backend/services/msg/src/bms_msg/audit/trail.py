@@ -48,6 +48,9 @@ __all__ = [
     "REPLAY_ACTION",
     "REPLAY_REF_TYPE",
     "TOPIC_CREATE_ACTION",
+    "TOPIC_DELETE_ACTION",
+    "TOPIC_EXPAND_ACTION",
+    "TOPIC_UPDATE_ACTION",
     "AuditEmitter",
     "emit_access_denied",
     "emit_acl_change",
@@ -62,6 +65,19 @@ MODULE = "msg"
 
 TOPIC_CREATE_ACTION = "msg:topic.create"
 """建主题（配置变更，强审计）。"""
+
+TOPIC_UPDATE_ACTION = "msg:topic.update"
+"""改保留期（配置变更，强审计；06-2）。"""
+
+TOPIC_EXPAND_ACTION = "msg:topic.expand"
+"""扩分区（配置变更，强审计；06-2）。"""
+
+TOPIC_DELETE_ACTION = "msg:topic.delete"
+"""删主题受理（配置变更，强审计；06-2）。
+
+**只在请求侧写一条**：执行结果随时间变化且可能重试多轮，写进审计会产出同动作多条记录，
+破坏「动作 ↔ 留痕」单一映射；执行结果由清理台账（`msg_topic_cleanup`）与结构化日志承担。
+"""
 
 QUOTA_UPDATE_ACTION = "msg:quota.update"
 """配额调整（配置变更，强审计）。"""
@@ -108,6 +124,9 @@ OFFSET_REF_TYPE = "msg.offset"
 ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
     {
         TOPIC_CREATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="建主题"),
+        TOPIC_UPDATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="改保留期"),
+        TOPIC_EXPAND_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="扩分区"),
+        TOPIC_DELETE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="删主题"),
         QUOTA_UPDATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="配额调整"),
         ACL_GRANT_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 授予"),
         ACL_REVOKE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 收回"),

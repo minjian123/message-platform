@@ -11,9 +11,9 @@
   的唯一来源（详细设计 §3.3）。
 """
 
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import get_settings
-from bms_core.core.exceptions import ParamError
+from bms_core.core.exceptions import ConfigError, ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
 
@@ -32,11 +32,14 @@ from bms_msg.errors import (
     MsgTopicExistsError,
     MsgTopicNotFoundError,
     MsgTopicQuotaExceededError,
+    MsgTopicStateInvalidError,
 )
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import CLEANUP_DELETE, MsgTopic
+from bms_msg.models.topic import CLEANUP_DELETE, STATUS_ACTIVE, STATUS_DELETING, MsgTopic
+from bms_msg.models.topic_cleanup import MsgTopicCleanup
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
+from bms_msg.repositories.topic_cleanup import TopicCleanupRepository
 from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.tenant.context import CurrentTenant
 
@@ -60,6 +63,7 @@ class TopicService:
         *,
         cache: TopicCache | None = None,
         quota: QuotaService | None = None,
+        cleanups: TopicCleanupRepository | None = None,
     ) -> None:
         """初始化。
 
@@ -69,12 +73,14 @@ class TopicService:
             uow: 工作单元（事务边界）。
             cache: 进程内主题快照缓存（None = 不失效；数据面读最新值靠它）。
             quota: 配额服务（None = 不判主题数配额，兼容既有单测）。
+            cleanups: 清理台账仓储（None = 不具备删除受理能力，兼容既有单测）。
         """
         self._topics = topics
         self._partitions = partitions
         self._uow = uow
         self._cache = cache
         self._quota = quota
+        self._cleanups = cleanups
 
     async def create_topic(self, *, tenant: CurrentTenant, request: TopicCreateRequest) -> MsgTopic:
         """创建主题（同事务写主题行 + N 条分区行）。
@@ -193,14 +199,18 @@ class TopicService:
         Raises:
             MsgTopicNotFoundError: 主题不存在（350001）。
             MsgPartitionCountInvalidError: 目标分区数越界或小于现状（350009）。
+            MsgTopicStateInvalidError: 主题处于 `disabled` / `deleting`（350028）。
         """
         self._ensure_partition_count(partition_count)
+        # 端点可能已为鉴权读过主题（会话由此自动开启事务），先回滚再显式 begin（同 05-3 ACL 服务口径）。
+        await self._uow.rollback()
         async with self._uow.begin():
             topic = await self._topics.get(topic_id)
             if topic is None:
                 raise MsgTopicNotFoundError(f"主题不存在：{topic_id}")
             # 事务内先取标识：提交后再读 ORM 属性会触发刷新（回滚分支更会直接失效）。
             identity = (topic.namespace, topic.name)
+            self._ensure_writable_state(topic)
             current = int(topic.partition_count)
             if partition_count < current:
                 raise MsgPartitionCountInvalidError(f"分区数只能增不能减：现 {current}，目标 {partition_count}")
@@ -215,6 +225,122 @@ class TopicService:
             partitions = await self._partitions.list_by_topic(topic_id)
         self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
         return topic, partitions
+
+    async def update_retention(
+        self,
+        *,
+        tenant: CurrentTenant,
+        topic_id: int,
+        retention_ms: int | None,
+        retention_bytes: int | None,
+    ) -> tuple[MsgTopic, ConcurrentStableDict[str, int]]:
+        """改保留期 / 容量上限（**部分更新**：只为给出的项写库）。
+
+        **不回溯删除已保留记录**：本次只改元数据，后续清理按新值执行（需求 06-2 第 4 条）。
+
+        Args:
+            tenant: 当前租户。
+            topic_id: 主题 ID。
+            retention_ms: 新保留时长（None = 不改）。
+            retention_bytes: 新容量上限（None = 不改）。
+
+        Returns:
+            tuple[MsgTopic, ConcurrentStableDict[str, int]]: 更新后的主题 + 变更前值（审计对账用）。
+
+        Raises:
+            MsgTopicNotFoundError: 主题不存在（350001）。
+            MsgTopicStateInvalidError: 主题处于 `deleting`（350028）。
+            MsgPartitionCountInvalidError: 取值越界（350009，与建主题同码）。
+        """
+        if retention_ms is not None:
+            self._ensure_retention(retention_ms)
+        if retention_bytes is not None:
+            self._ensure_retention_bytes(retention_bytes)
+        await self._uow.rollback()
+        async with self._uow.begin():
+            topic = await self._topics.get(topic_id)
+            if topic is None:
+                raise MsgTopicNotFoundError(f"主题不存在：{topic_id}")
+            identity = (topic.namespace, topic.name)
+            self._ensure_writable_state(topic)
+            before = ConcurrentStableDict(
+                {"retention_ms": int(topic.retention_ms), "retention_bytes": int(topic.retention_bytes)}
+            )
+            values: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+            if retention_ms is not None:
+                values.set("retention_ms", int(retention_ms))
+            if retention_bytes is not None:
+                values.set("retention_bytes", int(retention_bytes))
+            updated = await self._topics.update(topic_id, **dict(values))
+        self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
+        return updated or topic, before
+
+    async def begin_delete(self, *, tenant: CurrentTenant, topic_id: int) -> tuple[MsgTopic, MsgTopicCleanup]:
+        """受理删主题（**幂等**：重复受理复用台账，不重复建行、不重复触发首轮）。
+
+        只做三件事：置 `status=deleting`（数据面据此停读写）、建 / 取台账行、提交后失效主题缓存。
+        真正的资源清理在 `TopicCleanupService`，请求不阻塞等待。
+
+        Args:
+            tenant: 当前租户。
+            topic_id: 主题 ID。
+
+        Returns:
+            tuple[MsgTopic, MsgTopicCleanup]: 更新后的主题 + 清理台账。
+
+        Raises:
+            MsgTopicNotFoundError: 主题不存在（350001）。
+            ConfigError: 服务未装配台账仓储（装配缺陷，不静默跳过）。
+        """
+        if self._cleanups is None:
+            raise ConfigError("删主题需要清理台账仓储（TopicCleanupRepository）")
+        await self._uow.rollback()
+        async with self._uow.begin():
+            topic = await self._topics.get(topic_id)
+            if topic is None:
+                raise MsgTopicNotFoundError(f"主题不存在：{topic_id}")
+            identity = (topic.namespace, topic.name)
+            if topic.status != STATUS_DELETING:
+                topic = await self._topics.update(topic_id, status=STATUS_DELETING) or topic
+            cleanup = await self._cleanups.get_by_topic(topic_id)
+            if cleanup is None:
+                cleanup = await self._cleanups.create(
+                    tenant_id=int(tenant.tenant_id),
+                    topic_id=int(topic_id),
+                    namespace=identity[0],
+                    topic=identity[1],
+                )
+        self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
+        return topic, cleanup
+
+    async def get_cleanup(self, *, topic_id: int) -> MsgTopicCleanup | None:
+        """取某主题的清理台账（详情端点展示进度用；无台账返回 None）。
+
+        Args:
+            topic_id: 主题 ID。
+
+        Returns:
+            MsgTopicCleanup | None: 台账。
+
+        Raises:
+            ConfigError: 服务未装配台账仓储（装配缺陷）。
+        """
+        if self._cleanups is None:
+            raise ConfigError("查清理进度需要清理台账仓储（TopicCleanupRepository）")
+        return await self._cleanups.get_by_topic(topic_id)
+
+    def _ensure_writable_state(self, topic: MsgTopic) -> None:
+        """校验主题处于可写状态（`active` 才允许写；`disabled` / `deleting` 一律拒绝）。
+
+        Args:
+            topic: 主题记录。
+
+        Raises:
+            MsgTopicStateInvalidError: 状态为 `disabled` / `deleting`（350028）。
+        """
+        if topic.status == STATUS_ACTIVE:
+            return
+        raise MsgTopicStateInvalidError(f"主题状态不允许该操作：{topic.namespace}/{topic.name} 当前为 {topic.status}")
 
     def _invalidate(self, *, tenant_id: int, namespace: str, name: str) -> None:
         """失效一条主题快照（**提交成功之后**调用；未装配缓存则空转）。

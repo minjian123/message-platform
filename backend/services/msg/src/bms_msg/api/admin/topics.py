@@ -11,6 +11,8 @@ from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ParamError
+from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
@@ -18,24 +20,47 @@ from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
 from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
-from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, QuotaServiceDep, TopicAclServiceDep, TopicCacheDep
-from bms_msg.audit.trail import TOPIC_CREATE_ACTION, AuditEmitter, emit_sensitive
+from bms_msg.api.deps import (
+    AuditSinkDep,
+    CurrentTenantDep,
+    QuotaServiceDep,
+    TopicAclServiceDep,
+    TopicCacheDep,
+    TopicCleanupDep,
+)
+from bms_msg.audit.trail import (
+    TOPIC_CREATE_ACTION,
+    TOPIC_DELETE_ACTION,
+    TOPIC_EXPAND_ACTION,
+    TOPIC_UPDATE_ACTION,
+    AuditEmitter,
+    emit_sensitive,
+)
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import MsgTopic
+from bms_msg.models.topic import STATUS_DELETING, MsgTopic
+from bms_msg.models.topic_cleanup import MsgTopicCleanup
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
+from bms_msg.repositories.topic_cleanup import TopicCleanupRepository
 from bms_msg.schemas.topic import (
+    CleanupProgress,
+    DeleteImpact,
     PartitionItem,
+    TopicCleanupView,
     TopicCreateRequest,
     TopicDetail,
     TopicItem,
     TopicPage,
+    TopicPartitionExpandRequest,
+    TopicRetentionUpdate,
 )
 from bms_msg.services.topic import MAX_LIST_SIZE, TopicService
 
 __all__ = ["router"]
+
+_LOGGER = get_logger("bms_msg.admin_topics")
 
 _QUERY = Depends(require_permission("msg:query"))
 _MANAGE = Depends(require_permission("msg:manage"))
@@ -58,6 +83,29 @@ _CREATE_ERRORS = [
 ]
 """创建端点声明的错误码（`x-error-codes`）。"""
 
+_WRITE_ERRORS = [
+    int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.TOPIC_STATE_INVALID),
+    int(MsgErrorCode.PARTITION_COUNT_INVALID),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+]
+"""主题写操作端点声明的错误码（扩分区 / 改保留期；`10001` 属契约层，不登记）。"""
+
+_DELETE_ERRORS = [
+    int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+]
+"""删主题端点声明的错误码（重复删除幂等受理，故不声明 `350028`）。"""
+
+_IMPACT_ERRORS = [
+    int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+]
+"""影响预检端点声明的错误码。"""
+
 router = BaseRouter(
     key="msg_admin_topics",
     prefix="/msg/admin/topics",
@@ -76,6 +124,7 @@ def _service(
     *,
     cache: TopicCache | None = None,
     quota: QuotaService | None = None,
+    cleanups: TopicCleanupRepository | None = None,
 ) -> TopicService:
     """组装主题服务（请求级平台库会话注入）。
 
@@ -84,12 +133,20 @@ def _service(
         cache: 进程内主题快照缓存（**只有写路径需要**：提交成功后按精确键失效；
             读路径不经缓存，管理面永远读库最新）。
         quota: 配额服务（创建主题时判主题数配额）。
+        cleanups: 清理台账仓储（删主题 / 查清理进度需要）。
 
     Returns:
         TopicService: 主题服务。
     """
     session = cast("DbSession", uow.session)
-    return TopicService(TopicRepository(session), PartitionRepository(session), uow, cache=cache, quota=quota)
+    return TopicService(
+        TopicRepository(session),
+        PartitionRepository(session),
+        uow,
+        cache=cache,
+        quota=quota,
+        cleanups=cleanups,
+    )
 
 
 def _item(topic: MsgTopic) -> TopicItem:
@@ -116,20 +173,93 @@ def _partition(partition: MsgPartition) -> PartitionItem:
     return PartitionItem.model_validate(partition)
 
 
-def _detail(topic: MsgTopic, partitions: ConcurrentStableList[MsgPartition]) -> TopicDetail:
-    """主题 + 分区 → 详情响应。
+def _cleanup_progress(cleanup: MsgTopicCleanup | None) -> CleanupProgress | None:
+    """清理台账 → 进度视图（无台账返回 None）。
+
+    Args:
+        cleanup: 清理台账。
+
+    Returns:
+        CleanupProgress | None: 进度视图。
+    """
+    if cleanup is None:
+        return None
+    return CleanupProgress(
+        status=cleanup.status,
+        done_steps=ConcurrentStableList(str(item) for item in cleanup.done_steps),
+        attempts=int(cleanup.attempts),
+        started_at=cleanup.started_at,
+        finished_at=cleanup.finished_at,
+        last_error=cleanup.last_error,
+    )
+
+
+def _cleanup_view(topic: MsgTopic, cleanup: MsgTopicCleanup) -> TopicCleanupView:
+    """主题 + 台账 → 删主题受理结果。
+
+    Args:
+        topic: 主题记录。
+        cleanup: 清理台账。
+
+    Returns:
+        TopicCleanupView: 受理结果。
+    """
+    return TopicCleanupView(
+        topic_id=topic.id,
+        namespace=topic.namespace,
+        topic=topic.name,
+        status=topic.status,
+        cleanup=CleanupProgress(
+            status=cleanup.status,
+            done_steps=ConcurrentStableList(str(item) for item in cleanup.done_steps),
+            attempts=int(cleanup.attempts),
+            started_at=cleanup.started_at,
+            finished_at=cleanup.finished_at,
+            last_error=cleanup.last_error,
+        ),
+    )
+
+
+def _detail(
+    topic: MsgTopic,
+    partitions: ConcurrentStableList[MsgPartition],
+    cleanup: MsgTopicCleanup | None = None,
+) -> TopicDetail:
+    """主题 + 分区（+ 清理进度）→ 详情响应。
 
     Args:
         topic: 主题记录。
         partitions: 分区记录（按分区号升序）。
+        cleanup: 清理台账（仅 `deleting` 状态传入）。
 
     Returns:
         TopicDetail: 详情响应。
     """
     payload = _item(topic).model_dump()
     return TopicDetail.model_validate(
-        {**payload, "partitions": ConcurrentStableList(_partition(partition) for partition in partitions)}
+        {
+            **payload,
+            "partitions": ConcurrentStableList(_partition(partition) for partition in partitions),
+            "cleanup": _cleanup_progress(cleanup),
+        }
     )
+
+
+def _require_confirm(confirm: bool, *, action: str, topic: str) -> None:
+    """校验高危写操作的显式确认参数（缺失即拒绝并留痕）。
+
+    Args:
+        confirm: 请求携带的确认值。
+        action: 被拒动作（日志分类用）。
+        topic: 主题标识（日志定位用）。
+
+    Raises:
+        ParamError: `confirm` 不为 true（10001）。
+    """
+    if confirm:
+        return
+    _LOGGER.warning("msg_write_confirm_missing", action=action, topic=topic)
+    raise ParamError("高危写操作须显式确认（confirm=true）")
 
 
 async def _filter_topics(
@@ -269,15 +399,227 @@ async def get_topic(
     uow: PlatformUowDep,
     acl: TopicAclServiceDep,
 ) -> ApiResponse[TopicDetail]:
-    """主题详情（含分区列表）。
+    """主题详情（含分区列表；`deleting` 时含清理进度）。
 
     需要 msg:query 权限；不存在或不属于当前租户返回 350001。
     """
-    topic, partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    service = _service(uow, cleanups=TopicCleanupRepository(cast("DbSession", uow.session)))
+    topic, partitions = await service.get_topic(tenant=tenant, topic_id=topic_id)
     await acl.authorize(
         tenant_id=int(tenant.tenant_id),
         namespace=topic.namespace,
         topic=topic.name,
         action=ACL_ACTION_DESCRIBE,
     )
-    return ApiResponse.ok(_detail(topic, partitions))
+    cleanup = await service.get_cleanup(topic_id=topic_id) if topic.status == STATUS_DELETING else None
+    return ApiResponse.ok(_detail(topic, partitions, cleanup))
+
+
+@router.get("/{topic_id}/delete-impact", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _IMPACT_ERRORS})
+async def topic_delete_impact(
+    topic_id: TopicIdPath,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cleanup: TopicCleanupDep,
+) -> ApiResponse[DeleteImpact]:
+    """删主题影响预检（二次确认弹窗的五项影响范围）。
+
+    需要 msg:manage 权限；主题不存在 350001。各维度独立容错：单项取数失败记 0 并告警，
+    不因预检失败阻断后续删除（真正的保护在后端的状态与二次确认判定）。
+    """
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    impact = await cleanup.impact(
+        tenant_id=int(tenant.tenant_id),
+        topic_id=int(topic.id),
+        partition_count=int(topic.partition_count),
+    )
+    return ApiResponse.ok(impact)
+
+
+@router.delete("/{topic_id}", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _DELETE_ERRORS})
+async def delete_topic(
+    topic_id: TopicIdPath,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cache: TopicCacheDep,
+    cleanup: TopicCleanupDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+    confirm: Annotated[bool, Query(description="显式确认（必须为 true；缺省 / false 一律拒绝）")] = False,
+) -> ApiResponse[TopicCleanupView]:
+    """删主题（**受理即返回**：置 `deleting` + 落台账 + 后台异步清理）。
+
+    需要 msg:manage 权限；`confirm` 缺失返回 10001；主题不存在 350001；**重复删除幂等受理**
+    （返回已有台账，不产生二次副作用）。审计失败即请求失败（主题不会被置 `deleting`）。
+    """
+    _require_confirm(confirm, action=TOPIC_DELETE_ACTION, topic=str(topic_id))
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    impact = await cleanup.impact(
+        tenant_id=int(tenant.tenant_id),
+        topic_id=int(topic.id),
+        partition_count=int(topic.partition_count),
+    )
+    service = _service(uow, cache=cache, cleanups=TopicCleanupRepository(cast("DbSession", uow.session)))
+    updated, ledger = await service.begin_delete(tenant=tenant, topic_id=topic_id)
+    await _audit_write(
+        sink,
+        action=TOPIC_DELETE_ACTION,
+        method="DELETE",
+        tenant_id=int(tenant.tenant_id),
+        namespace=updated.namespace,
+        topic_name=updated.name,
+        params=ConcurrentStableDict(
+            {
+                "topic_id": str(updated.id),
+                "namespace": updated.namespace,
+                "topic": updated.name,
+                "partition_count": int(impact.partition_count),
+                "message_total": int(impact.message_total),
+                "group_count": int(impact.group_count),
+                "delayed_total": int(impact.delayed_total),
+                "dlq_total": int(impact.dlq_total),
+                "status": updated.status,
+            }
+        ),
+    )
+    cleanup.kick(int(updated.id))
+    return ApiResponse.ok(_cleanup_view(updated, ledger))
+
+
+@router.post("/{topic_id}/partitions", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _WRITE_ERRORS})
+async def expand_topic_partitions(
+    topic_id: TopicIdPath,
+    req: TopicPartitionExpandRequest,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cache: TopicCacheDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+) -> ApiResponse[TopicDetail]:
+    """扩分区（**只增不减**：目标值不大于现状即 350009）。
+
+    需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。
+    占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。
+    """
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    before = int(topic.partition_count)
+    updated, partitions = await _service(uow, cache=cache).expand_partitions(
+        tenant=tenant, topic_id=topic_id, partition_count=req.partition_count
+    )
+    await _audit_write(
+        sink,
+        action=TOPIC_EXPAND_ACTION,
+        method="POST",
+        tenant_id=int(tenant.tenant_id),
+        namespace=updated.namespace,
+        topic_name=updated.name,
+        params=ConcurrentStableDict(
+            {
+                "topic_id": str(updated.id),
+                "namespace": updated.namespace,
+                "topic": updated.name,
+                "from_partitions": before,
+                "to_partitions": int(updated.partition_count),
+            }
+        ),
+        path=f"/api/v1/msg/admin/topics/{topic_id}/partitions",
+    )
+    return ApiResponse.ok(_detail(updated, partitions))
+
+
+@router.patch("/{topic_id}", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _WRITE_ERRORS})
+async def update_topic(
+    topic_id: TopicIdPath,
+    req: TopicRetentionUpdate,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cache: TopicCacheDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+) -> ApiResponse[TopicItem]:
+    """改保留期 / 容量上限（**部分更新**：只为给出的项写库，至少一项）。
+
+    需要 msg:manage 权限；主题不存在 350001，状态 `disabled` / `deleting` 时 350028，
+    取值越界 350009。即时生效、不回溯删除已保留记录（后续清理按新值执行）。
+    """
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    updated, before = await _service(uow, cache=cache).update_retention(
+        tenant=tenant,
+        topic_id=topic_id,
+        retention_ms=req.retention_ms,
+        retention_bytes=req.retention_bytes,
+    )
+    await _audit_write(
+        sink,
+        action=TOPIC_UPDATE_ACTION,
+        method="PATCH",
+        tenant_id=int(tenant.tenant_id),
+        namespace=updated.namespace,
+        topic_name=updated.name,
+        params=ConcurrentStableDict(
+            {
+                "topic_id": str(updated.id),
+                "namespace": updated.namespace,
+                "topic": updated.name,
+                "retention_ms_before": before.get("retention_ms", 0),
+                "retention_ms_after": int(updated.retention_ms),
+                "retention_bytes_before": before.get("retention_bytes", 0),
+                "retention_bytes_after": int(updated.retention_bytes),
+            }
+        ),
+        path=f"/api/v1/msg/admin/topics/{topic_id}",
+    )
+    return ApiResponse.ok(_item(updated))
+
+
+async def _audit_write(
+    sink: AuditEmitter,
+    *,
+    action: str,
+    method: str,
+    tenant_id: int,
+    namespace: str,
+    topic_name: str,
+    params: ConcurrentStableDict[str, object],
+    path: str = "/api/v1/msg/admin/topics",
+) -> None:
+    """写一条主题写操作审计（配置变更，强审计；失败即接口失败）。
+
+    Args:
+        sink: 审计出口。
+        action: 审计动作（删主题 / 扩分区 / 改保留期）。
+        method: HTTP 方法。
+        tenant_id: 租户主键。
+        namespace: 命名空间。
+        topic_name: 主题名。
+        params: 载荷（含变更前后值与影响范围）。
+        path: 实际请求路径。
+    """
+    await emit_sensitive(
+        sink,
+        action=action,
+        tenant_id=tenant_id,
+        params=params,
+        method=method,
+        path=path,
+        module_key=namespace,
+        resource_key=topic_name,
+    )

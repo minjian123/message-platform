@@ -67,6 +67,13 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="主题 ACL 作用域版本戳（按 tenant + namespace 失效快照）",
     ),
+    TableRecord(
+        table_name="msg_topic_cleanup",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="主题删除清理台账（状态 / 已完成步骤 / 尝试次数 / 最后错误）",
+    ),
 )
 """msg 元数据表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 

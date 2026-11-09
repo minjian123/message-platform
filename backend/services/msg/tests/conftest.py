@@ -166,7 +166,7 @@ def _tenant_context() -> Iterator[None]:
 
 @pytest.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
-    """内存库引擎（每用例一份；只建本模块三表）。
+    """内存库引擎（每用例一份；只建本模块的元数据表）。
 
     Yields:
         AsyncEngine: 内存 SQLite 引擎。
@@ -181,6 +181,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
             "msg_quota",
             "msg_topic_acl",
             "msg_topic_acl_scope",
+            "msg_topic_cleanup",
         ):
             await connection.run_sync(Base.metadata.tables[table].create)
     try:

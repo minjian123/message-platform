@@ -12,7 +12,8 @@ from typing import Annotated
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.schemas.base import CONTRACT_COLLECTION, CONTRACT_STABLE_LIST, BaseSchema, SnowflakeIdStr
-from pydantic import Field
+from pydantic import Field, model_validator
+from pydantic_core import PydanticCustomError
 
 from bms_msg.core.config import DEFAULT_RETENTION_MS
 from bms_msg.models.topic import CLEANUP_DELETE
@@ -54,15 +55,32 @@ class TopicItem(BaseSchema):
     retention_ms: int = Field(description="保留时长（毫秒）")
     retention_bytes: int = Field(description="容量上限（字节；0 = 不限）")
     cleanup_policy: str = Field(description="清理策略")
-    status: str = Field(description="状态（active / disabled）")
+    status: str = Field(description="状态（active / disabled / deleting）")
     created_at: datetime = Field(description="创建时间（UTC）")
 
 
+class CleanupProgress(BaseSchema):
+    """删主题清理进度（`deleting` 主题的详情里出现；其余状态为 null）。"""
+
+    status: str = Field(description="台账状态（pending / running / completed）")
+    done_steps: Annotated[ConcurrentStableList[str], CONTRACT_COLLECTION] = Field(
+        default_factory=CONTRACT_STABLE_LIST,
+        description="已完成步骤键（messages / delay / offsets / groups / dlq / runtime / metadata）",
+    )
+    attempts: int = Field(description="已执行轮次（连续失败 ≥3 会输出告警日志）")
+    started_at: datetime | None = Field(description="首轮开始时刻（UTC；未开始为 null）")
+    finished_at: datetime | None = Field(description="完成时刻（UTC；未完成为 null）")
+    last_error: str | None = Field(description="最后一轮失败原因（未失败为 null）")
+
+
 class TopicDetail(TopicItem):
-    """主题详情（含分区列表）。"""
+    """主题详情（含分区列表；`deleting` 时含清理进度）。"""
 
     partitions: Annotated[ConcurrentStableList[PartitionItem], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_LIST, description="分区明细（按分区号升序）"
+    )
+    cleanup: CleanupProgress | None = Field(
+        default=None, description="删主题清理进度（仅 deleting 状态有值，其余为 null）"
     )
 
 
@@ -75,3 +93,50 @@ class TopicPage(BaseSchema):
     total: int = Field(description="符合条件的总数")
     page: int = Field(description="页码（从 1 起）")
     size: int = Field(description="每页条数")
+
+
+class DeleteImpact(BaseSchema):
+    """删主题影响预检（二次确认弹窗的「影响范围」唯一数据源）。"""
+
+    partition_count: int = Field(description="分区数")
+    message_total: int = Field(description="可读消息总量（Σ(LEO − 起点)）")
+    group_count: int = Field(description="该主题的消费组数")
+    delayed_total: int = Field(description="延迟待投条数")
+    dlq_total: int = Field(description="死信条数")
+
+
+class TopicCleanupView(BaseSchema):
+    """删主题受理结果（**不是**「已删除」：主题进入 `deleting`，清理异步进行）。"""
+
+    topic_id: SnowflakeIdStr = Field(description="主题 ID（雪花，JSON 输出为字符串）")
+    namespace: str = Field(description="命名空间")
+    topic: str = Field(description="主题名")
+    status: str = Field(description="主题状态（受理后恒为 deleting）")
+    cleanup: CleanupProgress = Field(description="清理进度")
+
+
+class TopicRetentionUpdate(BaseSchema):
+    """改保留期请求（两项均可选、至少给一项；范围校验在服务层，越界为 `350009`）。"""
+
+    retention_ms: int | None = Field(default=None, description="保留时长（毫秒；null 表示不改）")
+    retention_bytes: int | None = Field(default=None, description="容量上限（字节；0 = 不限；null 表示不改）")
+
+    @model_validator(mode="after")
+    def _ensure_any_field(self) -> TopicRetentionUpdate:
+        """校验至少给出一项（空 PATCH 会静默成功，属契约层问题）。
+
+        Returns:
+            TopicRetentionUpdate: 校验通过的请求。
+
+        Raises:
+            PydanticCustomError: 两项均为空（由契约层转 `10001`）。
+        """
+        if self.retention_ms is None and self.retention_bytes is None:
+            raise PydanticCustomError("retention_empty", "至少给出 retention_ms 与 retention_bytes 之一")
+        return self
+
+
+class TopicPartitionExpandRequest(BaseSchema):
+    """扩分区请求（**只增不减**：目标值不大于现状即拒绝，`350009`）。"""
+
+    partition_count: int = Field(ge=1, description="目标分区数（须大于当前分区数且在上界内）")

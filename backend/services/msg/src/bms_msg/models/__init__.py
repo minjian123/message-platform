@@ -34,6 +34,7 @@ from bms_msg.models.topic import (
     DEFAULT_CLEANUP_POLICY,
     DEFAULT_STATUS,
     STATUS_ACTIVE,
+    STATUS_DELETING,
     STATUS_DISABLED,
     MsgTopic,
 )
@@ -50,6 +51,21 @@ from bms_msg.models.topic_acl import (
     ACL_STATUS_ENABLED,
     MsgTopicAcl,
     MsgTopicAclScope,
+)
+from bms_msg.models.topic_cleanup import (
+    CLEANUP_COMPLETED,
+    CLEANUP_PENDING,
+    CLEANUP_RUNNING,
+    CLEANUP_STATUSES,
+    CLEANUP_STEPS,
+    STEP_DELAY,
+    STEP_DLQ,
+    STEP_GROUPS,
+    STEP_MESSAGES,
+    STEP_METADATA,
+    STEP_OFFSETS,
+    STEP_RUNTIME,
+    MsgTopicCleanup,
 )
 
 __all__ = [
@@ -68,13 +84,26 @@ __all__ = [
     "ACTION_DELETED",
     "ACTION_SUSPENDED",
     "CLEANUP_COMPACT",
+    "CLEANUP_COMPLETED",
     "CLEANUP_DELETE",
+    "CLEANUP_PENDING",
+    "CLEANUP_RUNNING",
+    "CLEANUP_STATUSES",
+    "CLEANUP_STEPS",
     "DEFAULT_CLEANUP_POLICY",
     "DEFAULT_STATUS",
     "LIFECYCLE_ACTIONS",
     "MODEL_MODULES",
     "STATUS_ACTIVE",
+    "STATUS_DELETING",
     "STATUS_DISABLED",
+    "STEP_DELAY",
+    "STEP_DLQ",
+    "STEP_GROUPS",
+    "STEP_MESSAGES",
+    "STEP_METADATA",
+    "STEP_OFFSETS",
+    "STEP_RUNTIME",
     "TASK_CANCELLED",
     "TASK_COMPLETED",
     "TASK_FAILED",
@@ -89,6 +118,7 @@ __all__ = [
     "MsgTopic",
     "MsgTopicAcl",
     "MsgTopicAclScope",
+    "MsgTopicCleanup",
 ]
 
 MODEL_MODULES: tuple[str, ...] = (
@@ -98,5 +128,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.replay",
     "bms_msg.models.tenant_lifecycle",
     "bms_msg.models.topic_acl",
+    "bms_msg.models.topic_cleanup",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

@@ -89,6 +89,7 @@ from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
 from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
 from bms_msg.tenant.purge import TenantPurgeService, get_tenant_purge_metrics
@@ -320,6 +321,22 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             messages=app.state.message_store,
             uow_factory=app.state.uow_factory,
             auditor=ReplayAuditor(sink=sink),
+        )
+        # 06-2：删主题清理编排（受理时 kick + 周期扫描兜底；停机随 `BackgroundLoops` 回收）。
+        app.state.topic_cleanup_service = TopicCleanupService(
+            messages=app.state.message_store,
+            offsets=offset_store,
+            groups=app.state.group_store,
+            delay=delay_store,
+            wheel=app.state.delay_scheduler.wheel,
+            dead_letters=app.state.dead_letter_queue,
+            delivery=app.state.delivery_state,
+            waiter=waiter,
+            throttle=app.state.retention_throttle,
+            directory=app.state.partition_directory,
+            cache=app.state.topic_cache,
+            watermark=app.state.storage_watermark,
+            uow_factory=app.state.uow_factory,
         )
         register_frame_handlers(app)
         # 06-3-1：指标出口——自定义 Collector 直读既有采集器快照与事件点采集器。

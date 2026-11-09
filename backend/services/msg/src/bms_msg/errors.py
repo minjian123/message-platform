@@ -8,7 +8,7 @@
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
   RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`、主题数配额超限 `350025`、
-  消费组数配额超限 `350026`
+  消费组数配额超限 `350026`、主题状态不允许该操作 `350028`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
@@ -71,6 +71,7 @@ __all__ = [
     "MsgTopicExistsError",
     "MsgTopicNotFoundError",
     "MsgTopicQuotaExceededError",
+    "MsgTopicStateInvalidError",
     "MsgVersionUnsupportedError",
     "Outcome",
 ]
@@ -196,6 +197,14 @@ class MsgErrorCode(IntEnum):
     与 `30001` 分工：`30001` 是功能级 RBAC 无权限，本码是资源级 ACL 拒绝；
     与 `350001` 分工：本码不表示主题不存在（ACL 先于归属判定，不泄露存在性）。
     基座 `82013` 经 `[[errcodes]].maps_from` 映射为本码。
+    """
+
+    TOPIC_STATE_INVALID = 350028
+    """主题状态不允许该操作（`disabled` / `deleting` 下的写操作）：409。
+
+    与相邻码分工：`350001` 是「不存在或未启用」（读路径口径，用户应去建主题）；`350008` 是「同名已存在」；
+    本码是「主题还在，但当前状态不接受这个操作」——`deleting` 时应等清理完成，`disabled` 时应先启用。
+    管理面写操作（扩分区 / 改保留期 / 重放）用它，删主题不走本码（重复删除是幂等受理）。
     """
 
 
@@ -422,6 +431,13 @@ class MsgGroupCountQuotaExceededError(MsgError):
             message,
             data={"quota_key": "group_count", "limit": limit, "usage": usage},
         )
+
+
+class MsgTopicStateInvalidError(MsgError):
+    """主题状态不允许该操作（350028 / 409）：`disabled` 或 `deleting` 下的写操作被拒。"""
+
+    code_: ClassVar[int] = MsgErrorCode.TOPIC_STATE_INVALID
+    http_status_: ClassVar[int] = 409
 
 
 class MsgAclDeniedError(MsgError):

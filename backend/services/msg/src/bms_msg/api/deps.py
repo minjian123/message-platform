@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Annotated, cast
 
 from bms_core.core.config import get_settings
+from bms_core.core.exceptions import ConfigError
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.extension.base import RESOURCE_ACL_KEY
@@ -45,6 +46,7 @@ from bms_msg.repositories.topic import TopicRepository
 from bms_msg.repositories.topic_acl import MsgTopicAclRepository, MsgTopicAclScopeRepository
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.registry import RpcRegistry
+from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
 from bms_msg.usage.counter import DeliveryCounter, default_delivery_counter
@@ -86,6 +88,7 @@ __all__ = [
     "TopicAclAdminServiceDep",
     "TopicAclServiceDep",
     "TopicCacheDep",
+    "TopicCleanupDep",
     "UowFactoryDep",
     "UsageSnapshotDep",
     "WaiterDep",
@@ -515,6 +518,27 @@ RetentionThrottleDep = Annotated[RetentionThrottle, Depends(get_retention_thrott
 """路由参数写法：`throttle: RetentionThrottleDep`（保留清理节流）。"""
 
 
+def get_topic_cleanup_service(request: Request) -> TopicCleanupService:
+    """取删主题清理编排（进程级单例；装配期由 `configure_service()` 注入）。
+
+    **不做惰性兜底**：它要七个跨域端口，缺一个就不是「降级」而是错装配；这里直接报 `ConfigError`，
+    让装配缺陷在第一次删除请求上暴露，而不是静默地什么都不清。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        TopicCleanupService: 清理编排。
+
+    Raises:
+        ConfigError: 装配期未注入（配置错误）。
+    """
+    service = getattr(request.app.state, "topic_cleanup_service", None)
+    if service is None:
+        raise ConfigError("删主题清理服务未装配（topic_cleanup_service）")
+    return cast("TopicCleanupService", service)
+
+
 def get_partition_directory(request: Request) -> PartitionDirectory:
     """取分区目录登记表（进程级单例；02-1）。
 
@@ -529,6 +553,9 @@ def get_partition_directory(request: Request) -> PartitionDirectory:
 
 PartitionDirectoryDep = Annotated[PartitionDirectory, Depends(get_partition_directory)]
 """路由参数写法：`directory: PartitionDirectoryDep`（分区目录登记表）。"""
+
+TopicCleanupDep = Annotated[TopicCleanupService, Depends(get_topic_cleanup_service)]
+"""路由参数写法：`cleanup: TopicCleanupDep`（删主题清理编排）。"""
 
 
 def get_storage_gate(request: Request) -> StorageGate | None:

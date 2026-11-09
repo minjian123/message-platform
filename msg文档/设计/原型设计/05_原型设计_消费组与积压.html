@@ -21,6 +21,7 @@
         <el-radio-group v-model="scene" size="small">
           <el-radio-button value="list">列表</el-radio-button>
           <el-radio-button value="detail">详情 / 深链</el-radio-button>
+          <el-radio-button value="reset">位点重置</el-radio-button>
           <el-radio-button value="loading">加载态</el-radio-button>
           <el-radio-button value="empty">空态</el-radio-button>
           <el-radio-button value="error">错误态</el-radio-button>
@@ -99,7 +100,7 @@
           </div>
 
           <!-- 详情 -->
-          <div v-else-if="scene === 'detail'">
+          <div v-else-if="scene === 'detail' || scene === 'reset'">
             <el-page-header content="order-sync · order.created" @back="scene = 'list'"></el-page-header>
             <p class="hint" style="margin: 8px 0 12px">
               深链：<code>/msg/groups/&lt;namespace&gt;/&lt;topic&gt;/&lt;group&gt;</code>（<code>meta.menu: false</code>）
@@ -123,11 +124,38 @@
                 </template>
               </el-table-column>
               <el-table-column prop="committedAt" label="最后提交时间" width="180"></el-table-column>
+              <el-table-column label="操作" width="130" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="scene = 'reset'">重置位点</el-button>
+                </template>
+              </el-table-column>
             </el-table>
 
             <p class="hint" style="margin-top: 12px">
               数据复用既有 <code>/admin/groups</code> 与 <code>/admin/partitions</code> 契约，字段与后端同源，不在前端重算。
             </p>
+
+            <!-- 位点重置确认 -->
+            <el-dialog :model-value="scene === 'reset'" title="重置位点（高危）" width="520px" :close-on-click-modal="false">
+              <el-alert type="error" :closable="false" show-icon title="重置后可能重复消费或跳过消息"
+                description="目标位点小于当前将重复消费；大于当前将跳过消息。操作写审计（record_ref 定位到组 / 主题 / 分区 / 位点），且不改变成员分配。"></el-alert>
+              <el-descriptions :column="1" border size="small" style="margin-top: 12px">
+                <el-descriptions-item label="消费组">order-sync</el-descriptions-item>
+                <el-descriptions-item label="主题">order.created</el-descriptions-item>
+                <el-descriptions-item label="分区">0</el-descriptions-item>
+                <el-descriptions-item label="当前位点">21,380</el-descriptions-item>
+                <el-descriptions-item label="目标位点">21,000</el-descriptions-item>
+              </el-descriptions>
+              <el-form label-width="90px" style="margin-top: 12px">
+                <el-form-item label="目标位点">
+                  <el-input-number :model-value="21000" :min="0" size="small"></el-input-number>
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="scene = 'detail'">取消</el-button>
+                <el-button type="danger" @click="scene = 'detail'">确认重置（confirm=true）</el-button>
+              </template>
+            </el-dialog>
           </div>
 
           <!-- 加载态 -->
@@ -176,7 +204,7 @@
       createApp({
         setup() {
           /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
-          const SCENES = ['list', 'detail', 'loading', 'empty', 'error', 'denied']
+          const SCENES = ['list', 'detail', 'reset', 'loading', 'empty', 'error', 'denied']
           const wanted = new URLSearchParams(window.location.search).get('scene')
           const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
           const activeNav = ref('groups')
