@@ -15,8 +15,10 @@
    故末段截断（崩溃常态）、非末段整段隔离（改名留证 + 告警），与 02-2 对 `.log` 的处置同构。
 """
 
+import contextlib
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -36,6 +38,7 @@ from bms_msg.core.config import (
     DELAY_SEGMENT_MAX_RECORDS,
     RECORD_FRAME_BYTES,
 )
+from bms_msg.metrics import get_traffic_metrics
 
 __all__ = [
     "DELAY_CORRUPT_INFIX",
@@ -341,7 +344,13 @@ class DelaySegment:
     def fsync(self) -> None:
         """把当前写句柄的内容刷到磁盘（无写句柄即无操作）。"""
         if self._write_fd is not None:
+            started = time.perf_counter()
             os.fsync(self._write_fd)
+            with contextlib.suppress(Exception):
+                get_traffic_metrics().record_fsync(
+                    scope="delay",
+                    duration_ms=(time.perf_counter() - started) * 1000.0,
+                )
 
     def close(self) -> None:
         """关闭写句柄（幂等；读路径不持句柄）。"""

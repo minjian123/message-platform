@@ -55,6 +55,11 @@ provider = ""
 [health_check_registry]
 provider = "msg"
 
+[metrics]
+# 指标能力域（06-3-1）：切到 prometheus 后基座挂载根路径 /metrics；
+# 缺省空串会让端点返回 404（基座 null 占位）。
+provider = "prometheus"
+
 [cache]
 provider = "memory"
 options = {}

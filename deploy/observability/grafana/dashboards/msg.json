@@ -1,0 +1,195 @@
+{
+  "uid": "msg-overview",
+  "title": "消息平台概览",
+  "tags": ["msg", "消息平台"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "label": "租户",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(msg_consumer_lag, tenant)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "topic",
+        "label": "主题",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(msg_consumer_lag{tenant=~\"$tenant\"}, topic)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "吞吐（条/秒）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "入 {{tenant}}/{{topic}}",
+          "expr": "sum by (tenant, topic) (rate(msg_messages_in_total{tenant=~\"$tenant\",topic=~\"$topic\"}[5m]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "出 {{tenant}}/{{topic}}",
+          "expr": "sum by (tenant, topic) (rate(msg_messages_out_total{tenant=~\"$tenant\",topic=~\"$topic\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "消费积压（条，Top 10）",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{tenant}}/{{topic}}",
+          "expr": "topk(10, sum by (tenant, topic) (msg_consumer_lag{tenant=~\"$tenant\",topic=~\"$topic\"}))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "死信（存量 / 增长）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "存量 {{tenant}}/{{topic}}",
+          "expr": "sum by (tenant, topic) (msg_dlq_total{tenant=~\"$tenant\",topic=~\"$topic\"})"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "增长/秒 {{tenant}}/{{topic}}",
+          "expr": "sum by (tenant, topic) (rate(msg_dlq_growth_total{tenant=~\"$tenant\",topic=~\"$topic\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "磁盘使用率",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(msg_disk_used_ratio)" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.85 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "发布 / 消费延迟 P99（毫秒）",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "发布 P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(msg_publish_latency_ms_bucket{tenant=~\"$tenant\",topic=~\"$topic\"}[5m])))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "消费 P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(msg_consume_latency_ms_bucket{tenant=~\"$tenant\",topic=~\"$topic\"}[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "错误（按原因，次/秒）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "发布 {{reason}}",
+          "expr": "sum by (reason) (rate(msg_publish_errors_total[5m]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "消费 {{reason}}",
+          "expr": "sum by (reason) (rate(msg_consume_errors_total[5m]))"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "延迟转投 {{reason}}",
+          "expr": "sum by (reason) (rate(msg_delay_deliver_failed_total[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "饱和度（inflight 字节 / 等待器）",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "inflight 字节",
+          "expr": "sum by (tenant, topic) (msg_inflight_bytes{tenant=~\"$tenant\",topic=~\"$topic\"})"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "长轮询等待器",
+          "expr": "msg_long_poll_waiters"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "重放（任务数 / 累计条数）",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "任务 {{status}}",
+          "expr": "sum by (status) (msg_replay_tasks)"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "累计重放",
+          "expr": "msg_replay_replayed_total"
+        }
+      ]
+    }
+  ]
+}

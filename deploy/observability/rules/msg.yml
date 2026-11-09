@@ -1,0 +1,194 @@
+# msg 消息平台告警规则（06-3-2；指标清单见 bms_msg/metrics/names.py）。
+# 加载：bms prometheus.yml 的 rule_files（/etc/prometheus/rules/products/*.yml）。
+# 校验：promtool check rules /etc/prometheus/rules/products/msg.yml
+#       promtool test rules /etc/prometheus/rules/products/msg-rules.test.yml
+# 分级：P0/P1 -> severity=critical；P2/P3 -> severity=warning；priority 保留 P0~P3。
+# 阈值：带 `# TODO(8B_12)` 的为占位值，容量模型回填后只改数字，不改表达式结构。
+groups:
+  - name: msg-availability
+    rules:
+      - alert: MsgMetricsDown
+        expr: up{job="msg"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          priority: P0
+          service: msg
+        annotations:
+          summary: "消息平台指标端点不可达（{{ $labels.instance }}）"
+          description: "msg 进程未运行、网络不可达或 /metrics 失守；先看容器状态与 /healthz，再查网络与端口。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+      - alert: MsgNotReady
+        expr: probe_success{job="bms-probe", instance=~".*/msg:8000/readyz"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          priority: P0
+          service: msg
+          probe: readyz
+        annotations:
+          summary: "消息平台就绪探针失败（{{ $labels.instance }}）"
+          description: "实例不就绪（存储 / 数据库 / 摘流中）；看 /readyz 的 checks 定位失败依赖，按依赖处置。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+
+  - name: msg-lag
+    rules:
+      - alert: MsgConsumerLagHigh
+        expr: sum by (tenant, topic) (msg_consumer_lag) > 10000  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: critical
+          priority: P1
+          service: msg
+        annotations:
+          summary: "主题 {{ $labels.topic }} 积压 {{ $value | humanize }} 条"
+          description: "租户 {{ $labels.tenant }} / 主题 {{ $labels.topic }} 积压持续 10 分钟超阈值；查 06-1 组详情的分区积压与成员数，扩容消费者或限流上游。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview?var-tenant={{ $labels.tenant }}&var-topic={{ $labels.topic }}"
+      - alert: MsgConsumerLagGrowing
+        expr: sum by (tenant, topic) (msg_consumer_lag) - sum by (tenant, topic) (msg_consumer_lag offset 20m) > 5000  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: critical
+          priority: P1
+          service: msg
+        annotations:
+          summary: "主题 {{ $labels.topic }} 积压持续增长（20 分钟 +{{ $value | humanize }} 条）"
+          description: "不是一次性堆积而是持续扩大；先止损（限流 / 扩容），再定位消费端慢点与毒消息。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview?var-tenant={{ $labels.tenant }}&var-topic={{ $labels.topic }}"
+      - alert: MsgPublishErrorRate
+        expr: |
+          sum(rate(msg_publish_errors_total[5m]))
+            / clamp_min(sum(rate(msg_messages_in_total[5m])), 0.001) > 0.05  # TODO(8B_12)
+        for: 5m
+        labels:
+          severity: critical
+          priority: P1
+          service: msg
+        annotations:
+          summary: "发布错误率超过 5%（当前 {{ $value | humanizePercentage }}）"
+          description: "按错误 reason 面板定位（watermark / quota / rate_limit / acl / param / unavailable / internal），再按原因处置。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+
+  - name: msg-errors
+    rules:
+      - alert: MsgDelayDeliverFailed
+        expr: sum(rate(msg_delay_deliver_failed_total[5m])) > 0.1  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          service: msg
+        annotations:
+          summary: "延迟消息到期转投失败（{{ $value | humanize }} 次/秒）"
+          description: "查延迟区指标与日志：租户停用（tenant_unavailable）/ 存储水位（storage）/ 未知异常（unknown）。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+
+  - name: msg-dlq
+    rules:
+      - alert: MsgDlqGrowing
+        expr: sum by (tenant, topic) (rate(msg_dlq_growth_total[5m])) > 1  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P2
+          service: msg
+        annotations:
+          summary: "主题 {{ $labels.topic }} 死信快速增长"
+          description: "毒消息或消费端缺陷；看死信原因与样本，修复消费端后重放或忽略（06-5）。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview?var-tenant={{ $labels.tenant }}&var-topic={{ $labels.topic }}"
+
+  - name: msg-storage
+    rules:
+      - alert: MsgIsrShrinking
+        expr: sum(rate(msg_isr_shrink_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          priority: P2
+          service: msg
+        annotations:
+          summary: "ISR 频繁收缩（02-5 交付前该指标恒 0，规则先就位）"
+          description: "副本掉出 ISR，检查网络 / 磁盘 / 节点；复制能力交付后按真实指标启用。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+      - alert: MsgDiskHigh
+        expr: msg_disk_used_ratio > 0.85  # TODO(8B_12)
+        for: 15m
+        labels:
+          severity: warning
+          priority: P3
+          service: msg
+        annotations:
+          summary: "消息平台磁盘使用率 {{ $value | humanizePercentage }}"
+          description: "接近高水位：扩容 / 缩短保留期 / 清理过期段；写请求可能开始被 350022 拒绝。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+      - alert: MsgStorageRejected
+        expr: sum(rate(msg_storage_rejected_total[5m])) > 0  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P3
+          service: msg
+        annotations:
+          summary: "存储拒绝持续发生"
+          description: "按 reason 定位：watermark（盘满）/ sampling_failed（卷不可读）/ tenant_quota（租户配额）。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+      - alert: MsgInflightStall
+        expr: sum by (tenant, topic) (rate(msg_window_stall_total[5m])) > 1  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P3
+          service: msg
+        annotations:
+          summary: "主题 {{ $labels.topic }} 传输层持续暂停"
+          description: "消费端读得慢（inflight 达阈值）；查消费者处理耗时与并发，必要时扩容。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview?var-tenant={{ $labels.tenant }}&var-topic={{ $labels.topic }}"
+      - alert: MsgLongPollWaitersHigh
+        expr: msg_long_poll_waiters > 1000  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P3
+          service: msg
+        annotations:
+          summary: "长轮询等待器 {{ $value }} 个"
+          description: "等待器接近上限，可能开始返回空批；查消费者数量与空闲超时配置。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+      - alert: MsgRateLimitRejected
+        expr: sum(rate(msg_rate_limit_rejected_total[5m])) > 5  # TODO(8B_12)
+        for: 10m
+        labels:
+          severity: warning
+          priority: P3
+          service: msg
+        annotations:
+          summary: "生产限流持续拒绝（{{ $value | humanize }} 次/秒）"
+          description: "按 scope 区分租户级 / 主题级；核对配额与上游流量，避免误伤正常业务。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"
+
+  - name: msg-replay
+    rules:
+      - alert: MsgReplayFailed
+        expr: sum(increase(msg_replay_failed_total[10m])) > 0
+        labels:
+          severity: warning
+          priority: P2
+          service: msg
+        annotations:
+          summary: "重放任务失败"
+          description: "重放是运维主动操作，失败即停；看任务详情与失败原因，修复后按范围重建任务。"
+          runbook_url: "msg文档/项目/08B_消息平台/任务/06_管理与运维/06_管理与运维_03_指标与告警/06_管理与运维_03_指标与告警_02_告警规则与分级抑制恢复/设计/01_详细设计_06-3-2_告警规则与分级抑制恢复.md#runbook"
+          dashboard_url: "/d/msg-overview"

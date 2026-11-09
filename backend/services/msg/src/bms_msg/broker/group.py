@@ -194,6 +194,17 @@ class GroupStore(BaseFrameworkObject, ABC):
             ConcurrentStableList[ConsumerGroup]: 组记录（组名升序）。
         """
 
+    async def list_all(self) -> ConcurrentStableList[ConsumerGroup]:
+        """列出全部组记录（后台指标采样用）。
+
+        默认实现返回空清单（未知存储形态不提供全量遍历）；内存实现覆盖，
+        DB 实现接管时按环境表补齐。新增非抽象方法不破坏既有实现。
+
+        Returns:
+            ConcurrentStableList[ConsumerGroup]: 全部组记录。
+        """
+        return ConcurrentStableList()
+
     @abstractmethod
     async def purge_tenant(self, *, tenant_id: int) -> int:
         """删除某租户的全部组记录（租户删除时的易失资源清理）。
@@ -252,6 +263,19 @@ class InMemoryGroupStore(GroupStore):
             if owner == tenant_id and (topic_id is None or topic == topic_id)
         ]
         return ConcurrentStableList(sorted(matched, key=lambda record: (record.group, record.topic_id)))
+
+    async def list_all(self) -> ConcurrentStableList[ConsumerGroup]:
+        """列出全部组记录（后台指标采样用；按租户 / 主题 / 组名稳定排序）。
+
+        Returns:
+            ConcurrentStableList[ConsumerGroup]: 全部组记录。
+        """
+        return ConcurrentStableList(
+            sorted(
+                self._groups.values(),
+                key=lambda record: (record.tenant_id, record.topic_id, record.group),
+            )
+        )
 
     async def purge_tenant(self, *, tenant_id: int) -> int:
         """删除某租户的全部组记录（幂等）。

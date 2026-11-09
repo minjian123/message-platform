@@ -36,11 +36,13 @@ from bms_core.audit.classes import AuditClass
 from bms_core.audit.emit import AuditEventEmitter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import Settings
+from bms_core.core.logging import get_logger
 from bms_core.core.plugin import register_plugin
 from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import DbSession, SessionFactory, session_scope
+from bms_core.db.tenant import TenantLookup
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.events.consumer_records import EventConsumerRecord
 from bms_core.extension import RESOURCE_ACL_KEY, SCOPE_RULE_KEY, ExtensionRequirement
@@ -80,16 +82,20 @@ from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
 from bms_msg.core.config import DATA_ROOT_SUBDIR, OFFSETS_SUBDIR
 from bms_msg.health import register_msg_health_registry
+from bms_msg.metrics import MetricsSnapshotStore, get_traffic_metrics
+from bms_msg.metrics.collector import MsgMetricsCollector
+from bms_msg.metrics.sampler import MetricsSampler
 from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
 from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
-from bms_msg.tenant.purge import TenantPurgeService
+from bms_msg.tenant.purge import TenantPurgeService, get_tenant_purge_metrics
 from bms_msg.tenant.runtime import (
     GuardTenantAvailability,
     TenantLifecycleRuntime,
+    get_tenant_lifecycle_metrics,
     set_tenant_lifecycle_runtime,
 )
 from bms_msg.tenant.scope_rule import MSG_NAMESPACE_RULE
@@ -98,6 +104,8 @@ from bms_msg.usage.snapshot import StorageUsageSampler
 from services.form_registry import form_records as msg_form_records
 from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
+
+_LOGGER = get_logger("bms_msg.main")
 
 
 class ApplicationFactory(BaseServiceApplicationFactory):
@@ -314,9 +322,49 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             auditor=ReplayAuditor(sink=sink),
         )
         register_frame_handlers(app)
+        # 06-3-1：指标出口——自定义 Collector 直读既有采集器快照与事件点采集器。
+        # 注册进基座注册表（根路径 /metrics 由基座提供）；基座不支持时降级并留 warning。
+        self._install_metrics(app, settings)
         # 05-4：访问异常拒绝审计。最后注册即最外层，能看到租户中间件提前拒绝的响应；
         # 只补基座未记录的 401 / 403 / 429，不改变原响应。
         app.add_middleware(AccessAnomalyAuditMiddleware, settings=settings.audit_log)
+
+    @staticmethod
+    def _install_metrics(app: FastAPI, settings: Settings) -> None:
+        """装配指标采集器与后台采样器（06-3-1）。
+
+        Args:
+            app: 应用实例（取已装配的采集器与资源管理器）。
+            settings: 应用配置（取服务身份）。
+        """
+        traffic = get_traffic_metrics()
+        snapshots = MetricsSnapshotStore()
+        collector = MsgMetricsCollector(
+            service=settings.app.service or SERVICE_NAME,
+            traffic=traffic,
+            snapshots=snapshots,
+            storage=app.state.storage_metrics,
+            delay=app.state.delay_metrics,
+            backpressure=app.state.backpressure_metrics,
+            lifecycle=get_tenant_lifecycle_metrics(),
+            purge=get_tenant_purge_metrics(),
+        )
+        registered = app.state.metrics.register_collector(collector)
+        if not registered:
+            _LOGGER.warning("msg_metrics_collector_unsupported", provider=type(app.state.metrics).__name__)
+        app.state.traffic_metrics = traffic
+        app.state.metrics_snapshots = snapshots
+        app.state.metrics_collector = collector
+        app.state.metrics_sampler = MetricsSampler(
+            snapshots=snapshots,
+            groups=app.state.group_store,
+            messages=app.state.message_store,
+            offsets=app.state.offset_store,
+            dead_letters=app.state.dead_letter_queue,
+            uow_factory=app.state.uow_factory,
+            watermark=app.state.storage_watermark,
+            tenant_lookup=cast("TenantLookup", app.state.tenant_source),
+        )
 
     def audit_classes(self) -> ConcurrentStableDict[str, AuditClass]:
         """本服务的留痕类别（05-4）：动作 → 类别 / 强审计 / 记录级。

@@ -25,10 +25,12 @@
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import wraps
 from typing import Annotated, Any, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.exceptions import BizError
 from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
@@ -80,6 +82,7 @@ from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
 from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.errors import MsgErrorCode, MsgRateLimitedError, MsgStorageWatermarkExceededError
+from bms_msg.metrics import get_traffic_metrics
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.message import (
@@ -589,6 +592,67 @@ async def _ensure_unacked_quota(
     return await usage.unacked_count(tenant_id) >= limit.limit
 
 
+def _track_data_plane(operation: str) -> Callable[[Any], Any]:
+    """数据面埋点装饰器（06-3-1）：成功记流量 / 延迟，失败按原因记错误。
+
+    指标异常必须吞掉（绝不因采集失败影响请求）；错误只捕获 `BizError`，
+    不把取消 / 系统异常算成业务失败。
+
+    Args:
+        operation: `publish` 或 `consume`。
+
+    Returns:
+        Callable[[Any], Any]: 函数装饰器。
+    """
+
+    def decorator(func: Any) -> Any:
+        @wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                response = await func(*args, **kwargs)
+            except BizError as exc:
+                try:
+                    traffic = get_traffic_metrics()
+                    if operation == "publish":
+                        traffic.record_publish_error(exc=exc)
+                    else:
+                        traffic.record_consume_error(exc=exc)
+                except Exception:
+                    pass
+                raise
+            try:
+                tenant = kwargs.get("tenant")
+                req = kwargs.get("req")
+                if tenant is not None and req is not None:
+                    duration_ms = (time.monotonic() - started) * 1000.0
+                    traffic = get_traffic_metrics()
+                    if operation == "publish":
+                        traffic.record_publish(
+                            tenant=tenant.code,
+                            topic=req.topic,
+                            size=_payload_bytes(req),
+                            duration_ms=duration_ms,
+                        )
+                    else:
+                        data = getattr(response, "data", None)
+                        count = len(getattr(data, "messages", ()) or ())
+                        traffic.record_consume(
+                            tenant=tenant.code,
+                            topic=req.topic,
+                            count=count,
+                            duration_ms=duration_ms,
+                        )
+            except Exception:
+                pass
+            return response
+
+        return wrapper
+
+    return decorator
+
+
+@_track_data_plane("publish")
 async def publish(
     req: PublishRequest,
     tenant: DataPlaneTenantDep,
@@ -730,6 +794,7 @@ def _consume_result(
     )
 
 
+@_track_data_plane("consume")
 async def consume(
     req: ConsumeRequest,
     tenant: DataPlaneTenantDep,

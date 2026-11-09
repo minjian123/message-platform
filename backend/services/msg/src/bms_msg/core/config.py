@@ -296,6 +296,9 @@ RATE_LIMIT_RETRY_AFTER_MS = 1_000
 METRICS_TOPIC_KEY_LIMIT = 500
 """背压指标的分键上限（`(tenant, topic)`）：超出归 `__other__`，防高基数。"""
 
+METRICS_SAMPLE_INTERVAL_SECONDS = 15.0
+"""指标后台采样周期（秒）：与 Prometheus 缺省抓取间隔同频；不新增业务配置项（06-3-1）。"""
+
 WINDOW_STALL_THRESHOLD_MS = 50
 """窗口暂停判定阈值（毫秒）：流两次推进间隔超过该值即记一次 `msg_window_stall_total`。
 

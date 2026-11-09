@@ -13,9 +13,11 @@
    （零拷贝与启动成本的前提）；只有真正的读取路径才 `read_record` 解整条。
 """
 
+import contextlib
 import os
 import re
 import struct
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,7 @@ from bms_msg.core.config import (
     RECORD_FRAME_BYTES,
     TIME_INDEX_INTERVAL_MS,
 )
+from bms_msg.metrics import get_traffic_metrics
 
 __all__ = [
     "INDEX_SUFFIX",
@@ -712,7 +715,13 @@ class SegmentFile:
     def fsync(self) -> None:
         """把当前写句柄的内容刷到磁盘（无写句柄即无操作）。"""
         if self._write_fd is not None:
+            started = time.perf_counter()
             os.fsync(self._write_fd)
+            with contextlib.suppress(Exception):
+                get_traffic_metrics().record_fsync(
+                    scope="log",
+                    duration_ms=(time.perf_counter() - started) * 1000.0,
+                )
 
     def close(self) -> None:
         """关闭写句柄（幂等；读路径不持句柄）。"""

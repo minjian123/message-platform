@@ -79,6 +79,20 @@ class TopicRepository(BaseDbRepository[MsgTopic]):
         )
         return int((await self._session.execute(statement)).scalar_one())
 
+    async def get_by_id_unscoped(self, topic_id: int) -> MsgTopic | None:
+        """按主键取主题（**不带租户条件**；仅供后台指标采样按 `topic_id` 反查名称与租户）。
+
+        后台采样没有请求租户上下文，`tenant_scoped` 仓储的默认查询会追加当前租户条件而查不到；
+        本方法刻意绕开作用域，只返回订阅者（指标、审计补全）需要的最小事实。
+
+        Args:
+            topic_id: 主题主键（雪花）。
+
+        Returns:
+            MsgTopic | None: 主题；不存在返回 None。
+        """
+        return await self._session.get(MsgTopic, topic_id)
+
     def _filters(self, namespace: str | None, keyword: str | None) -> tuple[ColumnElement[bool], ...]:
         """构造列表过滤条件（命名空间 / 名称模糊）。
 

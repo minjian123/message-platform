@@ -187,6 +187,7 @@ class BackgroundLoops(BaseAsyncResource):
         scheduler: DelayScheduler,
         runner: ReplayRunner,
         purge: StoppableLoop | None = None,
+        sampler: StoppableLoop | None = None,
     ) -> None:
         """初始化。
 
@@ -194,13 +195,17 @@ class BackgroundLoops(BaseAsyncResource):
             scheduler: 延迟到期推进器。
             runner: 重放执行器。
             purge: 租户到期清扫服务（可选；不导入租户模块以免成环）。
+            sampler: 指标后台采样器（可选；06-3-1）。
         """
         self._scheduler = scheduler
         self._runner = runner
         self._purge = purge
+        self._sampler = sampler
 
     async def aclose(self) -> None:
         """停止全部循环（各自 `stop()` 幂等，重复调用无副作用）。"""
+        if self._sampler is not None:
+            await self._sampler.stop()
         await self._scheduler.stop()
         await self._runner.stop()
         if self._purge is not None:
@@ -234,13 +239,16 @@ async def start_background_tasks(app: FastAPI) -> None:
     purge = cast("StoppableLoop | None", getattr(app.state, "tenant_purge_service", None))
     if purge is not None:
         purge.ensure_started()
+    sampler = cast("StoppableLoop | None", getattr(app.state, "metrics_sampler", None))
+    if sampler is not None:
+        sampler.ensure_started()
     resources = cast("ResourceManager", app.state.resources)
     if getattr(app.state, "offset_flush_loop", None) is None:
         flush_loop = OffsetFlushLoop(store=offsets)
         resources.register(flush_loop)
         app.state.offset_flush_loop = flush_loop
     if getattr(app.state, "background_loops", None) is None:
-        loops = BackgroundLoops(scheduler=scheduler, runner=runner, purge=purge)
+        loops = BackgroundLoops(scheduler=scheduler, runner=runner, purge=purge, sampler=sampler)
         resources.register(loops)
         app.state.background_loops = loops
     _LOGGER.info(
@@ -248,6 +256,7 @@ async def start_background_tasks(app: FastAPI) -> None:
         delay_scheduler=scheduler.running,
         replay_runner=runner.running,
         tenant_purge=purge is not None,
+        metrics_sampler=sampler is not None,
         offset_flush_loop=getattr(app.state, "offset_flush_loop", None) is not None,
     )
 

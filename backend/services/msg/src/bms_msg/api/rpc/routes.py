@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import base64
-from typing import Annotated
+import contextlib
+import time
+from functools import wraps
+from typing import Annotated, Any
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
-from bms_core.core.exceptions import ParamError
+from bms_core.core.exceptions import BizError, ParamError
 from bms_core.msgclient.deadline import Deadline
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
@@ -46,6 +49,7 @@ from bms_msg.core.config import (
     RPC_USED_MS_HEADER,
 )
 from bms_msg.errors import MsgErrorCode
+from bms_msg.metrics import get_traffic_metrics
 from bms_msg.rpc.cancel import ensure_not_cancelled
 from bms_msg.rpc.service import invoke_rpc
 from bms_msg.schemas.rpc import RpcRequest, RpcResult
@@ -54,6 +58,63 @@ __all__ = ["RPC_ERROR_CODES", "RPC_PERMISSION", "router"]
 
 RPC_PERMISSION = "msg:rpc"
 """RPC 端点权限码（05 域落服务令牌前只是声明式占位；无 provider 时恒放行）。"""
+
+
+def _track_rpc(func: Any) -> Any:
+    """RPC 埋点装饰器（06-3-1）：记录调用次数与处理耗时。
+
+    指标异常必须吞掉（绝不因采集失败影响调用）；`method` 取注册表内固定方法名，
+    禁止把用户输入拼进标签。
+
+    Args:
+        func: RPC 端点实现。
+
+    Returns:
+        Any: 包装后的端点。
+    """
+
+    @wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
+        method = str(kwargs.get("method", ""))
+        try:
+            response = await func(*args, **kwargs)
+        except BizError as exc:
+            with contextlib.suppress(Exception):
+                get_traffic_metrics().record_rpc(
+                    method=method,
+                    outcome=_rpc_outcome(exc.code),
+                    duration_ms=(time.perf_counter() - started) * 1000.0,
+                )
+            raise
+        with contextlib.suppress(Exception):
+            get_traffic_metrics().record_rpc(
+                method=method,
+                outcome="ok",
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        return response
+
+    return wrapper
+
+
+def _rpc_outcome(code: int) -> str:
+    """把 RPC 错误码归类为结果标签（闭集）。
+
+    Args:
+        code: 业务错误码。
+
+    Returns:
+        str: `deadline_exceeded` / `rate_limited` / `method_not_found` / `business_error`。
+    """
+    if code == int(MsgErrorCode.RPC_DEADLINE_EXCEEDED):
+        return "deadline_exceeded"
+    if code == int(MsgErrorCode.RATE_LIMITED):
+        return "rate_limited"
+    if code == int(MsgErrorCode.RPC_METHOD_NOT_FOUND):
+        return "method_not_found"
+    return "business_error"
+
 
 RPC_ERROR_CODES = ConcurrentStableList(
     [
@@ -112,6 +173,7 @@ def _decode_payload(text: str) -> bytes:
     "/{service}/{method}",
     openapi_extra={"x-error-codes": list(RPC_ERROR_CODES)},
 )
+@_track_rpc
 async def invoke(
     service: Annotated[
         str,

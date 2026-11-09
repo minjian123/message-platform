@@ -1,0 +1,81 @@
+# msg 告警规则回归（06-3-2）：低值序列下全部规则不触发。
+# 运行：promtool test rules /etc/prometheus/rules/products/msg-rules.test.yml
+# 说明：触发 / 恢复的精确注解断言依赖真实阈值回填（8B_12）；本文件先锁「规则可加载 + 表达式可求值 +
+#       低值不误报」，触发与恢复在测试记录以 promtool check + 规则结构断言 + 真机待验登记。
+rule_files:
+  - msg.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="msg",instance="msg:8000"}'
+        values: '1x25'
+      - series: 'probe_success{job="bms-probe",instance="http://msg:8000/readyz"}'
+        values: '1x25'
+      - series: 'msg_consumer_lag{tenant="t1",topic="orders",service="msg"}'
+        values: '0x25'
+      - series: 'msg_publish_errors_total{reason="param",service="msg"}'
+        values: '0x25'
+      - series: 'msg_messages_in_total{tenant="t1",topic="orders",service="msg"}'
+        values: '10x25'
+      - series: 'msg_delay_deliver_failed_total{reason="storage",service="msg"}'
+        values: '0x25'
+      - series: 'msg_dlq_growth_total{tenant="t1",topic="orders",service="msg"}'
+        values: '0x25'
+      - series: 'msg_isr_shrink_total{service="msg"}'
+        values: '0x25'
+      - series: 'msg_replay_failed_total{reason="task_failed",service="msg"}'
+        values: '0x25'
+      - series: 'msg_disk_used_ratio{service="msg"}'
+        values: '0.5x25'
+      - series: 'msg_storage_rejected_total{reason="watermark",service="msg"}'
+        values: '0x25'
+      - series: 'msg_window_stall_total{tenant="t1",topic="orders",service="msg"}'
+        values: '0x25'
+      - series: 'msg_long_poll_waiters{service="msg"}'
+        values: '10x25'
+      - series: 'msg_rate_limit_rejected_total{scope="topic",tenant="t1",topic="orders",service="msg"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MsgMetricsDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgNotReady
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgConsumerLagGrowing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgPublishErrorRate
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgDelayDeliverFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgDlqGrowing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgIsrShrinking
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgDiskHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgStorageRejected
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgInflightStall
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgLongPollWaitersHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgRateLimitRejected
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MsgReplayFailed
+        exp_alerts: []
