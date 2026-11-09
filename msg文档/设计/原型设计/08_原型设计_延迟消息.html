@@ -4,98 +4,239 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 延迟消息（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
-    <style>
-      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
-      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
-      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
-      .proto-nav span{opacity:.5}
-      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
-      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-      .proto-states button.is-active{border-color:var(--bms-color-primary);background:var(--bms-color-primary);color:#fff}
-      .proto-page{display:none}.proto-page.is-active{display:block}
-      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
-      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
-      .levels{display:grid;grid-template-columns:repeat(9,1fr);gap:6px;margin:12px 0}
-      .level{border:1px solid var(--bms-color-border);border-radius:4px;padding:8px 4px;text-align:center;font-size:12px}
-      .level strong{display:block;margin-top:4px}
-      .banner{border:1px solid var(--bms-color-border);border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:12px}
-      .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}
-      .state.ok{background:#f0f9eb;color:#67c23a}.state.warn{background:#fdf6ec;color:#e6a23c}.state.bad{background:#fef0f0;color:#f56c6c}
-    </style>
   </head>
   <body>
-    <header class="proto-header"><span>原型设计 · 延迟消息（页面 08）</span></header>
-    <main class="proto-main">
-      <h1>延迟消息</h1>
-      <p>msg 消息平台 · 06-1-2 只读视图 · 待投列表、档位分布与堆积提示（不做改期 / 取消）</p>
-      <nav class="proto-nav">
-        <a href="03_原型设计_平台概览.html">概览</a><a href="04_原型设计_主题管理.html">主题</a>
-        <a href="05_原型设计_消费组与积压.html">消费组</a><a href="04_原型设计_主题管理.html#detail">分区</a>
-        <a href="06_原型设计_消息查询.html">消息查询</a>
-        <a class="is-active" href="08_原型设计_延迟消息.html">延迟</a>
-        <a href="07_原型设计_死信与重放.html">死信与重放</a>
-        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
-      </nav>
-      <div class="proto-states">
-        <button class="is-active" data-page="normal">正常（normal）</button>
-        <button data-page="stale">堆积（stale）</button>
-        <button data-page="quota">近上限</button>
-        <button data-page="loading">加载态</button><button data-page="empty">空态</button>
-        <button data-page="error">错误态</button><button data-page="denied">无权限</button>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">延迟消息（页面 08）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-1-2 只读视图</span>
       </div>
 
-      <section class="proto-page is-active" id="page-normal">
-        <div class="proto-frame">
-          <div class="banner"><span class="state ok">提示：延迟区运行正常</span> <span class="hint">文案取模块 i18n 的 <code>hint.normal</code>；后端返回结构化枚举，不返回中文文案。</span></div>
-          <div class="row-actions">
-            <label class="hint">命名空间 <select><option>msg</option></select></label>
-            <label class="hint">主题 <select><option>全部</option><option>order.created</option></select></label>
-            <label class="hint">分区 <select><option>全部</option></select></label>
-            <button class="proto-button proto-button--primary">查询</button><button class="proto-button">重置</button>
-            <span class="hint" style="margin-left:auto">只读：不提供改期 / 取消入口</span>
-          </div>
-          <h2>档位分布（九档，与待投列表同源）</h2>
-          <div class="levels">
-            <div class="level">1s<strong>0</strong></div><div class="level">5s<strong>2</strong></div><div class="level">10s<strong>0</strong></div>
-            <div class="level">30s<strong>5</strong></div><div class="level">1m<strong>0</strong></div><div class="level">5m<strong>1</strong></div>
-            <div class="level">10m<strong>0</strong></div><div class="level">30m<strong>0</strong></div><div class="level">1h<strong>0</strong></div>
-          </div>
-          <p class="hint">未出现的档位也输出 <code>count=0</code>，顺序按 <code>DELAY_LEVEL_MS</code> 声明序；汇总端点为 <code>GET /api/v1/msg/admin/delayed/summary</code>。</p>
-          <h2 style="margin-top:16px">待投列表</h2>
-          <table class="proto-table">
-            <thead><tr><th>log_id</th><th>主题</th><th>分区</th><th>档位</th><th>到期时间</th><th>剩余时间</th><th>trace_id</th></tr></thead>
-            <tbody>
-              <tr><td>01J8ZK…</td><td>order.created</td><td>0</td><td>30s</td><td>2026-11-09 02:12:30</td><td>00:00:18</td><td>4bf92f…</td></tr>
-              <tr><td>01J8ZJ…</td><td>order.paid</td><td>1</td><td>5m</td><td>2026-11-09 02:16:58</td><td>00:04:46</td><td>91c0a3…</td></tr>
-            </tbody>
-          </table>
-          <p class="hint" style="margin-top:12px">待投列表复用 <code>/admin/delayed</code> 既有契约；汇总与列表取同一份租户快照，不在请求内全量扫描。</p>
-        </div>
-      </section>
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="normal">正常（normal）</el-radio-button>
+          <el-radio-button value="stale">堆积（stale）</el-radio-button>
+          <el-radio-button value="quota">近上限</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="empty">空态</el-radio-button>
+          <el-radio-button value="error">错误态</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
 
-      <section class="proto-page" id="page-stale">
-        <div class="proto-frame"><div class="banner"><span class="state bad">提示：存在已到期未转投的消息</span> <span class="hint"><code>hint.stale</code> · <code>stale_count=7</code>，按「已到期未转投」计数，TTL 不进汇总端点。</span></div><p class="hint">堆积提示只回答「在等什么、还要等多久、是否堆积」，不提供改期 / 取消。</p></div>
-      </section>
-      <section class="proto-page" id="page-quota">
-        <div class="proto-frame"><div class="banner"><span class="state warn">提示：延迟区用量接近上限</span> <span class="hint"><code>hint.near_quota</code> · <code>quota_used_ratio=0.92</code>，夹到 [0, 1]。</span></div></div>
-      </section>
-      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：档位分布与待投列表各自骨架，汇总端点独立演进、不阻塞列表分页。</p></div></section>
-      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：九档均为 0、待投列表显示「暂无待投消息」；不把 0 画成假数据。</p></div></section>
-      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射；汇总失败不阻断列表。</p></div></section>
-      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code>：菜单、筛选与档位分布均不渲染。</p></div></section>
-    </main>
+      <div class="app-shell">
+        <el-menu :default-active="activeNav" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl" disabled>主题授权（06-7 预留）</el-menu-item>
+          <el-menu-item index="usage" disabled>租户用量（06-8 预留）</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 正常 / 堆积 / 近上限 -->
+          <div v-if="scene === 'normal' || scene === 'stale' || scene === 'quota'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">延迟消息</h2>
+                <p class="page-sub">取数 <code>GET /api/v1/msg/admin/delayed</code> 与 <code>/delayed/summary</code>；只读，不做改期 / 取消</p>
+              </div>
+            </div>
+
+            <el-alert :type="hint.type" :closable="false" show-icon :title="hint.title" style="margin-bottom: 12px">
+              <template #default>{{ hint.detail }}</template>
+            </el-alert>
+
+            <el-form :inline="true" @submit.prevent>
+              <el-form-item label="命名空间">
+                <el-select v-model="query.namespace" style="width: 140px">
+                  <el-option label="msg" value="msg"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="主题">
+                <el-select v-model="query.topic" style="width: 180px">
+                  <el-option label="全部" value=""></el-option>
+                  <el-option label="order.created" value="order.created"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="分区">
+                <el-select v-model="query.partition" style="width: 120px">
+                  <el-option label="全部" value=""></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="applyFilter">查询</el-button>
+                <el-button @click="resetFilter">重置</el-button>
+              </el-form-item>
+            </el-form>
+
+            <div class="block-title" style="margin-top: 4px">档位分布（九档，与待投列表同源）</div>
+            <div class="levels">
+              <el-card v-for="level in levels" :key="level.key" shadow="never" class="level">
+                <div class="level-label">{{ level.label }}</div>
+                <div class="level-count">{{ level.count }}</div>
+              </el-card>
+            </div>
+            <p class="hint" style="margin-top: 8px">
+              未出现的档位也输出 <code>count=0</code>，顺序按 <code>DELAY_LEVEL_MS</code> 声明序。
+            </p>
+
+            <div class="block-title">待投列表</div>
+            <el-table :data="delayed" border stripe style="width: 100%">
+              <el-table-column label="log_id" width="130">
+                <template #default="{ row }"><span class="mono">{{ row.logId }}</span></template>
+              </el-table-column>
+              <el-table-column prop="topic" label="主题" min-width="160"></el-table-column>
+              <el-table-column prop="partition" label="分区" width="80" align="right"></el-table-column>
+              <el-table-column prop="level" label="档位" width="90"></el-table-column>
+              <el-table-column prop="dueAt" label="到期时间" width="180"></el-table-column>
+              <el-table-column prop="remaining" label="剩余时间" width="110" align="right"></el-table-column>
+              <el-table-column label="trace_id" min-width="130">
+                <template #default="{ row }"><span class="mono">{{ row.traceId }}</span></template>
+              </el-table-column>
+            </el-table>
+
+            <p class="hint" style="margin-top: 12px">
+              待投列表复用 <code>/admin/delayed</code> 既有契约；汇总与列表取同一份租户快照，不在请求内全量扫描。
+            </p>
+          </div>
+
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <h2 class="page-title">延迟消息</h2>
+            <p class="page-sub">加载态：档位分布与待投列表各自骨架，汇总端点独立演进、不阻塞列表分页</p>
+            <el-skeleton :rows="2" animated></el-skeleton>
+            <el-skeleton :rows="5" animated style="margin-top: 16px"></el-skeleton>
+          </div>
+
+          <!-- 空态 -->
+          <div v-else-if="scene === 'empty'">
+            <h2 class="page-title">延迟消息</h2>
+            <div class="block-title" style="margin-top: 4px">档位分布</div>
+            <div class="levels">
+              <el-card v-for="level in levels" :key="level.key" shadow="never" class="level">
+                <div class="level-label">{{ level.label }}</div>
+                <div class="level-count">0</div>
+              </el-card>
+            </div>
+            <div class="block-title">待投列表</div>
+            <el-empty description="暂无待投消息" :image-size="72"></el-empty>
+            <p class="hint">九档均为 0 时照实显示 0，不画假数据。</p>
+          </div>
+
+          <!-- 错误态 -->
+          <div v-else-if="scene === 'error'">
+            <el-result icon="error" title="查询失败" sub-title="350009 · 分区越界">
+              <template #extra>
+                <p class="hint" style="margin: 0 0 8px">
+                  <code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射；汇总失败不阻断列表
+                </p>
+                <el-button type="primary" @click="applyFilter">重试</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else>
+            <el-result icon="warning" title="无 msg:query 权限" sub-title="菜单、筛选与档位分布均不渲染"></el-result>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      document.querySelectorAll('.proto-states button').forEach((tab) => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
-          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
-          tab.classList.add('is-active')
-          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
-        })
+      const { createApp, ref, reactive, computed } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['normal', 'stale', 'quota', 'loading', 'empty', 'error', 'denied']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'normal')
+          const activeNav = ref('delayed')
+          const query = reactive({ namespace: 'msg', topic: '', partition: '' })
+          const levels = ref([
+            { key: '1s', label: '1s', count: 0 },
+            { key: '5s', label: '5s', count: 2 },
+            { key: '10s', label: '10s', count: 0 },
+            { key: '30s', label: '30s', count: 5 },
+            { key: '1m', label: '1m', count: 0 },
+            { key: '5m', label: '5m', count: 1 },
+            { key: '10m', label: '10m', count: 0 },
+            { key: '30m', label: '30m', count: 0 },
+            { key: '1h', label: '1h', count: 0 },
+          ])
+          const delayed = ref([
+            { logId: '01J8ZK…', topic: 'order.created', partition: 0, level: '30s', dueAt: '2026-11-09 02:12:30', remaining: '00:00:18', traceId: '4bf92f…' },
+            { logId: '01J8ZJ…', topic: 'order.paid', partition: 1, level: '5m', dueAt: '2026-11-09 02:16:58', remaining: '00:04:46', traceId: '91c0a3…' },
+          ])
+
+          /** 后端返回结构化枚举 hint，不返回中文文案；此处按 i18n 键示意。 */
+          const hint = computed(() => {
+            if (scene.value === 'stale') {
+              return {
+                type: 'error',
+                title: '提示：存在已到期未转投的消息',
+                detail: 'hint.stale · stale_count=7，按「已到期未转投」计数；TTL 不进汇总端点。堆积提示只回答「在等什么、还要等多久、是否堆积」，不提供改期 / 取消。',
+              }
+            }
+            if (scene.value === 'quota') {
+              return {
+                type: 'warning',
+                title: '提示：延迟区用量接近上限',
+                detail: 'hint.near_quota · quota_used_ratio=0.92，取值夹到 [0, 1]。',
+              }
+            }
+            return {
+              type: 'success',
+              title: '提示：延迟区运行正常',
+              detail: 'hint.normal · 文案取模块 i18n；后端返回结构化枚举，不返回中文文案。',
+            }
+          })
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          function applyFilter() {
+            ElMessage.success('查询完成（原型演示）')
+          }
+
+          function resetFilter() {
+            query.topic = ''
+            query.partition = ''
+          }
+
+          return { scene, activeNav, query, levels, delayed, hint, onNav, applyFilter, resetFilter }
+        },
       })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
     </script>
   </body>
 </html>

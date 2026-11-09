@@ -4,103 +4,289 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 消息查询（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
-    <style>
-      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
-      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
-      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
-      .proto-nav span{opacity:.5}
-      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
-      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-      .proto-states button.is-active{border-color:var(--bms-color-primary);background:var(--bms-color-primary);color:#fff}
-      .proto-page{display:none}.proto-page.is-active{display:block}
-      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
-      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
-      .mono{font-family:var(--font-mono,monospace);font-size:12px}
-      .pager{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px}
-    </style>
   </head>
   <body>
-    <header class="proto-header"><span>原型设计 · 消息查询（页面 05）</span></header>
-    <main class="proto-main">
-      <h1>消息查询</h1>
-      <p>msg 消息平台 · 06-1-2 只读视图 · 按 offset / key / 时间 / <code>log_id</code> 检索，只展示头与摘要</p>
-      <nav class="proto-nav">
-        <a href="03_原型设计_平台概览.html">概览</a><a href="04_原型设计_主题管理.html">主题</a>
-        <a href="05_原型设计_消费组与积压.html">消费组</a><a href="04_原型设计_主题管理.html#detail">分区</a>
-        <a class="is-active" href="06_原型设计_消息查询.html">消息查询</a>
-        <a href="08_原型设计_延迟消息.html">延迟</a><a href="07_原型设计_死信与重放.html">死信与重放</a>
-        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
-      </nav>
-      <div class="proto-states">
-        <button class="is-active" data-page="list">结果列表</button>
-        <button data-page="detail">消息详情</button>
-        <button data-page="loading">加载态</button><button data-page="empty">空态</button>
-        <button data-page="error">错误态</button><button data-page="denied">无权限</button>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">消息查询（页面 05）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-1-2 只读视图</span>
       </div>
 
-      <section class="proto-page is-active" id="page-list">
-        <div class="proto-frame">
-          <div class="row-actions">
-            <label class="hint">命名空间 <select><option>msg</option></select></label>
-            <label class="hint">主题 <select><option>order.created</option></select></label>
-            <label class="hint">分区 <select><option>全部</option><option>0</option></select></label>
-            <label class="hint">offset <input size="7" placeholder="起" /> - <input size="7" placeholder="止" /></label>
-            <label class="hint">key <input size="10" placeholder="精确匹配" /></label>
-            <label class="hint">时间 <input size="14" placeholder="起 ISO 8601" /> - <input size="14" placeholder="止" /></label>
-            <label class="hint"><code>log_id</code> <input size="14" placeholder="精确值" /></label>
-            <button class="proto-button proto-button--primary">查询</button><button class="proto-button">重置</button>
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="list">结果列表</el-radio-button>
+          <el-radio-button value="detail">消息详情</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="empty">空态</el-radio-button>
+          <el-radio-button value="error">错误态</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
+
+      <div class="app-shell">
+        <el-menu :default-active="activeNav" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl" disabled>主题授权（06-7 预留）</el-menu-item>
+          <el-menu-item index="usage" disabled>租户用量（06-8 预留）</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 结果列表 -->
+          <div v-if="scene === 'list'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">消息查询</h2>
+                <p class="page-sub">
+                  取数 <code>GET /api/v1/msg/admin/messages</code>；按 offset / key / 时间 / <code>log_id</code> 检索，跨类条件相与
+                </p>
+              </div>
+            </div>
+
+            <el-form label-position="top" @submit.prevent>
+              <el-row :gutter="16">
+                <el-col :span="8">
+                  <el-form-item label="命名空间">
+                    <el-select v-model="query.namespace" style="width: 100%">
+                      <el-option label="msg" value="msg"></el-option>
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="主题">
+                    <el-select v-model="query.topic" style="width: 100%">
+                      <el-option label="order.created" value="order.created"></el-option>
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="分区">
+                    <el-select v-model="query.partition" style="width: 100%">
+                      <el-option label="全部" value=""></el-option>
+                      <el-option label="0" value="0"></el-option>
+                      <el-option label="1" value="1"></el-option>
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row :gutter="16">
+                <el-col :span="8">
+                  <el-form-item label="offset 区间">
+                    <div style="display: flex; gap: 6px; align-items: center; width: 100%">
+                      <el-input v-model="query.offsetFrom" placeholder="起" style="width: 100%"></el-input>
+                      <span class="hint">-</span>
+                      <el-input v-model="query.offsetTo" placeholder="止" style="width: 100%"></el-input>
+                    </div>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="key">
+                    <el-input v-model="query.key" placeholder="精确匹配" clearable style="width: 100%"></el-input>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="log_id">
+                    <el-input v-model="query.logId" placeholder="精确值" clearable style="width: 100%"></el-input>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row :gutter="16">
+                <el-col :span="16">
+                  <el-form-item label="发布时间（UTC）">
+                    <el-date-picker
+                      v-model="query.range"
+                      type="datetimerange"
+                      start-placeholder="起"
+                      end-placeholder="止"
+                      value-format="YYYY-MM-DDTHH:mm:ss"
+                      style="width: 100%"
+                    ></el-date-picker>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label=" ">
+                    <el-button type="primary" @click="applyFilter">查询</el-button>
+                    <el-button @click="resetFilter">重置</el-button>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </el-form>
+
+            <el-table :data="messages" border stripe style="width: 100%">
+              <el-table-column label="log_id" width="150">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.logId }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="partition" label="分区" width="80" align="right"></el-table-column>
+              <el-table-column prop="offset" label="offset" width="110" align="right"></el-table-column>
+              <el-table-column prop="publishedAt" label="发布时间（UTC）" width="190"></el-table-column>
+              <el-table-column prop="payloadLen" label="载荷长度" width="110" align="right"></el-table-column>
+              <el-table-column label="SHA-256 摘要" min-width="150">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.digest }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="110" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openDetail(row)">查看头</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <div class="pager-row">
+              <el-pagination background layout="total, prev, pager, next" :total="messages.length" :page-size="query.size" :current-page="query.page" @current-change="onPage"></el-pagination>
+            </div>
+
+            <el-alert type="warning" :closable="false" show-icon title="不展示消息正文" style="margin-top: 12px"
+              description="响应结构只有 payload_len 与 payload_sha256，上层在类型上拿不到 payload；摘要取落盘字节的 SHA-256。"></el-alert>
           </div>
-          <table class="proto-table">
-            <thead><tr><th>log_id</th><th>分区</th><th>offset</th><th>发布时间（UTC）</th><th>载荷长度</th><th>SHA-256 摘要</th><th>操作</th></tr></thead>
-            <tbody>
-              <tr><td class="mono">01J8ZK...</td><td>0</td><td>21,404</td><td>2026-11-09 02:11:58</td><td>512 B</td><td class="mono">9f2c…a81d</td><td><button class="proto-button" data-goto="detail">查看头</button></td></tr>
-              <tr><td class="mono">01J8ZJ...</td><td>0</td><td>21,403</td><td>2026-11-09 02:11:57</td><td>348 B</td><td class="mono">3b7e…10c4</td><td><button class="proto-button" data-goto="detail">查看头</button></td></tr>
-            </tbody>
-          </table>
-          <div class="pager"><span class="hint">共 2 条 · 第 1 / 1 页 · 跨类条件相与</span><button class="proto-button">上一页</button><button class="proto-button">下一页</button></div>
-          <p class="hint" style="margin-top:12px"><strong>不展示消息正文</strong>：响应结构只有 <code>payload_len</code> 与 <code>payload_sha256</code>，上层在类型上拿不到 <code>payload</code>；摘要取落盘字节的 SHA-256。</p>
-        </div>
-      </section>
 
-      <section class="proto-page" id="page-detail">
-        <div class="proto-frame">
-          <div class="row-actions"><button class="proto-button" data-goto="list">← 返回列表</button><span class="hint">深链：<code>/msg/messages/01J8ZK...</code>（<code>meta.menu: false</code>）</span></div>
-          <h2>消息头</h2>
-          <table class="proto-table">
-            <tbody>
-              <tr><th>log_id</th><td class="mono">01J8ZK...</td></tr>
-              <tr><th>message_id</th><td class="mono">m-7c1e...</td></tr>
-              <tr><th>分区 / offset</th><td>0 / 21,404</td></tr>
-              <tr><th>发布时间</th><td>2026-11-09 02:11:58 UTC</td></tr>
-              <tr><th>trace_id</th><td class="mono">4bf92f3577b34da6a3ce929d0e0e4736</td></tr>
-              <tr><th>自定义头</th><td class="mono">content-type=application/json; source=order-svc</td></tr>
-              <tr><th>载荷长度 / 摘要</th><td class="mono">512 B / 9f2c…a81d</td></tr>
-            </tbody>
-          </table>
-          <p class="hint" style="margin-top:12px">头与摘要之外不提供「查看正文」入口；<code>log_id</code> 冷记录未命中返回空页，不扫描全量日志。</p>
-        </div>
-      </section>
+          <!-- 消息详情 -->
+          <div v-else-if="scene === 'detail'">
+            <el-page-header content="消息头" @back="scene = 'list'"></el-page-header>
+            <p class="hint" style="margin: 8px 0 12px">
+              深链：<code>/msg/messages/&lt;log_id&gt;</code>（<code>meta.menu: false</code>）
+            </p>
+            <el-descriptions :column="1" border>
+              <el-descriptions-item label="log_id"><span class="mono">01J8ZK...</span></el-descriptions-item>
+              <el-descriptions-item label="message_id"><span class="mono">m-7c1e...</span></el-descriptions-item>
+              <el-descriptions-item label="分区 / offset">0 / 21,404</el-descriptions-item>
+              <el-descriptions-item label="发布时间">2026-11-09 02:11:58 UTC</el-descriptions-item>
+              <el-descriptions-item label="trace_id"><span class="mono">4bf92f3577b34da6a3ce929d0e0e4736</span></el-descriptions-item>
+              <el-descriptions-item label="自定义头"><span class="mono">content-type=application/json; source=order-svc</span></el-descriptions-item>
+              <el-descriptions-item label="载荷长度 / 摘要"><span class="mono">512 B / 9f2c…a81d</span></el-descriptions-item>
+            </el-descriptions>
+            <p class="hint" style="margin-top: 12px">
+              头与摘要之外不提供「查看正文」入口；<code>log_id</code> 冷记录未命中返回空页，不扫描全量日志。
+            </p>
+          </div>
 
-      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：结果表骨架；组合条件较多时禁用重复提交。</p></div></section>
-      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：保留筛选条件并显示「未找到匹配消息」，提示放宽 offset / 时间区间；保留清理导致区间为空属正常状态，不报错。</p></div></section>
-      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射文案；保留已填筛选条件。</p></div></section>
-      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code> 或主题 describe 授权：菜单与查询表单不渲染。</p></div></section>
-    </main>
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <h2 class="page-title">消息查询</h2>
+            <p class="page-sub">加载态：结果表骨架；组合条件较多时禁用重复提交</p>
+            <el-skeleton :rows="6" animated></el-skeleton>
+          </div>
+
+          <!-- 空态 -->
+          <div v-else-if="scene === 'empty'">
+            <h2 class="page-title">消息查询</h2>
+            <el-empty description="未找到匹配消息">
+              <p class="hint" style="margin: 0 0 8px">
+                保留筛选条件，提示放宽 offset / 时间区间；清理导致区间为空属正常状态，不报错
+              </p>
+            </el-empty>
+          </div>
+
+          <!-- 错误态 -->
+          <div v-else-if="scene === 'error'">
+            <el-result icon="error" title="查询失败" sub-title="350010 · offset 越界">
+              <template #extra>
+                <p class="hint" style="margin: 0 0 8px">
+                  <code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射文案；保留已填筛选条件
+                </p>
+                <el-button type="primary" @click="applyFilter">重试</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else>
+            <el-result icon="warning" title="无 msg:query 或主题 describe 授权" sub-title="菜单与查询表单不渲染"></el-result>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      document.querySelectorAll('.proto-states button').forEach((tab) => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
-          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
-          tab.classList.add('is-active')
-          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
-        })
+      const { createApp, ref, reactive } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['list', 'detail', 'loading', 'empty', 'error', 'denied']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
+          const activeNav = ref('messages')
+          const query = reactive({
+            namespace: 'msg',
+            topic: 'order.created',
+            partition: '',
+            offsetFrom: '',
+            offsetTo: '',
+            key: '',
+            logId: '',
+            range: [],
+            page: 1,
+            size: 10,
+          })
+          const messages = ref([
+            { logId: '01J8ZK...', partition: 0, offset: '21,404', publishedAt: '2026-11-09 02:11:58', payloadLen: '512 B', digest: '9f2c…a81d' },
+            { logId: '01J8ZJ...', partition: 0, offset: '21,403', publishedAt: '2026-11-09 02:11:57', payloadLen: '348 B', digest: '3b7e…10c4' },
+          ])
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          function applyFilter() {
+            query.page = 1
+            ElMessage.success('查询完成（原型演示）')
+          }
+
+          function resetFilter() {
+            query.partition = ''
+            query.offsetFrom = ''
+            query.offsetTo = ''
+            query.key = ''
+            query.logId = ''
+            query.range = []
+            query.page = 1
+          }
+
+          function onPage(value) {
+            query.page = value
+          }
+
+          function openDetail(row) {
+            scene.value = 'detail'
+            ElMessage.info(`深链 /msg/messages/${row.logId}（原型演示，就地切换到详情）`)
+          }
+
+          return { scene, activeNav, query, messages, onNav, applyFilter, resetFilter, onPage, openDetail }
+        },
       })
-      document.querySelectorAll('[data-goto]').forEach((button) => {
-        button.addEventListener('click', () => document.querySelector(`.proto-states button[data-page="${button.dataset.goto}"]`).click())
-      })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
     </script>
   </body>
 </html>

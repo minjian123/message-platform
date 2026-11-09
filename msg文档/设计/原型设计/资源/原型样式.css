@@ -1,9 +1,19 @@
 /**
  * msg 原型补充样式（在 bms《原型样式.css》之后加载）。
  *
- * bms 基础样式只覆盖 `proto-bar` / `proto-frame` / `p-*` 等类；msg 原型使用 `proto-*` 自有类，
- * 本文件补齐这些类，色板与控件观感对齐 bms / mdm 原型的 Element Plus + GitHub 风格：
+ * 用途分两块：
+ * 1. 外壳与布局（`app-shell` / `app-menu` / `app-body` / `metric-*` / `levels` 等）：供 03~08 六页
+ *    使用。六页与 bms / mdm 原型同构，用本地 vendor 的 Vue 3 + Element Plus 真组件渲染，
+ *    表格 / 按钮 / 分页 / 状态 / 空错态一律由组件提供，本文件只管外壳与少量排布。
+ * 2. 手写公共类（`proto-header` / `proto-table` / `proto-button` / `state` / `banner` 等）：
+ *    02 配额管理（05-2 交付）仍在使用，保留；01 总览同时使用 `layout` / `sidebar` / `content`。
+ *
+ * 色板与控件观感对齐 bms / mdm 原型的 Element Plus + GitHub 风格：
  * 文本 #24292f、边框 #d0d7de、主色 #0969da、浅底 #f6f8fa。
+ *
+ * 工程约定（供后续补页面参考）：状态徽标统一用 `state` / `state ok|info|warn|hard` 类，
+ * **不要用 `el-tag`** —— 在 file:// 静态页里 el-tag 会偶发卡在入场态
+ * （`transform: scaleX(0)` + `opacity: 0`，占位为 0 宽），截图与阅读时表现为整列空白。
  */
 
 /* 设计令牌（原型内联样式大量引用；bms 原型样式用固定色值，未定义变量，这里补齐） */
@@ -263,7 +273,7 @@ body {
 
 /* 提示与说明 */
 .hint {
-  color: #8c959f;
+  color: #57606a;
   font-size: 12px;
   line-height: 1.7;
 }
@@ -351,6 +361,155 @@ body {
 .proto-tabs-line {
   border-bottom: 1px solid #d0d7de;
   margin: 16px 0 12px;
+}
+
+/* ===== Element Plus 原型外壳（03~08 页：Vue 3 + Element Plus 真组件渲染） ===== */
+/* 顶部原型条右侧信息 */
+.proto-bar-right {
+  margin-left: auto;
+  color: #b6bec7;
+}
+/* 原型演示工具条（切换状态用，非产品界面） */
+.proto-demo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 1320px;
+  margin: 12px auto 0;
+  padding: 10px 16px;
+  background: #fff8c5;
+  border: 1px solid #e6d27a;
+  border-left: 4px solid #d4a72c;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.proto-demo .pd-label {
+  font-weight: 600;
+  color: #7d4e00;
+}
+/* 产品页面外壳（模拟宿主内容区） */
+.app-shell {
+  max-width: 1320px;
+  margin: 12px auto 32px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.app-menu {
+  border-bottom: 1px solid #d0d7de;
+}
+.app-body {
+  padding: 16px 20px 24px;
+}
+/* 页头（标题 + 右侧操作） */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.page-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.page-sub {
+  margin: 0;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.page-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* 数字卡 */
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.metric-row .el-card {
+  border-color: #d0d7de;
+  border-radius: 6px;
+}
+.metric-title {
+  color: #57606a;
+  font-size: 12px;
+}
+.metric-value {
+  margin: 6px 0 2px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.metric-value small {
+  font-size: 13px;
+  font-weight: 400;
+  color: #57606a;
+}
+.metric-note {
+  color: #8c959f;
+  font-size: 12px;
+}
+/* 延迟九档分布 */
+.levels {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 8px;
+}
+.level .el-card__body {
+  padding: 10px 4px;
+  text-align: center;
+}
+.level-label {
+  color: #57606a;
+  font-size: 12px;
+}
+.level-count {
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* 口径说明列表 */
+.note-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+/* 分页行（右下对齐，总数由分页组件自带） */
+.pager-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+/* 分区 / 消息头等表格内的紧凑区块标题 */
+.block-title {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+@media (max-width: 1100px) {
+  .metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .levels {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 /* 总览页布局（侧栏 + 正文） */

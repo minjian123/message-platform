@@ -4,85 +4,212 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 死信与重放（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
-    <style>
-      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
-      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
-      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
-      .proto-nav span{opacity:.5}
-      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
-      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-      .proto-states button.is-active{border-color:var(--bms-color-primary);background:var(--bms-color-primary);color:#fff}
-      .proto-page{display:none}.proto-page.is-active{display:block}
-      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
-      .row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap;margin-bottom:12px}
-      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
-      .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#f4f4f5;color:#909399}
-      .later{border:1px dashed var(--bms-color-border);border-radius:6px;padding:12px;margin-top:14px;color:var(--bms-color-text-secondary);font-size:12px}
-    </style>
   </head>
   <body>
-    <header class="proto-header"><span>原型设计 · 死信与重放（页面 06 · 只读入口）</span></header>
-    <main class="proto-main">
-      <h1>死信与重放</h1>
-      <p>msg 消息平台 · 06-1-2 只读入口 · 写操作与处置交互归 06-2 / 06-5 / 06-6</p>
-      <nav class="proto-nav">
-        <a href="03_原型设计_平台概览.html">概览</a><a href="04_原型设计_主题管理.html">主题</a>
-        <a href="05_原型设计_消费组与积压.html">消费组</a><a href="04_原型设计_主题管理.html#detail">分区</a>
-        <a href="06_原型设计_消息查询.html">消息查询</a><a href="08_原型设计_延迟消息.html">延迟</a>
-        <a class="is-active" href="07_原型设计_死信与重放.html">死信与重放</a>
-        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
-      </nav>
-      <div class="proto-states">
-        <button class="is-active" data-page="list">只读列表</button>
-        <button data-page="loading">加载态</button><button data-page="empty">空态</button>
-        <button data-page="error">错误态</button><button data-page="denied">无权限</button>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">死信与重放（页面 06 · 只读入口）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-1-2 只读视图</span>
       </div>
 
-      <section class="proto-page is-active" id="page-list">
-        <div class="proto-frame">
-          <div class="row-actions">
-            <label class="hint">主题 <select><option>全部</option><option>order.created</option></select></label>
-            <label class="hint">状态 <select><option>全部</option><option>待处置</option><option>已解决</option></select></label>
-            <button class="proto-button proto-button--primary">查询</button><button class="proto-button">重置</button>
-          </div>
-          <h2>死信（只读）</h2>
-          <table class="proto-table">
-            <thead><tr><th>log_id</th><th>主题 / 分区</th><th>原 offset</th><th>原因</th><th>重试次数</th><th>状态</th><th>trace_id</th></tr></thead>
-            <tbody>
-              <tr><td>01J8Y9…</td><td>order.created / 1</td><td>18,004</td><td>消费端异常</td><td>5</td><td><span class="state warn">待处置</span></td><td>4bf92f…</td></tr>
-              <tr><td>01J8Y7…</td><td>invoice.issued / 0</td><td>8,912</td><td>反序列化失败</td><td>5</td><td><span class="state warn">待处置</span></td><td>91c0a3…</td></tr>
-            </tbody>
-          </table>
-          <h2 style="margin-top:18px">重放任务（只读）</h2>
-          <table class="proto-table">
-            <thead><tr><th>任务</th><th>目标主题</th><th>条件</th><th>速率上限</th><th>进度</th><th>状态</th></tr></thead>
-            <tbody><tr><td>rp-0007</td><td>order.created</td><td>offset 100~200</td><td>500/s</td><td>62%</td><td><span class="state info">运行中</span></td></tr></tbody>
-          </table>
-          <div class="later">
-            <strong>后续任务占位（本页不提供可交互控件）</strong><br />
-            死信处置（重放 / 忽略 / 归档 + 二次确认）归 06-5；重放任务的创建 / 暂停 / 恢复 / 取消与限速、进度联动归 06-6；写操作归 06-2。<br />
-            本任务只搭导航与只读入口，不重复搭壳；后续任务在骨架上追加页面与交互原型。
-          </div>
-          <p class="hint" style="margin-top:12px">权限：只读列表挂 <code>msg:query</code>；后续写操作挂 <code>msg:manage</code>。无权限时菜单 / 按钮不渲染而非置灰。</p>
-        </div>
-      </section>
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="list">只读列表</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="empty">空态</el-radio-button>
+          <el-radio-button value="error">错误态</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
 
-      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：两张表各自骨架，不互相阻塞。</p></div></section>
-      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：无死信 / 无重放任务时分别显示「暂无记录」，两张表独立判空。</p></div></section>
-      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：单表请求失败只降级该表，不阻断另一张表与宿主布局。</p></div></section>
-      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code>：整页入口与菜单项不渲染。</p></div></section>
-    </main>
+      <div class="app-shell">
+        <el-menu :default-active="activeNav" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl" disabled>主题授权（06-7 预留）</el-menu-item>
+          <el-menu-item index="usage" disabled>租户用量（06-8 预留）</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 只读列表 -->
+          <div v-if="scene === 'list'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">死信与重放</h2>
+                <p class="page-sub">只读入口：两张只读表；写操作与处置交互归 06-2 / 06-5 / 06-6</p>
+              </div>
+            </div>
+
+            <el-form :inline="true" @submit.prevent>
+              <el-form-item label="主题">
+                <el-select v-model="query.topic" style="width: 180px">
+                  <el-option label="全部" value=""></el-option>
+                  <el-option label="order.created" value="order.created"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="状态">
+                <el-select v-model="query.status" style="width: 160px">
+                  <el-option label="全部" value=""></el-option>
+                  <el-option label="待处置" value="pending"></el-option>
+                  <el-option label="已解决" value="resolved"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="applyFilter">查询</el-button>
+                <el-button @click="resetFilter">重置</el-button>
+              </el-form-item>
+            </el-form>
+
+            <div class="block-title" style="margin-top: 4px">死信（只读）</div>
+            <el-table :data="dlq" border stripe style="width: 100%">
+              <el-table-column label="log_id" width="130">
+                <template #default="{ row }"><span class="mono">{{ row.logId }}</span></template>
+              </el-table-column>
+              <el-table-column prop="topicPartition" label="主题 / 分区" min-width="180"></el-table-column>
+              <el-table-column prop="originOffset" label="原 offset" width="120" align="right"></el-table-column>
+              <el-table-column prop="reason" label="原因" min-width="140"></el-table-column>
+              <el-table-column prop="retries" label="重试次数" width="100" align="right"></el-table-column>
+              <el-table-column label="状态" width="110">
+                <template #default="{ row }">
+                  <span class="state warn">{{ row.status }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="trace_id" min-width="130">
+                <template #default="{ row }"><span class="mono">{{ row.traceId }}</span></template>
+              </el-table-column>
+            </el-table>
+
+            <div class="block-title">重放任务（只读）</div>
+            <el-table :data="replays" border stripe style="width: 100%">
+              <el-table-column prop="task" label="任务" width="120"></el-table-column>
+              <el-table-column prop="target" label="目标主题" min-width="160"></el-table-column>
+              <el-table-column prop="condition" label="条件" min-width="150"></el-table-column>
+              <el-table-column prop="rate" label="速率上限" width="110" align="right"></el-table-column>
+              <el-table-column label="进度" width="110" align="right">
+                <template #default="{ row }">{{ row.progress }}%</template>
+              </el-table-column>
+              <el-table-column label="状态" width="110">
+                <template #default="{ row }">
+                  <span class="state info">{{ row.status }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-alert type="info" :closable="false" show-icon title="后续任务占位（本页不提供可交互控件）" style="margin-top: 12px">
+              <template #default>
+                <ul class="note-list">
+                  <li>死信处置（重放 / 忽略 / 归档 + 二次确认）归 06-5</li>
+                  <li>重放任务的创建 / 暂停 / 恢复 / 取消与限速、进度联动归 06-6</li>
+                  <li>写操作归 06-2</li>
+                  <li>本任务只搭导航与只读入口，不重复搭壳；后续任务在骨架上追加页面与交互原型</li>
+                </ul>
+              </template>
+            </el-alert>
+
+            <p class="hint" style="margin-top: 12px">
+              权限：只读列表挂 <code>msg:query</code>；后续写操作挂 <code>msg:manage</code>。无权限时菜单 / 按钮不渲染而非置灰。
+            </p>
+          </div>
+
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <h2 class="page-title">死信与重放</h2>
+            <p class="page-sub">加载态：两张表各自骨架，不互相阻塞</p>
+            <el-skeleton :rows="4" animated></el-skeleton>
+            <el-skeleton :rows="4" animated style="margin-top: 16px"></el-skeleton>
+          </div>
+
+          <!-- 空态 -->
+          <div v-else-if="scene === 'empty'">
+            <h2 class="page-title">死信与重放</h2>
+            <div class="block-title" style="margin-top: 4px">死信（只读）</div>
+            <el-empty description="暂无记录" :image-size="72"></el-empty>
+            <div class="block-title">重放任务（只读）</div>
+            <el-empty description="暂无记录" :image-size="72"></el-empty>
+            <p class="hint">两张表独立判空，不互相影响。</p>
+          </div>
+
+          <!-- 错误态 -->
+          <div v-else-if="scene === 'error'">
+            <el-result icon="error" title="查询失败" sub-title="单表请求失败只降级该表">
+              <template #extra>
+                <p class="hint" style="margin: 0 0 8px">不阻断另一张表与宿主布局；文案按错误码键映射</p>
+                <el-button type="primary" @click="applyFilter">重试</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else>
+            <el-result icon="warning" title="无 msg:query 权限" sub-title="整页入口与菜单项不渲染"></el-result>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      document.querySelectorAll('.proto-states button').forEach((tab) => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
-          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
-          tab.classList.add('is-active')
-          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
-        })
+      const { createApp, ref, reactive } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['list', 'loading', 'empty', 'error', 'denied']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
+          const activeNav = ref('dlq')
+          const query = reactive({ topic: '', status: '' })
+          const dlq = ref([
+            { logId: '01J8Y9…', topicPartition: 'order.created / 1', originOffset: '18,004', reason: '消费端异常', retries: 5, status: '待处置', traceId: '4bf92f…' },
+            { logId: '01J8Y7…', topicPartition: 'invoice.issued / 0', originOffset: '8,912', reason: '反序列化失败', retries: 5, status: '待处置', traceId: '91c0a3…' },
+          ])
+          const replays = ref([
+            { task: 'rp-0007', target: 'order.created', condition: 'offset 100~200', rate: '500/s', progress: 62, status: '运行中' },
+          ])
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          function applyFilter() {
+            ElMessage.success('查询完成（原型演示）')
+          }
+
+          function resetFilter() {
+            query.topic = ''
+            query.status = ''
+          }
+
+          return { scene, activeNav, query, dlq, replays, onNav, applyFilter, resetFilter }
+        },
       })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
     </script>
   </body>
 </html>

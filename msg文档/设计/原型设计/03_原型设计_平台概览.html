@@ -4,96 +4,203 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 平台概览（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
-    <style>
-      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
-      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
-      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
-      .proto-nav span{opacity:.5}
-      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
-      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-      .proto-states button.is-active{border-color:var(--bms-color-primary);background:var(--bms-color-primary);color:#fff}
-      .proto-page{display:none}.proto-page.is-active{display:block}
-      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
-      .proto-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-      .proto-card{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:#fff}
-      .proto-card small{color:var(--bms-color-text-secondary)}
-      .proto-card strong{display:block;font-size:22px;margin-top:8px}
-      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
-      .row-actions{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:12px 0}
-    </style>
   </head>
   <body>
-    <header class="proto-header"><span>原型设计 · 平台概览（页面 02）</span></header>
-    <main class="proto-main">
-      <h1>平台概览</h1>
-      <p>msg 消息平台 · 06-1-2 管理模块只读视图 · 菜单分组「消息平台」</p>
-      <nav class="proto-nav">
-        <a class="is-active" href="03_原型设计_平台概览.html">概览</a>
-        <a href="04_原型设计_主题管理.html">主题</a>
-        <a href="05_原型设计_消费组与积压.html">消费组</a>
-        <a href="04_原型设计_主题管理.html#detail">分区</a>
-        <a href="06_原型设计_消息查询.html">消息查询</a>
-        <a href="08_原型设计_延迟消息.html">延迟</a>
-        <a href="07_原型设计_死信与重放.html">死信与重放</a>
-        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
-      </nav>
-      <div class="proto-states">
-        <button class="is-active" data-page="normal">正常</button>
-        <button data-page="loading">加载态</button>
-        <button data-page="empty">空态 / 冷启动</button>
-        <button data-page="error">错误态</button>
-        <button data-page="denied">无权限</button>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">平台概览（页面 02）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-1-2 只读视图</span>
       </div>
 
-      <section class="proto-page is-active" id="page-normal">
-        <div class="proto-frame">
-          <div class="row-actions">
-            <span class="hint">数据取 <code>GET /api/v1/msg/admin/overview</code>；卡片与页面共用同一取数层，挂载取一次 + 30s 轮询</span>
-            <button class="proto-button" id="grafana">查看 Grafana</button>
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="normal">正常</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="cold">冷启动 / 空态</el-radio-button>
+          <el-radio-button value="error">错误态</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
+
+      <div class="app-shell">
+        <el-menu :default-active="activeNav" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl" disabled>主题授权（06-7 预留）</el-menu-item>
+          <el-menu-item index="usage" disabled>租户用量（06-8 预留）</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 正常 -->
+          <div v-if="scene === 'normal'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">平台概览</h2>
+                <p class="page-sub">
+                  取数 <code>GET /api/v1/msg/admin/overview</code>；页面与工作台卡片共用同一取数层，挂载取一次 + 30s 轮询
+                </p>
+              </div>
+              <div class="page-actions">
+                <el-button @click="refresh">刷新</el-button>
+                <el-button v-if="grafanaReady" type="primary" @click="openGrafana">查看 Grafana</el-button>
+              </div>
+            </div>
+
+            <div class="metric-row">
+              <el-card v-for="item in metrics" :key="item.key" shadow="never">
+                <div class="metric-title">{{ item.title }}</div>
+                <div class="metric-value">{{ item.value }} <small>{{ item.unit }}</small></div>
+                <div class="metric-note">{{ item.note }}</div>
+              </el-card>
+            </div>
+
+            <div class="block-title">工作台概览卡片（缩略）</div>
+            <el-descriptions :column="4" border>
+              <el-descriptions-item v-for="item in metrics" :key="item.key" :label="item.title">
+                {{ item.value }} {{ item.unit }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <p class="hint" style="margin-top: 8px">
+              同样四值，尺寸与刷新策略按 bms 工作台卡片约定；卡片与页面不各建一套取数层。
+            </p>
+
+            <el-alert type="info" :closable="false" show-icon style="margin-top: 12px">
+              <template #title>趋势图与排障口径</template>
+              <template #default>
+                <ul class="note-list">
+                  <li>趋势图不自绘，「查看 Grafana」跳转 06-3-2 交付的看板（UID <code>msg-overview</code>）</li>
+                  <li>Grafana 地址集中放模块常量，缺配置时按钮不渲染（不是置灰）</li>
+                  <li>排障定位：所有取数响应带 <code>trace_id</code>，列表页可复制</li>
+                </ul>
+              </template>
+            </el-alert>
           </div>
-          <div class="proto-cards">
-            <div class="proto-card"><small>入口吞吐</small><strong id="metric-throughput">1,280 /s</strong><small>采样周期均值</small></div>
-            <div class="proto-card"><small>当前积压</small><strong id="metric-lag">3,412</strong><small>当前租户汇总</small></div>
-            <div class="proto-card"><small>死信数</small><strong id="metric-dlq">17</strong><small>待处置</small></div>
-            <div class="proto-card"><small>磁盘使用率</small><strong id="metric-disk">63%</strong><small>多卷取最大值</small></div>
+
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">平台概览</h2>
+                <p class="page-sub">加载中：四张数字卡显示骨架块，不显示旧值；轮询刷新不清空已有数值</p>
+              </div>
+            </div>
+            <div class="metric-row">
+              <el-card v-for="n in 4" :key="n" shadow="never">
+                <el-skeleton :rows="2" animated />
+              </el-card>
+            </div>
           </div>
-          <p class="hint" style="margin-top:14px">工作台概览卡片缩略：同样四值，尺寸与刷新策略按 bms 工作台卡片约定；卡片与页面不各建一套取数层。</p>
-          <p class="hint">趋势图不自绘，「查看 Grafana」跳转 06-3-2 交付的看板（UID <code>msg-overview</code>）；地址集中放模块常量，缺配置时按钮不渲染。</p>
-          <p class="hint">排障定位：所有取数响应带 <code>trace_id</code>，列表页可复制。</p>
+
+          <!-- 冷启动 / 空态 -->
+          <div v-else-if="scene === 'cold'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">平台概览</h2>
+                <p class="page-sub">冷启动占位：<code>snapshot_available=false</code> 时四值返回 0</p>
+              </div>
+            </div>
+            <el-alert type="info" :closable="false" show-icon title="快照尚未生成">
+              显示模块 i18n 文案「指标采集中」（不硬编码中文），不伪造数值、不报错；下一次轮询命中即转为正常值
+            </el-alert>
+            <div class="metric-row" style="margin-top: 12px">
+              <el-card v-for="item in metrics" :key="item.key" shadow="never">
+                <div class="metric-title">{{ item.title }}</div>
+                <div class="metric-value"><span class="state info">指标采集中</span></div>
+                <div class="metric-note">{{ item.note }}</div>
+              </el-card>
+            </div>
+          </div>
+
+          <!-- 错误态 -->
+          <div v-else-if="scene === 'error'">
+            <el-result icon="error" title="查询失败" sub-title="350001 · 主题不存在">
+              <template #extra>
+                <p class="hint" style="margin: 0 0 8px">
+                  文案按错误码键映射（<code>error.350001</code>），不硬编码中文；失败只降级本页内容，不阻断宿主布局
+                </p>
+                <el-button type="primary" @click="refresh">重新加载</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else>
+            <el-result icon="warning" title="无 msg:query 权限" sub-title="菜单项与「查看 Grafana」按钮均不渲染（不是置灰）">
+              <template #extra>
+                <p class="hint" style="margin: 0">宿主菜单分组内不出现消息平台入口</p>
+              </template>
+            </el-result>
+          </div>
+
+          <p class="hint" style="margin-top: 16px">
+            口径：只读视图，无写操作；不做趋势图自绘；进度类字段按计划表回写，原型仅为界面验收基准。
+          </p>
         </div>
-      </section>
+      </div>
+    </div>
 
-      <section class="proto-page" id="page-loading">
-        <div class="proto-frame"><p class="hint">加载中：四张数字卡显示骨架块，不显示旧值；轮询刷新不清空已有数值。</p><div class="proto-cards"><div class="proto-card"><small>入口吞吐</small><strong>—</strong></div><div class="proto-card"><small>当前积压</small><strong>—</strong></div><div class="proto-card"><small>死信数</small><strong>—</strong></div><div class="proto-card"><small>磁盘使用率</small><strong>—</strong></div></div></div>
-      </section>
-
-      <section class="proto-page" id="page-empty">
-        <div class="proto-frame"><p class="hint">冷启动占位：<code>snapshot_available=false</code> 时四值返回 0，显示「指标采集中」（模块 i18n，不硬编码中文），不伪造数值、不报错。</p><div class="proto-cards"><div class="proto-card"><small>入口吞吐</small><strong>指标采集中</strong></div><div class="proto-card"><small>当前积压</small><strong>指标采集中</strong></div><div class="proto-card"><small>死信数</small><strong>指标采集中</strong></div><div class="proto-card"><small>磁盘使用率</small><strong>指标采集中</strong></div></div></div>
-      </section>
-
-      <section class="proto-page" id="page-error">
-        <div class="proto-frame"><p class="hint">错误态：请求失败按错误码映射文案（<code>error.350001</code> 等），提供手动刷新；不阻断宿主布局。</p><p><span class="state hard">查询失败</span> <span class="hint">响应码 350001 · 主题不存在</span></p><button class="proto-button">重新加载</button></div>
-      </section>
-
-      <section class="proto-page" id="page-denied">
-        <div class="proto-frame"><p class="hint">无 <code>msg:query</code> 权限：菜单项与「查看 Grafana」按钮均不渲染（不是置灰），宿主菜单分组内不出现消息平台入口。</p></div>
-      </section>
-      <p class="hint" style="margin-top:16px">口径：只读视图，无写操作；不做趋势图自绘；进度类字段按计划表回写，原型仅为界面验收基准。</p>
-    </main>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      document.querySelectorAll('.proto-states button').forEach((tab) => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
-          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
-          tab.classList.add('is-active')
-          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
-        })
+      const { createApp, ref, computed } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['normal', 'loading', 'cold', 'error', 'denied']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'normal')
+          const activeNav = ref('overview')
+          /** Grafana 地址来自模块常量：缺配置时该按钮不渲染。 */
+          const grafanaReady = ref(true)
+          const metrics = ref([
+            { key: 'throughput', title: '入口吞吐', value: '1,280', unit: '/s', note: '采样周期均值' },
+            { key: 'lag', title: '当前积压', value: '3,412', unit: '条', note: '当前租户汇总' },
+            { key: 'dlq', title: '死信数', value: '17', unit: '条', note: '待处置' },
+            { key: 'disk', title: '磁盘使用率', value: '63', unit: '%', note: '多卷取最大值' },
+          ])
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          function refresh() {
+            ElMessage.success('已刷新（原型演示）')
+          }
+
+          function openGrafana() {
+            ElMessage.info('跳转 Grafana 看板 msg-overview（地址由模块常量提供，缺配置时按钮不渲染）')
+          }
+
+          return { scene, activeNav, grafanaReady, metrics, onNav, refresh, openGrafana }
+        },
       })
-      document.getElementById('grafana').addEventListener('click', () => {
-        window.alert('跳转 Grafana 看板 msg-overview（地址由模块常量提供，缺配置时按钮不渲染）')
-      })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
     </script>
   </body>
 </html>
