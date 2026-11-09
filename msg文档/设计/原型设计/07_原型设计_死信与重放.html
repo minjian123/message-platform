@@ -7,21 +7,53 @@
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
+    <style>
+      /* 原型静态评审：抽屉 / 弹窗不做入场动效，避免截图卡在中途位置 */
+      .el-drawer,
+      .el-overlay-dialog,
+      .el-overlay {
+        transition: none !important;
+        animation: none !important;
+      }
+      .highlight-row td {
+        background: #f0f9eb !important;
+      }
+      .group-chip {
+        display: inline-block;
+        margin: 2px 6px 2px 0;
+        padding: 1px 8px;
+        border-radius: 10px;
+        background: #ddf4ff;
+        color: #0969da;
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .range-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+    </style>
   </head>
   <body>
     <div id="app">
       <div class="proto-bar">
         <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
-        <span class="pb-name">死信与重放（页面 06 · 06-5 处置）</span>
-        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-5-2 查询处置接口与页面</span>
+        <span class="pb-name">死信与重放（页面 06 · 06-5 处置 · 06-6 重放任务）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-6-2 重放任务页面与联动</span>
       </div>
 
       <div class="proto-demo">
         <span class="pd-label">原型演示</span>
         <el-radio-group v-model="scene" size="small">
-          <el-radio-button value="list">列表</el-radio-button>
-          <el-radio-button value="detail">详情抽屉</el-radio-button>
+          <el-radio-button value="list">死信列表</el-radio-button>
+          <el-radio-button value="detail">死信详情</el-radio-button>
           <el-radio-button value="dispose">处置确认</el-radio-button>
+          <el-radio-button value="replay-list">重放任务列表</el-radio-button>
+          <el-radio-button value="replay-create">新建重放任务</el-radio-button>
+          <el-radio-button value="replay-confirm">创建确认</el-radio-button>
+          <el-radio-button value="replay-detail">任务详情</el-radio-button>
+          <el-radio-button value="replay-pause">暂停确认</el-radio-button>
           <el-radio-button value="loading">加载态</el-radio-button>
           <el-radio-button value="empty">空态</el-radio-button>
           <el-radio-button value="error">错误态</el-radio-button>
@@ -44,163 +76,240 @@
         </el-menu>
 
         <div class="app-body">
-          <!-- 列表 / 详情 / 处置共用同一页 -->
-          <div v-if="scene === 'list' || scene === 'detail' || scene === 'dispose'">
+          <!-- 无权限：整页入口不渲染 -->
+          <div v-if="scene === 'denied'">
+            <el-result icon="warning" title="无 msg:query 权限" sub-title="整页入口与菜单项不渲染"></el-result>
+          </div>
+
+          <!-- 列表 / 详情 / 处置 / 重放任务共用同一页，按页签分「死信」「重放任务」 -->
+          <template v-else>
             <div class="page-head">
               <div>
                 <h2 class="page-title">死信与重放</h2>
                 <p class="page-sub">
-                  死信可按状态 / 原因 / 主题 / 分区 / 时间 / 关键字筛选；重放、忽略、归档均挂 <code>msg:manage</code> 并二次确认。
+                  死信可按状态 / 原因 / 主题 / 分区 / 时间 / 关键字筛选；重放按条件建任务并限速。重放、忽略、归档、暂停 / 恢复 / 取消均挂
+                  <code>msg:manage</code> 并二次确认。
                 </p>
               </div>
             </div>
 
-            <el-form :inline="true" @submit.prevent>
-              <el-form-item label="主题">
-                <el-select v-model="query.topic" style="width: 170px">
-                  <el-option label="全部" value=""></el-option>
-                  <el-option label="order.created" value="order.created"></el-option>
-                  <el-option label="invoice.issued" value="invoice.issued"></el-option>
-                </el-select>
-              </el-form-item>
-              <el-form-item label="状态">
-                <el-select v-model="query.status" style="width: 150px">
-                  <el-option label="全部（不含归档）" value=""></el-option>
-                  <el-option label="待处置" value="pending"></el-option>
-                  <el-option label="重放中" value="replaying"></el-option>
-                  <el-option label="已解决" value="resolved"></el-option>
-                  <el-option label="已忽略" value="ignored"></el-option>
-                  <el-option label="已归档" value="archived"></el-option>
-                </el-select>
-              </el-form-item>
-              <el-form-item label="原因">
-                <el-select v-model="query.reason" style="width: 150px">
-                  <el-option label="全部" value=""></el-option>
-                  <el-option label="重投超限" value="delivery_exhausted"></el-option>
-                  <el-option label="反序列化失败" value="schema_invalid"></el-option>
-                  <el-option label="消费端异常" value="processing_failed"></el-option>
-                </el-select>
-              </el-form-item>
-              <el-form-item label="关键字">
-                <el-input v-model="query.keyword" placeholder="log_id / message_id" style="width: 190px" clearable />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="applyFilter">查询</el-button>
-                <el-button @click="resetFilter">重置</el-button>
-              </el-form-item>
-            </el-form>
-
-            <div class="block-title" style="margin-top: 4px">死信</div>
-            <el-table :data="dlq" border stripe style="width: 100%" empty-text="暂无死信">
-              <el-table-column label="log_id" width="132">
-                <template #default="{ row }">
-                  <el-link type="primary" class="mono" @click="openDetail(row)">{{ row.logId }}</el-link>
-                </template>
-              </el-table-column>
-              <el-table-column prop="topicPartition" label="主题 / 分区" min-width="180"></el-table-column>
-              <el-table-column prop="originOffset" label="原 offset" width="112" align="right"></el-table-column>
-              <el-table-column label="原因" min-width="130">
-                <template #default="{ row }">{{ reasonText(row.reason) }}</template>
-              </el-table-column>
-              <el-table-column prop="retries" label="重试次数" width="96" align="right"></el-table-column>
-              <el-table-column label="状态" width="104">
-                <template #default="{ row }">
-                  <span :class="['state', statusClass(row.status)]">{{ statusText(row.status) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="失败时间" width="168">
-                <template #default="{ row }"><span class="mono">{{ row.failedAt }}</span></template>
-              </el-table-column>
-              <el-table-column label="trace_id" min-width="120">
-                <template #default="{ row }"><span class="mono">{{ row.traceId }}</span></template>
-              </el-table-column>
-              <el-table-column label="操作" width="230" fixed="right">
-                <template #default="{ row }">
-                  <template v-if="canManage">
-                    <el-button v-if="row.status === 'pending'" link type="primary" @click="openDispose(row, 'replay')">重放</el-button>
-                    <el-button v-if="row.status === 'pending'" link type="warning" @click="openDispose(row, 'ignore')">忽略</el-button>
-                    <el-button
-                      v-if="row.status === 'pending' || row.status === 'ignored' || row.status === 'resolved'"
-                      link
-                      type="info"
-                      @click="openDispose(row, 'archive')"
-                    >
-                      归档
-                    </el-button>
-                    <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+            <el-tabs v-model="tab">
+              <!-- ============ 页签一：死信 ============ -->
+              <el-tab-pane label="死信" name="dlq">
+                <div v-if="state === 'loading'">
+                  <el-skeleton :rows="4" animated></el-skeleton>
+                </div>
+                <div v-else-if="state === 'empty'">
+                  <el-empty description="暂无死信" :image-size="72"></el-empty>
+                </div>
+                <el-result v-else-if="state === 'error'" icon="error" title="查询失败" sub-title="单表请求失败只降级该表">
+                  <template #extra>
+                    <p class="hint" style="margin: 0 0 8px">不阻断另一页签与宿主布局；文案按错误码键映射</p>
+                    <el-button type="primary" @click="applyFilter">重试</el-button>
                   </template>
-                  <span v-else class="hint">无处置权限</span>
+                </el-result>
+                <template v-else>
+                  <el-form :inline="true" @submit.prevent>
+                    <el-form-item label="主题">
+                      <el-select v-model="query.topic" style="width: 170px">
+                        <el-option label="全部" value=""></el-option>
+                        <el-option label="order.created" value="order.created"></el-option>
+                        <el-option label="invoice.issued" value="invoice.issued"></el-option>
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="状态">
+                      <el-select v-model="query.status" style="width: 150px">
+                        <el-option label="全部（不含归档）" value=""></el-option>
+                        <el-option label="待处置" value="pending"></el-option>
+                        <el-option label="重放中" value="replaying"></el-option>
+                        <el-option label="已解决" value="resolved"></el-option>
+                        <el-option label="已忽略" value="ignored"></el-option>
+                        <el-option label="已归档" value="archived"></el-option>
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="原因">
+                      <el-select v-model="query.reason" style="width: 150px">
+                        <el-option label="全部" value=""></el-option>
+                        <el-option label="重投超限" value="delivery_exhausted"></el-option>
+                        <el-option label="反序列化失败" value="schema_invalid"></el-option>
+                        <el-option label="消费端异常" value="processing_failed"></el-option>
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="关键字">
+                      <el-input v-model="query.keyword" placeholder="log_id / message_id" style="width: 190px" clearable></el-input>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button type="primary" @click="applyFilter">查询</el-button>
+                      <el-button @click="resetFilter">重置</el-button>
+                    </el-form-item>
+                  </el-form>
+
+                  <div class="block-title" style="margin-top: 4px">死信</div>
+                  <el-table :data="dlq" border stripe style="width: 100%" empty-text="暂无死信">
+                    <el-table-column label="log_id" width="132">
+                      <template #default="{ row }">
+                        <el-link type="primary" class="mono" @click="openDetail(row)">{{ row.logId }}</el-link>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="topicPartition" label="主题 / 分区" min-width="180"></el-table-column>
+                    <el-table-column prop="originOffset" label="原 offset" width="112" align="right"></el-table-column>
+                    <el-table-column label="原因" min-width="130">
+                      <template #default="{ row }">{{ reasonText(row.reason) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="retries" label="重试次数" width="96" align="right"></el-table-column>
+                    <el-table-column label="状态" width="104">
+                      <template #default="{ row }">
+                        <span :class="['state', statusClass(row.status)]">{{ statusText(row.status) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="失败时间" width="168">
+                      <template #default="{ row }"><span class="mono">{{ row.failedAt }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="trace_id" min-width="120">
+                      <template #default="{ row }"><span class="mono">{{ row.traceId }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="230" fixed="right">
+                      <template #default="{ row }">
+                        <template v-if="canManage">
+                          <el-button v-if="row.status === 'pending'" link type="primary" @click="openDispose(row, 'replay')">重放</el-button>
+                          <el-button v-if="row.status === 'pending'" link type="warning" @click="openDispose(row, 'ignore')">忽略</el-button>
+                          <el-button
+                            v-if="row.status === 'pending' || row.status === 'ignored' || row.status === 'resolved'"
+                            link
+                            type="info"
+                            @click="openDispose(row, 'archive')"
+                          >
+                            归档
+                          </el-button>
+                          <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+                        </template>
+                        <span v-else class="hint">无处置权限</span>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+
+                  <el-alert type="info" :closable="false" show-icon title="边界说明" style="margin-top: 12px">
+                    <template #default>
+                      <ul class="note-list">
+                        <li>重放复用 01-6 任务化重放：按该死信所在分区 / offset 建单条任务，默认 100 条/秒，可调 1~1000。</li>
+                        <li>忽略必须填写原因；归档只改状态并从活跃列表隐藏，原始消息仍在日志保留期内可查。</li>
+                        <li>死信重放的进度与影响见「重放任务」页签；创建成功后自动切到该页签并高亮新任务。</li>
+                      </ul>
+                    </template>
+                  </el-alert>
+
+                  <p class="hint" style="margin-top: 12px">
+                    权限：查询挂 <code>msg:query</code>；重放 / 忽略 / 归档挂 <code>msg:manage</code>。无权限时操作列不渲染而非置灰。
+                  </p>
                 </template>
-              </el-table-column>
-            </el-table>
+              </el-tab-pane>
 
-            <div class="block-title">重放任务</div>
-            <el-table :data="replays" border stripe style="width: 100%" empty-text="暂无重放任务">
-              <el-table-column prop="task" label="任务" width="120"></el-table-column>
-              <el-table-column prop="target" label="目标主题" min-width="160"></el-table-column>
-              <el-table-column prop="condition" label="条件" min-width="150"></el-table-column>
-              <el-table-column prop="rate" label="速率上限" width="110" align="right"></el-table-column>
-              <el-table-column label="进度" width="110" align="right">
-                <template #default="{ row }">{{ row.progress }}%</template>
-              </el-table-column>
-              <el-table-column label="状态" width="110">
-                <template #default="{ row }">
-                  <span class="state info">{{ row.status }}</span>
+              <!-- ============ 页签二：重放任务 ============ -->
+              <el-tab-pane label="重放任务" name="replay">
+                <div v-if="state === 'loading'">
+                  <el-skeleton :rows="4" animated></el-skeleton>
+                </div>
+                <div v-else-if="state === 'empty'">
+                  <el-empty description="暂无重放任务" :image-size="72"></el-empty>
+                </div>
+                <el-result v-else-if="state === 'error'" icon="error" title="查询失败" sub-title="单表请求失败只降级该表">
+                  <template #extra>
+                    <el-button type="primary" @click="applyReplayFilter">重试</el-button>
+                  </template>
+                </el-result>
+                <template v-else>
+                  <el-form :inline="true" @submit.prevent>
+                    <el-form-item label="状态">
+                      <el-select v-model="replayQuery.status" placeholder="全部状态" style="width: 140px">
+                        <el-option label="全部" value=""></el-option>
+                        <el-option label="待启动" value="pending"></el-option>
+                        <el-option label="运行中" value="running"></el-option>
+                        <el-option label="已暂停" value="paused"></el-option>
+                        <el-option label="已完成" value="completed"></el-option>
+                        <el-option label="已失败" value="failed"></el-option>
+                        <el-option label="已取消" value="cancelled"></el-option>
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="命名空间">
+                      <el-input v-model="replayQuery.namespace" placeholder="msg" style="width: 120px" clearable></el-input>
+                    </el-form-item>
+                    <el-form-item label="主题">
+                      <el-input v-model="replayQuery.topic" placeholder="order.created" style="width: 170px" clearable></el-input>
+                    </el-form-item>
+                  </el-form>
+                  <el-form :inline="true" @submit.prevent>
+                    <el-form-item label="创建时间">
+                      <el-date-picker v-model="replayQuery.from" type="datetime" placeholder="起" style="width: 170px"></el-date-picker>
+                      <span class="hint" style="margin: 0 6px">~</span>
+                      <el-date-picker v-model="replayQuery.to" type="datetime" placeholder="止" style="width: 170px"></el-date-picker>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button type="primary" @click="applyReplayFilter">查询</el-button>
+                      <el-button @click="resetReplayFilter">重置</el-button>
+                      <el-button v-if="canManage" type="success" plain @click="openCreate">新建重放任务</el-button>
+                    </el-form-item>
+                  </el-form>
+
+                  <el-alert
+                    v-if="highlightTask !== ''"
+                    type="success"
+                    :closable="false"
+                    show-icon
+                    :title="`已创建任务 ${highlightTask}，进度见下表（新任务行高亮）`"
+                    style="margin-bottom: 8px"
+                  ></el-alert>
+
+                  <el-table :data="replays" border stripe style="width: 100%" empty-text="暂无重放任务" :row-class-name="rowClass">
+                    <el-table-column label="任务" width="150">
+                      <template #default="{ row }">
+                        <el-link type="primary" class="mono" @click="openReplayDetail(row)">{{ row.taskId }}</el-link>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="目标主题" min-width="200">
+                      <template #default="{ row }">{{ row.namespace }} / {{ row.topic }}</template>
+                    </el-table-column>
+                    <el-table-column prop="condition" label="条件" min-width="230"></el-table-column>
+                    <el-table-column label="速率" width="110" align="right">
+                      <template #default="{ row }">{{ row.rate }} 条/秒</template>
+                    </el-table-column>
+                    <el-table-column label="进度" width="130" align="right">
+                      <template #default="{ row }">{{ row.replayed }} / {{ row.total }}</template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="110">
+                      <template #default="{ row }">
+                        <span :class="['state', replayStatusClass(row.status)]">{{ replayStatusText(row.status) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="创建时间" width="168">
+                      <template #default="{ row }"><span class="mono">{{ row.createdAt }}</span></template>
+                    </el-table-column>
+                  </el-table>
+
+                  <el-pagination
+                    style="margin-top: 8px"
+                    layout="total, prev, pager, next"
+                    :total="replays.length"
+                    :page-size="20"
+                    :current-page="1"
+                  ></el-pagination>
+
+                  <el-alert type="info" :closable="false" show-icon title="边界说明" style="margin-top: 12px">
+                    <template #default>
+                      <ul class="note-list">
+                        <li>范围摘要里的「预计总量」为按条件估算，实际总量以后端创建时精确计数为准。</li>
+                        <li>暂停在批边界生效；取消不回滚已写入记录，消费端仍按 <code>message_id</code> 幂等。</li>
+                        <li>终态任务只读：不展示暂停 / 恢复 / 取消；影响表为终态快照（采集时刻固定）。</li>
+                      </ul>
+                    </template>
+                  </el-alert>
                 </template>
-              </el-table-column>
-            </el-table>
-
-            <el-alert type="info" :closable="false" show-icon title="边界说明" style="margin-top: 12px">
-              <template #default>
-                <ul class="note-list">
-                  <li>重放复用 01-6 任务化重放：按该死信所在分区 / offset 建单条任务，默认 100 条/秒，可调 1~1000。</li>
-                  <li>忽略必须填写原因；归档只改状态并从活跃列表隐藏，原始消息仍在日志保留期内可查。</li>
-                  <li>重放任务的创建 / 暂停 / 恢复 / 取消与进度联动归 06-6；写操作归 06-2。</li>
-                </ul>
-              </template>
-            </el-alert>
-
-            <p class="hint" style="margin-top: 12px">
-              权限：查询挂 <code>msg:query</code>；重放 / 忽略 / 归档挂 <code>msg:manage</code>。无权限时操作列不渲染而非置灰。
-            </p>
-          </div>
-
-          <!-- 加载态 -->
-          <div v-else-if="scene === 'loading'">
-            <h2 class="page-title">死信与重放</h2>
-            <p class="page-sub">加载态：两张表各自骨架，不互相阻塞</p>
-            <el-skeleton :rows="4" animated></el-skeleton>
-            <el-skeleton :rows="4" animated style="margin-top: 16px"></el-skeleton>
-          </div>
-
-          <!-- 空态 -->
-          <div v-else-if="scene === 'empty'">
-            <h2 class="page-title">死信与重放</h2>
-            <div class="block-title" style="margin-top: 4px">死信</div>
-            <el-empty description="暂无死信" :image-size="72"></el-empty>
-            <div class="block-title">重放任务</div>
-            <el-empty description="暂无重放任务" :image-size="72"></el-empty>
-            <p class="hint">两张表独立判空，不互相影响。</p>
-          </div>
-
-          <!-- 错误态 -->
-          <div v-else-if="scene === 'error'">
-            <el-result icon="error" title="查询失败" sub-title="单表请求失败只降级该表">
-              <template #extra>
-                <p class="hint" style="margin: 0 0 8px">不阻断另一张表与宿主布局；文案按错误码键映射</p>
-                <el-button type="primary" @click="applyFilter">重试</el-button>
-              </template>
-            </el-result>
-          </div>
-
-          <!-- 无权限 -->
-          <div v-else>
-            <el-result icon="warning" title="无 msg:query 权限" sub-title="整页入口与菜单项不渲染"></el-result>
-          </div>
+              </el-tab-pane>
+            </el-tabs>
+          </template>
         </div>
       </div>
 
-      <!-- 详情抽屉 -->
+      <!-- 死信详情抽屉 -->
       <el-drawer v-model="detail.visible" title="死信详情" size="480px" data-test="dlq-detail-drawer">
         <el-descriptions v-if="detail.row" :column="1" border size="small">
           <el-descriptions-item label="死信 ID">{{ detail.row.logId }}</el-descriptions-item>
@@ -211,10 +320,24 @@
           <el-descriptions-item label="重试次数">{{ detail.row.retries }}</el-descriptions-item>
           <el-descriptions-item label="失败时间">{{ detail.row.failedAt }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusText(detail.row.status) }}</el-descriptions-item>
-          <el-descriptions-item label="重放任务">{{ detail.row.replayTaskId || '—' }}</el-descriptions-item>
           <el-descriptions-item label="处置原因">{{ detail.row.dispositionReason || '—' }}</el-descriptions-item>
           <el-descriptions-item label="处置时间">{{ detail.row.disposedAt || '—' }}</el-descriptions-item>
         </el-descriptions>
+
+        <div class="block-title" style="margin-top: 16px">关联重放任务</div>
+        <div v-if="detail.row && detail.row.replayTaskId">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="任务 ID">{{ detail.row.replayTaskId }}</el-descriptions-item>
+            <el-descriptions-item label="任务状态">运行中</el-descriptions-item>
+            <el-descriptions-item label="进度">310 / 500</el-descriptions-item>
+          </el-descriptions>
+          <p class="hint" style="margin: 6px 0 0">
+            终态后死信状态由查询惰性收口（完成 → 已解决，失败 / 取消 → 待处置）；进度以「重放任务」页签的任务详情为准。
+          </p>
+          <el-button link type="primary" style="padding-left: 0" @click="gotoReplayTask">查看任务详情</el-button>
+        </div>
+        <p v-else class="hint">未关联重放任务</p>
+
         <div class="block-title" style="margin-top: 16px">失败上下文</div>
         <pre class="code-block">{{ detail.row ? detail.row.detail : '' }}</pre>
         <template #footer>
@@ -222,20 +345,20 @@
         </template>
       </el-drawer>
 
-      <!-- 处置确认 -->
+      <!-- 死信处置确认 -->
       <el-dialog v-model="dialog.visible" :title="dialogTitle()" width="460px" data-test="dlq-dispose-dialog">
         <p v-if="dialog.row" class="hint" style="margin-top: 0">
           影响范围：{{ dialog.row.topicPartition }} · offset {{ dialog.row.originOffset }} · log_id {{ dialog.row.logId }}
         </p>
         <el-form v-if="dialog.action === 'replay'" label-width="96px">
           <el-form-item label="重放速率">
-            <el-input-number v-model="dialog.rate" :min="1" :max="1000" :step="100" />
+            <el-input-number v-model="dialog.rate" :min="1" :max="1000" :step="100"></el-input-number>
             <span class="hint" style="margin-left: 8px">条/秒（默认 100）</span>
           </el-form-item>
         </el-form>
         <el-form v-if="dialog.action === 'ignore'" label-width="96px">
           <el-form-item label="忽略原因" required>
-            <el-input v-model="dialog.reason" type="textarea" :rows="3" maxlength="256" show-word-limit placeholder="必填，1~256 字" />
+            <el-input v-model="dialog.reason" type="textarea" :rows="3" maxlength="256" show-word-limit placeholder="必填，1~256 字"></el-input>
           </el-form-item>
         </el-form>
         <p v-if="dialog.action === 'archive'" class="hint">
@@ -247,25 +370,217 @@
           <el-button type="primary" @click="confirmDispose">确认{{ actionText(dialog.action) }}</el-button>
         </template>
       </el-dialog>
+
+      <!-- 新建重放任务：第一步填条件 -->
+      <el-dialog v-model="createDialog.visible" title="新建重放任务" width="580px" data-test="replay-create-dialog">
+        <el-form label-width="96px">
+          <el-form-item label="命名空间" required>
+            <el-input v-model="createDialog.form.namespace" placeholder="msg" style="width: 220px"></el-input>
+          </el-form-item>
+          <el-form-item label="主题" required>
+            <el-input v-model="createDialog.form.topic" placeholder="order.created" style="width: 260px"></el-input>
+          </el-form-item>
+          <el-form-item label="offset 区间">
+            <div class="range-row">
+              <el-input-number v-model="createDialog.form.offsetFrom" :min="0" :controls="false" placeholder="起（含）" style="width: 140px"></el-input-number>
+              <span class="hint">~</span>
+              <el-input-number v-model="createDialog.form.offsetTo" :min="0" :controls="false" placeholder="止（不含）" style="width: 140px"></el-input-number>
+            </div>
+          </el-form-item>
+          <el-form-item label="时间区间">
+            <div class="range-row">
+              <el-date-picker v-model="createDialog.form.timeFrom" type="datetime" placeholder="起（含，UTC）" style="width: 180px"></el-date-picker>
+              <span class="hint">~</span>
+              <el-date-picker v-model="createDialog.form.timeTo" type="datetime" placeholder="止（不含，UTC）" style="width: 180px"></el-date-picker>
+            </div>
+          </el-form-item>
+          <el-form-item label="分区键">
+            <el-input v-model="createDialog.form.key" placeholder="精确匹配，留空不过滤" style="width: 260px" clearable></el-input>
+          </el-form-item>
+          <el-form-item label="分区">
+            <el-input v-model="createDialog.form.partitions" placeholder="逗号分隔，如 0,1,2；留空 = 全部分区" style="width: 300px" clearable></el-input>
+          </el-form-item>
+          <el-form-item label="速率上限">
+            <el-input-number v-model="createDialog.form.rate" :min="1" :max="1000" :step="100"></el-input-number>
+            <span class="hint" style="margin-left: 8px">1~1000 条/秒</span>
+          </el-form-item>
+        </el-form>
+        <el-alert type="info" :closable="false" show-icon title="范围摘要">
+          <template #default>
+            <p style="margin: 0">条件：{{ conditionText(createDialog.form) }}</p>
+            <p style="margin: 4px 0 0">预计总量：12,480 条（按当前条件估算，创建时以后端精确计数为准）</p>
+          </template>
+        </el-alert>
+        <p v-if="createDialog.error" class="state danger">{{ createDialog.error }}</p>
+        <template #footer>
+          <el-button @click="createDialog.visible = false">取消</el-button>
+          <el-button type="primary" @click="askCreateConfirm">下一步：确认范围</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 新建重放任务：第二步二次确认（范围 / 速率 / 目标消费组） -->
+      <el-dialog v-model="confirmDialog.visible" title="确认创建重放任务" width="560px" data-test="replay-confirm-dialog">
+        <el-alert
+          type="error"
+          :closable="false"
+          show-icon
+          title="重放会向目标分区追加写入新记录（分配新 log_id），消费端需按 message_id 幂等"
+        ></el-alert>
+        <el-table :data="confirmRows" size="small" border style="margin-top: 8px">
+          <el-table-column prop="label" label="影响项" min-width="140"></el-table-column>
+          <el-table-column prop="value" label="值" min-width="240"></el-table-column>
+        </el-table>
+        <div class="block-title" style="margin-top: 12px">目标消费组（以创建时解析为准）</div>
+        <div v-if="targetGroups.length > 0">
+          <span v-for="group in targetGroups" :key="group" class="group-chip">{{ group }}</span>
+          <p class="hint" style="margin: 6px 0 0">共 {{ targetGroups.length }} 个组将受重放写入影响，积压变化见任务详情。</p>
+        </div>
+        <p v-else class="hint">该主题当前无订阅组，重放不影响任何消费组积压。</p>
+        <p v-if="confirmDialog.error" class="state danger">{{ confirmDialog.error }}</p>
+        <template #footer>
+          <el-button @click="confirmDialog.visible = false">返回修改</el-button>
+          <el-button type="primary" @click="submitCreate">确认创建</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 重放任务详情抽屉 -->
+      <el-drawer v-model="replayDetail.visible" title="重放任务详情" size="580px" data-test="replay-detail-drawer">
+        <template v-if="replayDetail.row">
+          <el-progress :percentage="progressOf(replayDetail.row)" :status="progressStatus(replayDetail.row)" :stroke-width="14"></el-progress>
+          <p class="hint" style="margin: 6px 0 12px">
+            已重放 {{ replayDetail.row.replayed }} / {{ replayDetail.row.total }} 条（{{ progressOf(replayDetail.row) }}%）
+          </p>
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="任务 ID">{{ replayDetail.row.taskId }}</el-descriptions-item>
+            <el-descriptions-item label="目标主题">{{ replayDetail.row.namespace }} / {{ replayDetail.row.topic }}</el-descriptions-item>
+            <el-descriptions-item label="条件">{{ replayDetail.row.condition }}</el-descriptions-item>
+            <el-descriptions-item label="速率上限">{{ replayDetail.row.rate }} 条/秒</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ replayStatusText(replayDetail.row.status) }}</el-descriptions-item>
+            <el-descriptions-item label="首条 log_id">{{ replayDetail.row.logIdFirst || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="末条 log_id">{{ replayDetail.row.logIdLast || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ replayDetail.row.createdAt }}</el-descriptions-item>
+            <el-descriptions-item label="终结时间">{{ replayDetail.row.finishedAt || '—' }}</el-descriptions-item>
+          </el-descriptions>
+          <el-alert
+            v-if="replayDetail.row.errorMsg"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="`失败原因：${replayDetail.row.errorMsg}`"
+            style="margin-top: 8px"
+          ></el-alert>
+
+          <div class="block-title" style="margin-top: 16px">影响消费组</div>
+          <el-alert
+            v-if="replayDetail.row.truncated"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="仅展示前 100 个组（基线采集已截断）"
+            style="margin-bottom: 8px"
+          ></el-alert>
+          <el-table :data="affectedGroups" border size="small" empty-text="该主题无订阅组">
+            <el-table-column prop="group" label="消费组" min-width="120"></el-table-column>
+            <el-table-column prop="baseline" label="基线积压" width="96" align="right"></el-table-column>
+            <el-table-column prop="current" label="当前积压" width="96" align="right"></el-table-column>
+            <el-table-column label="变化" width="80" align="right">
+              <template #default="{ row }">
+                <span :class="row.delta > 0 ? 'state warn' : 'hint'">{{ row.delta > 0 ? `+${row.delta}` : row.delta }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="capturedAt" label="采集时刻" width="150"></el-table-column>
+          </el-table>
+          <p class="hint" style="margin: 6px 0 0">
+            积压算式与「消费组与积压」页同源（LEO − 已提交位点，不夹取负值）；未终结为实时值，终结后为终态快照。
+          </p>
+
+          <p v-if="isTerminal(replayDetail.row)" class="hint" style="margin-top: 12px">终态任务只读，不提供暂停 / 恢复 / 取消。</p>
+        </template>
+        <template #footer>
+          <el-button @click="replayDetail.visible = false">关闭</el-button>
+          <el-button v-if="canManage && canPause(replayDetail.row)" data-test="replay-pause" @click="openReplayAction('pause')">暂停</el-button>
+          <el-button v-if="canManage && canResume(replayDetail.row)" type="primary" data-test="replay-resume" @click="openReplayAction('resume')">
+            恢复
+          </el-button>
+          <el-button
+            v-if="canManage && !isTerminal(replayDetail.row)"
+            type="danger"
+            data-test="replay-cancel"
+            @click="openReplayAction('cancel')"
+          >
+            取消任务
+          </el-button>
+        </template>
+      </el-drawer>
+
+      <!-- 重放任务操作确认（暂停 / 恢复 / 取消） -->
+      <el-dialog v-model="actionDialog.visible" :title="actionDialogTitle()" width="480px" data-test="replay-action-dialog">
+        <el-alert
+          v-if="actionDialog.action === 'cancel'"
+          type="error"
+          :closable="false"
+          show-icon
+          title="已写入的记录不回滚：取消只是停止后续写入，消费端仍按 message_id 幂等"
+        ></el-alert>
+        <p v-else-if="actionDialog.action === 'pause'" class="hint" style="margin-top: 0">
+          暂停在批边界生效：当前批写完才停，进度与已写入记录始终一致。
+        </p>
+        <p v-else class="hint" style="margin-top: 0">恢复后从上次游标继续，速率上限不变。</p>
+        <el-descriptions v-if="actionDialog.row" :column="1" border size="small" style="margin-top: 8px">
+          <el-descriptions-item label="任务">{{ actionDialog.row.taskId }}</el-descriptions-item>
+          <el-descriptions-item label="目标主题">{{ actionDialog.row.namespace }} / {{ actionDialog.row.topic }}</el-descriptions-item>
+          <el-descriptions-item label="当前进度">{{ actionDialog.row.replayed }} / {{ actionDialog.row.total }}</el-descriptions-item>
+        </el-descriptions>
+        <p v-if="actionDialog.error" class="state danger">{{ actionDialog.error }}</p>
+        <template #footer>
+          <el-button @click="actionDialog.visible = false">取消</el-button>
+          <el-button :type="actionDialog.action === 'cancel' ? 'danger' : 'primary'" @click="confirmReplayAction">
+            确认{{ actionDialog.action === 'cancel' ? '取消任务' : actionDialog.action === 'pause' ? '暂停' : '恢复' }}
+          </el-button>
+        </template>
+      </el-dialog>
     </div>
 
     <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
     <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
     <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      const { createApp, ref, reactive } = Vue
+      const { createApp, ref, reactive, computed } = Vue
       const { ElMessage } = ElementPlus
 
       createApp({
         setup() {
           /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
-          const SCENES = ['list', 'detail', 'dispose', 'loading', 'empty', 'error', 'denied']
+          const SCENES = [
+            'list',
+            'detail',
+            'dispose',
+            'replay-list',
+            'replay-create',
+            'replay-confirm',
+            'replay-detail',
+            'replay-pause',
+            'loading',
+            'empty',
+            'error',
+            'denied',
+          ]
           const wanted = new URLSearchParams(window.location.search).get('scene')
           const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
           const activeNav = ref('dlq')
-          /** 原型中的权限开关：list/detail/dispose 场景默认有 msg:manage；denied 场景整页不渲染。 */
+          /** 原型中的权限开关：除 denied 场景外默认有 msg:manage。 */
           const canManage = ref(true)
           const query = reactive({ topic: '', status: '', reason: '', keyword: '' })
+          const replayQuery = reactive({ status: '', namespace: '', topic: '', from: '', to: '' })
+          const highlightTask = ref('')
+
+          /** 页签：重放场景落「重放任务」，其余落「死信」。 */
+          const tab = ref(scene.value.startsWith('replay-') ? 'replay' : 'dlq')
+
+          /** 加载 / 空 / 错误三个演示场景同时作用于两个页签；其余场景数据态为就绪。 */
+          const state = computed(() => {
+            return scene.value === 'loading' || scene.value === 'empty' || scene.value === 'error' ? scene.value : 'ready'
+          })
 
           const dlq = ref([
             {
@@ -290,10 +605,10 @@
               originOffset: '8,912',
               reason: 'schema_invalid',
               retries: 5,
-              status: 'pending',
+              status: 'replaying',
               failedAt: '2026-11-09 09:18:03',
               traceId: '91c0a3…',
-              replayTaskId: '',
+              replayTaskId: '9021 4477 0188 3021',
               dispositionReason: '',
               disposedAt: '',
               detail: '{\n  "field": "amount",\n  "expected": "number"\n}',
@@ -314,12 +629,102 @@
               detail: '{}',
             },
           ])
+
           const replays = ref([
-            { task: 'rp-0007', target: 'order.created', condition: 'offset 100~200', rate: '500/s', progress: 62, status: '运行中' },
+            {
+              taskId: '9021 4477 0188 3021',
+              namespace: 'msg',
+              topic: 'invoice.issued',
+              condition: '分区 0 · offset 8,900~8,920',
+              rate: '100',
+              replayed: 310,
+              total: 500,
+              status: 'running',
+              createdAt: '2026-11-09 11:02:10',
+              logIdFirst: '01J8YA…',
+              logIdLast: '01J8YB…',
+              finishedAt: '',
+              errorMsg: '',
+              truncated: false,
+            },
+            {
+              taskId: '9018 2210 4477 9003',
+              namespace: 'msg',
+              topic: 'order.created',
+              condition: '分区 0,1,2 · offset 18,000~18,500',
+              rate: '500',
+              replayed: 120,
+              total: 400,
+              status: 'paused',
+              createdAt: '2026-11-09 10:31:55',
+              logIdFirst: '01J8Y1…',
+              logIdLast: '01J8Y4…',
+              finishedAt: '',
+              errorMsg: '',
+              truncated: false,
+            },
+            {
+              taskId: '9012 8890 1122 3301',
+              namespace: 'msg',
+              topic: 'order.created',
+              condition: '全部分区 · 时间 2026-11-08 00:00~06:00',
+              rate: '1000',
+              replayed: 800,
+              total: 800,
+              status: 'completed',
+              createdAt: '2026-11-08 09:12:31',
+              logIdFirst: '01J8W1…',
+              logIdLast: '01J8W9…',
+              finishedAt: '2026-11-08 09:14:02',
+              errorMsg: '',
+              truncated: true,
+            },
+            {
+              taskId: '9009 6650 8899 1102',
+              namespace: 'msg',
+              topic: 'invoice.issued',
+              condition: '分区 1 · 时间 2026-11-07 00:00~24:00',
+              rate: '200',
+              replayed: 45,
+              total: 600,
+              status: 'cancelled',
+              createdAt: '2026-11-07 14:20:08',
+              logIdFirst: '01J8T2…',
+              logIdLast: '01J8T3…',
+              finishedAt: '2026-11-07 14:26:11',
+              errorMsg: '',
+              truncated: false,
+            },
           ])
+
+          const affectedGroups = ref([
+            { group: 'order-sync', baseline: 1200, current: 1840, delta: 640, capturedAt: '2026-11-09 11:02:10' },
+            { group: 'order-audit', baseline: 0, current: 512, delta: 512, capturedAt: '2026-11-09 11:02:10' },
+            { group: 'report-daily', baseline: 3200, current: 3200, delta: 0, capturedAt: '2026-11-09 11:02:10' },
+          ])
+          const targetGroups = ref(['order-sync', 'order-audit', 'report-daily'])
 
           const detail = reactive({ visible: false, row: null })
           const dialog = reactive({ visible: false, row: null, action: 'replay', rate: 100, reason: '', error: '' })
+
+          const createDialog = reactive({
+            visible: false,
+            error: '',
+            form: {
+              namespace: 'msg',
+              topic: 'order.created',
+              offsetFrom: null,
+              offsetTo: null,
+              timeFrom: '',
+              timeTo: '',
+              key: '',
+              partitions: '',
+              rate: 100,
+            },
+          })
+          const confirmDialog = reactive({ visible: false, error: '' })
+          const replayDetail = reactive({ visible: false, row: null })
+          const actionDialog = reactive({ visible: false, row: null, action: 'pause', error: '' })
 
           function statusText(value) {
             return {
@@ -347,6 +752,77 @@
             return `${actionText(dialog.action)}死信`
           }
 
+          function replayStatusText(value) {
+            return {
+              pending: '待启动',
+              running: '运行中',
+              paused: '已暂停',
+              completed: '已完成',
+              failed: '已失败',
+              cancelled: '已取消',
+            }[value] || value
+          }
+          function replayStatusClass(value) {
+            return {
+              pending: 'info',
+              running: 'ok',
+              paused: 'warn',
+              completed: 'ok',
+              failed: 'danger',
+              cancelled: 'muted',
+            }[value] || 'info'
+          }
+          function isTerminal(row) {
+            return row ? ['completed', 'failed', 'cancelled'].indexOf(row.status) >= 0 : false
+          }
+          function canPause(row) {
+            return row ? row.status === 'pending' || row.status === 'running' : false
+          }
+          function canResume(row) {
+            return row ? row.status === 'paused' : false
+          }
+          function progressOf(row) {
+            if (!row || !row.total) return 0
+            return Math.min(100, Math.round((row.replayed / row.total) * 100))
+          }
+          function progressStatus(row) {
+            if (!row) return ''
+            if (row.status === 'failed') return 'exception'
+            if (row.status === 'completed') return 'success'
+            return ''
+          }
+          /**
+           * 条件摘要（前端只做展示拼接，不计算进度真值）。
+           *
+           * @param form 表单条件。
+           * @returns 摘要文本。
+           */
+          function conditionText(form) {
+            const parts = []
+            parts.push(form.partitions.trim() === '' ? '全部分区' : `分区 ${form.partitions}`)
+            if (form.offsetFrom !== null || form.offsetTo !== null) {
+              parts.push(
+                `offset ${form.offsetFrom === null ? '不限' : form.offsetFrom}~${form.offsetTo === null ? '不限' : form.offsetTo}`,
+              )
+            }
+            if (form.timeFrom || form.timeTo) {
+              parts.push(`时间 ${form.timeFrom || '不限'}~${form.timeTo || '不限'}`)
+            }
+            if (form.key) parts.push(`key=${form.key}`)
+            return parts.join(' · ')
+          }
+
+          const confirmRows = computed(() => {
+            const form = createDialog.form
+            return [
+              { label: '目标主题', value: `${form.namespace} / ${form.topic}` },
+              { label: '范围条件', value: conditionText(form) },
+              { label: '速率上限', value: `${form.rate} 条/秒` },
+              { label: '预计总量', value: '12,480 条（估算，以创建时计数为准）' },
+              { label: '目标消费组', value: `${targetGroups.value.length} 个` },
+            ]
+          })
+
           function openDetail(row) {
             detail.row = row
             detail.visible = true
@@ -371,7 +847,9 @@
             const row = dialog.row
             if (dialog.action === 'replay') {
               row.status = 'replaying'
-              row.replayTaskId = 'rp-0008'
+              row.replayTaskId = '9024 0011 2233 4455'
+              highlightTask.value = row.replayTaskId
+              tab.value = 'replay'
             } else if (dialog.action === 'ignore') {
               row.status = 'ignored'
               row.dispositionReason = dialog.reason.trim()
@@ -382,6 +860,88 @@
             }
             dialog.visible = false
             ElMessage.success(`${actionText(dialog.action)}已提交（原型演示）`)
+          }
+
+          function openCreate() {
+            createDialog.error = ''
+            createDialog.visible = true
+          }
+          function askCreateConfirm() {
+            const form = createDialog.form
+            if (!form.namespace.trim() || !form.topic.trim()) {
+              createDialog.error = '命名空间与主题必填'
+              return
+            }
+            if (form.offsetFrom !== null && form.offsetTo !== null && form.offsetFrom >= form.offsetTo) {
+              createDialog.error = 'offset 区间非法：起始须小于结束'
+              return
+            }
+            createDialog.error = ''
+            confirmDialog.error = ''
+            confirmDialog.visible = true
+          }
+          function submitCreate() {
+            const form = createDialog.form
+            replays.value.unshift({
+              taskId: '9024 0011 2233 4455',
+              namespace: form.namespace,
+              topic: form.topic,
+              condition: conditionText(form),
+              rate: String(form.rate),
+              replayed: 0,
+              total: 12480,
+              status: 'pending',
+              createdAt: '2026-11-09 11:20:00',
+              logIdFirst: '',
+              logIdLast: '',
+              finishedAt: '',
+              errorMsg: '',
+              truncated: false,
+            })
+            highlightTask.value = '9024 0011 2233 4455'
+            confirmDialog.visible = false
+            createDialog.visible = false
+            tab.value = 'replay'
+            ElMessage.success('重放任务已创建（原型演示）')
+          }
+
+          function openReplayDetail(row) {
+            replayDetail.row = row
+            replayDetail.visible = true
+          }
+          function openReplayAction(action) {
+            actionDialog.row = replayDetail.row
+            actionDialog.action = action
+            actionDialog.error = ''
+            actionDialog.visible = true
+          }
+          function actionDialogTitle() {
+            return { pause: '暂停重放任务', resume: '恢复重放任务', cancel: '取消重放任务' }[actionDialog.action] || '重放任务操作'
+          }
+          function confirmReplayAction() {
+            const row = actionDialog.row
+            if (row) {
+              if (actionDialog.action === 'pause') {
+                row.status = 'paused'
+              } else if (actionDialog.action === 'resume') {
+                row.status = 'running'
+              } else {
+                row.status = 'cancelled'
+                row.finishedAt = '2026-11-09 11:21:30'
+              }
+            }
+            actionDialog.visible = false
+            ElMessage.success(`${actionDialogTitle()}已提交（原型演示）`)
+          }
+
+          function rowClass({ row }) {
+            return highlightTask.value !== '' && row.taskId === highlightTask.value ? 'highlight-row' : ''
+          }
+
+          function gotoReplayTask() {
+            detail.visible = false
+            tab.value = 'replay'
+            openReplayDetail(replays.value[0])
           }
 
           const navMap = {
@@ -407,31 +967,80 @@
             query.reason = ''
             query.keyword = ''
           }
+          function applyReplayFilter() {
+            ElMessage.success('查询完成（原型演示）')
+          }
+          function resetReplayFilter() {
+            replayQuery.status = ''
+            replayQuery.namespace = ''
+            replayQuery.topic = ''
+            replayQuery.from = ''
+            replayQuery.to = ''
+          }
 
           /** 深链场景：进入页面即展示对应交互，便于逐页截图核对。 */
-          if (scene.value === 'detail') openDetail(dlq.value[0])
+          if (scene.value === 'detail') openDetail(dlq.value[1])
           if (scene.value === 'dispose') openDispose(dlq.value[0], 'replay')
+          if (scene.value === 'replay-create') openCreate()
+          if (scene.value === 'replay-confirm') {
+            confirmDialog.visible = true
+          }
+          if (scene.value === 'replay-detail') openReplayDetail(replays.value[0])
+          if (scene.value === 'replay-pause') {
+            openReplayDetail(replays.value[0])
+            openReplayAction('pause')
+          }
 
           return {
             scene,
             activeNav,
+            tab,
+            state,
             canManage,
             query,
+            replayQuery,
+            highlightTask,
             dlq,
             replays,
+            affectedGroups,
+            targetGroups,
             detail,
             dialog,
+            createDialog,
+            confirmDialog,
+            replayDetail,
+            actionDialog,
+            confirmRows,
             statusText,
             statusClass,
             reasonText,
             actionText,
             dialogTitle,
+            replayStatusText,
+            replayStatusClass,
+            isTerminal,
+            canPause,
+            canResume,
+            progressOf,
+            progressStatus,
+            conditionText,
             openDetail,
             openDispose,
             confirmDispose,
+            openCreate,
+            askCreateConfirm,
+            submitCreate,
+            openReplayDetail,
+            openReplayAction,
+            actionDialogTitle,
+            confirmReplayAction,
+            rowClass,
+            gotoReplayTask,
             onNav,
             applyFilter,
             resetFilter,
+            applyReplayFilter,
+            resetReplayFilter,
           }
         },
       })
