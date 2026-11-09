@@ -3,10 +3,12 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-const { push, route } = vi.hoisted(() => ({
+const { push, replace, route } = vi.hoisted(() => ({
   push: vi.fn(),
+  replace: vi.fn(),
   route: {
     value: {
+      path: '/msg/acls',
       params: {} as Record<string, unknown>,
       query: {} as Record<string, unknown>,
     },
@@ -15,7 +17,7 @@ const { push, route } = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   useRoute: () => route.value,
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace }),
 }))
 
 import { useAdminRoute } from '../src/composables/useAdminRoute'
@@ -32,11 +34,19 @@ describe('useAdminRoute（Kiwi 2464）', () => {
   })
 
   it('空参数表与深链导航', () => {
-    route.value = { params: {}, query: {} }
+    route.value = { path: '/msg/acls', params: {}, query: {} }
     const state = useAdminRoute()
+    expect(state.path).toBe('/msg/acls')
     expect(state.params).toEqual({})
     expect(state.query).toEqual({})
     state.go('/msg/topics')
     expect(push).toHaveBeenCalledWith('/msg/topics')
+  })
+
+  it('替换查询参数不新增历史记录', () => {
+    route.value = { path: '/msg/acls', params: {}, query: {} }
+    const state = useAdminRoute()
+    state.replaceQuery({ namespace: 'msg', page: '2' })
+    expect(replace).toHaveBeenCalledWith({ path: '/msg/acls', query: { namespace: 'msg', page: '2' } })
   })
 })

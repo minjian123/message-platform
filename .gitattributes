@@ -6,3 +6,6 @@
 
 # Windows 脚本按 CRLF 检出（cmd / PowerShell 兼容）
 *.bat text eol=crlf
+
+# 位图证据（测试截图）按二进制处理，禁止行尾转换
+*.png binary

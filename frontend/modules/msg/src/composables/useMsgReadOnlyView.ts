@@ -34,6 +34,12 @@ export interface ReadOnlyViewOptions<T> {
   loader: ReadOnlyLoader<T>
   /** 初始筛选条件。 */
   initialFilters?: ReadOnlyFilters
+  /** 页面权限码（缺省 `msg:query`；主题授权页传 `msg:manage`）。 */
+  permission?: string
+  /** 初始页码（缺省 1；URL 深链回填用）。 */
+  initialPage?: number
+  /** 初始页长（缺省 20；URL 深链回填用）。 */
+  initialPageSize?: number
   /** 已持有权限码；缺省取宿主注入快照（显式传 `[]` 可模拟无权限）。 */
   permissionCodes?: readonly string[] | undefined
   /** 是否具备发起查询的前置条件（分区页须先选主题）。 */
@@ -66,6 +72,8 @@ export interface ReadOnlyViewStateRef<T> {
   setPage: (page: number) => void
   /** 设置筛选条件并回到第一页。 */
   setFilter: (key: string, value: string | number | undefined) => void
+  /** 一次性替换全部筛选条件并回到第一页（只刷新一次）。 */
+  setFilters: (next: ReadOnlyFilters) => void
   /** 清空筛选条件并回到第一页。 */
   reset: () => void
   /** 设置前置条件（不具备时展示「待选条件」且不发请求）。 */
@@ -81,7 +89,13 @@ export interface ReadOnlyViewStateRef<T> {
  * @returns 响应式状态与操作入口。
  */
 export function useMsgReadOnlyView<T>(options: ReadOnlyViewOptions<T>): ReadOnlyViewStateRef<T> {
-  const core = new BaseMsgReadOnlyView<T>(options.initialFilters)
+  const core = new BaseMsgReadOnlyView<T>(options.initialFilters, options.permission)
+  if (options.initialPage !== undefined) {
+    core.setPage(options.initialPage)
+  }
+  if (options.initialPageSize !== undefined) {
+    core.setPageSize(options.initialPageSize)
+  }
   const permissionCodes = options.permissionCodes === undefined ? hostPermissions() : options.permissionCodes
   const denied = !core.allows(permissionCodes)
   const inactive = options.active === false
@@ -160,6 +174,18 @@ export function useMsgReadOnlyView<T>(options: ReadOnlyViewOptions<T>): ReadOnly
     void refresh()
   }
 
+  /**
+   * 一次性替换全部筛选条件并回到第一页（只刷新一次）。
+   *
+   * @param next 新筛选条件。
+   */
+  function setFilters(next: ReadOnlyFilters): void {
+    core.replaceFilters(next)
+    core.resetToFirstPage()
+    sync()
+    void refresh()
+  }
+
   /** 清空筛选条件并回到第一页。 */
   function reset(): void {
     core.clearFilters()
@@ -209,6 +235,7 @@ export function useMsgReadOnlyView<T>(options: ReadOnlyViewOptions<T>): ReadOnly
     refresh,
     setPage,
     setFilter,
+    setFilters,
     reset,
     setActive,
     dispose,

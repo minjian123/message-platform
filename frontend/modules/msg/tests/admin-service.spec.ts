@@ -7,9 +7,10 @@ const { scopeGet, scopePost } = vi.hoisted(() => ({ scopeGet: vi.fn(), scopePost
 
 vi.mock('../src/runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/runtime')>()
+  const { wrapScope } = await import('./support/product-mock')
   return {
     ...actual,
-    requiredHostApi: () => ({ product: () => ({ get: scopeGet, post: scopePost }) }),
+    requiredHostApi: () => ({ product: () => wrapScope({ get: scopeGet, post: scopePost }) }),
   }
 })
 
@@ -174,7 +175,7 @@ describe('admin-service（Kiwi 2464）', () => {
     expect(scopeGet).toHaveBeenCalledWith('/admin/quotas', { namespace: 'bms' })
     respond(null)
     await expect(fetchQuotas()).resolves.toEqual({ items: [] })
-    expect(scopeGet).toHaveBeenLastCalledWith('/admin/quotas', undefined)
+    expect(scopeGet).toHaveBeenLastCalledWith('/admin/quotas', {})
   })
 
   it('主题列表响应缺 items 时回落空数组', async () => {

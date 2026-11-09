@@ -36,6 +36,7 @@ const MENU_PATHS = [
   '/msg/delayed',
   '/msg/quotas',
   '/msg/dlq',
+  '/msg/acls',
 ]
 
 describe('msg 模块注册（Kiwi 2464）', () => {
@@ -45,10 +46,10 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('十条路由：八项菜单 + 两条详情深链', async () => {
+  it('十一条路由：九项菜单 + 两条详情深链', async () => {
     const result = await registration()
     const routes = result.routes ?? []
-    expect(routes).toHaveLength(10)
+    expect(routes).toHaveLength(11)
     expect(routes.map((route) => route.path)).toEqual([
       '/msg/overview',
       '/msg/topics',
@@ -60,6 +61,7 @@ describe('msg 模块注册（Kiwi 2464）', () => {
       '/msg/delayed',
       '/msg/quotas',
       '/msg/dlq',
+      '/msg/acls',
     ])
     const menus = routes.filter((route) => route.meta?.menu !== false)
     expect(menus.map((route) => route.path)).toEqual(MENU_PATHS)
@@ -69,13 +71,18 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(routes.every((route) => typeof route.component === 'function')).toBe(true)
   })
 
-  it('菜单 meta：分组 / 权限 / 次序，且给 06-7、06-8 留位', async () => {
+  it('菜单 meta：分组 / 权限 / 次序，主题授权用 msg:manage 与 el:Key', async () => {
     const result = await registration()
     const menus = (result.routes ?? []).filter((route) => route.meta?.menu !== false)
     expect(menus.every((route) => route.meta?.group === MSG_MENU_GROUP)).toBe(true)
-    expect(menus.every((route) => route.meta?.perm === MSG_QUERY_PERMISSION)).toBe(true)
-    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 65, 70])
-    expect(ORDER_RESERVED_TOPIC_ACL).toBeGreaterThan(70)
+    expect(menus.slice(0, 8).every((route) => route.meta?.perm === MSG_QUERY_PERMISSION)).toBe(true)
+    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 65, 70, 80])
+    const acl = menus[8]
+    expect(acl?.name).toBe('msg.acl')
+    expect(acl?.meta?.title).toBe('主题授权')
+    expect(acl?.meta?.perm).toBe('msg:manage')
+    expect(acl?.meta?.icon).toBe('el:Key')
+    expect(acl?.meta?.order).toBe(ORDER_RESERVED_TOPIC_ACL)
     expect(ORDER_RESERVED_TENANT_USAGE).toBeGreaterThan(ORDER_RESERVED_TOPIC_ACL)
   })
 

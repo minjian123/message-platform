@@ -175,6 +175,9 @@ importers:
 
   modules/msg:
     dependencies:
+      '@bms/api_types':
+        specifier: file:../../../../bms/frontend/packages/api_types
+        version: link:../../../../bms/frontend/packages/api_types
       '@bms/core':
         specifier: file:../../../../bms/frontend/packages/core
         version: link:../../../../bms/frontend/packages/core

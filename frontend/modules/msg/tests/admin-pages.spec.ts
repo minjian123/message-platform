@@ -14,9 +14,10 @@ const { scopeGet, permissionRef, routeState, push } = vi.hoisted(() => ({
 
 vi.mock('../src/runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/runtime')>()
+  const { wrapScope } = await import('./support/product-mock')
   return {
     ...actual,
-    requiredHostApi: () => ({ product: () => ({ get: scopeGet }) }),
+    requiredHostApi: () => ({ product: () => wrapScope({ get: scopeGet }) }),
     hostPermissions: () => permissionRef.value,
   }
 })

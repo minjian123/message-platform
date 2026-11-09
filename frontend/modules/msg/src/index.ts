@@ -10,9 +10,8 @@
 
 import { MODULE_CONTRACT_VERSION, WorkbenchCardProvider, defineModule } from '@bms/core'
 
-import { MSG_MENU_GROUP } from './constants'
-import { MSG_MESSAGES_EN, MSG_MESSAGES_ZH_CN } from './i18n/messages'
-import { applyHostContext, MSG_QUERY_PERMISSION } from './runtime'
+import { MSG_MENU_GROUP, ORDER_RESERVED_TOPIC_ACL } from './constants'
+import { applyHostContext, MSG_MANAGE_PERMISSION, MSG_QUERY_PERMISSION } from './runtime'
 
 /** 菜单项公共元信息（分组与权限由宿主读取）。 */
 function menu(title: string, order: number): Record<string, unknown> {
@@ -27,8 +26,9 @@ function menu(title: string, order: number): Record<string, unknown> {
 /** msg 消息平台模块（清单 `name` / `version` 须与平台清单条目严格一致）。 */
 export const msgModule = defineModule({
   manifest: { name: 'msg', version: __BMS_MODULE_VERSION__, contractVersion: MODULE_CONTRACT_VERSION },
-  setup: (context) => {
+  setup: async (context) => {
     applyHostContext(context)
+    const { MSG_MESSAGES_EN, MSG_MESSAGES_ZH_CN } = await import('./i18n/messages')
     return {
       routes: [
         {
@@ -80,6 +80,18 @@ export const msgModule = defineModule({
           path: '/msg/dlq',
           component: () => import('./views/DlqPage.vue'),
           meta: menu('死信与重放', 70),
+        },
+        {
+          path: '/msg/acls',
+          name: 'msg.acl',
+          component: () => import('./views/AclPage.vue'),
+          meta: {
+            title: '主题授权',
+            group: MSG_MENU_GROUP,
+            icon: 'el:Key',
+            perm: MSG_MANAGE_PERMISSION,
+            order: ORDER_RESERVED_TOPIC_ACL,
+          },
         },
       ],
       cards: [

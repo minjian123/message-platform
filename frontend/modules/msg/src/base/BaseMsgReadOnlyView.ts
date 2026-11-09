@@ -82,8 +82,8 @@ export function errorCodeOf(error: unknown): number | undefined {
  * 不重写平台分页 / 状态机方法；只在加载编排里调用链上 `begin()` / `settle()` / `setRows()`。
  */
 export class BaseMsgReadOnlyView<T = unknown> extends BaseTable {
-  /** 只读视图所需权限码（与后端 `msg:query` 同源）。 */
-  readonly permission: string = MSG_QUERY_PERMISSION
+  /** 只读视图所需权限码（缺省与后端 `msg:query` 同源；特殊页面可传 `msg:manage`）。 */
+  readonly permission: string
 
   /** 当前失败业务码（成功结算后清空）。 */
   errorCode: number | undefined
@@ -95,10 +95,12 @@ export class BaseMsgReadOnlyView<T = unknown> extends BaseTable {
    * 构造只读视图。
    *
    * @param initialFilters 初始筛选条件。
+   * @param permission 页面权限码（缺省 `msg:query`）。
    */
-  constructor(initialFilters: ReadOnlyFilters = {}) {
+  constructor(initialFilters: ReadOnlyFilters = {}, permission: string = MSG_QUERY_PERMISSION) {
     super()
     this.filters = { ...initialFilters }
+    this.permission = permission
   }
 
   /**
@@ -119,6 +121,18 @@ export class BaseMsgReadOnlyView<T = unknown> extends BaseTable {
   clearFilters(): void {
     for (const key of Object.keys(this.filters)) {
       delete this.filters[key]
+    }
+  }
+
+  /**
+   * 一次性替换全部筛选条件（批量筛选，避免逐项触发请求）。
+   *
+   * @param next 新筛选条件。
+   */
+  replaceFilters(next: ReadOnlyFilters): void {
+    this.clearFilters()
+    for (const [key, value] of Object.entries(next)) {
+      this.setFilter(key, value)
     }
   }
 

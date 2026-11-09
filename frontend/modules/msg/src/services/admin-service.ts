@@ -6,11 +6,12 @@
  */
 
 import type { msg } from '@msg/api-types'
-import type { ModuleApiScope } from '@bms/core'
 
 import type { ReadOnlyQueryParams } from '../base/BaseMsgReadOnlyView'
 import type { ReadOnlyLoader } from '../composables/useMsgReadOnlyView'
-import { requiredHostApi } from '../runtime'
+import { delData, getData, patchData, postData, requiredData } from './product-api'
+
+export { MsgQueryError, MSG_NAMESPACE, MSG_PRODUCT, toParams } from './product-api'
 
 type Schema = msg.components['schemas']
 type Ops = msg.operations
@@ -59,25 +60,7 @@ export type DelaySummaryQuery = NonNullable<
   Ops['get_delay_summary_api_v1_msg_admin_delayed_summary_get']['parameters']['query']
 >
 
-/** 产品键（与平台产品登记同源）。 */
-export const MSG_PRODUCT = 'msg'
-/** 产品命名空间段。 */
-export const MSG_NAMESPACE = 'msg'
-
-/** 业务码非 0 时抛出（由投影捕获并映射模块 i18n 文案键）。 */
-export class MsgQueryError extends Error {
-  /** 后端业务码。 */
-  readonly code: number
-
-  /**
-   * @param code 后端业务码。
-   */
-  constructor(code: number) {
-    super(String(code))
-    this.name = 'MsgQueryError'
-    this.code = code
-  }
-}
+/** 业务码错误由 `product-api` 统一提供（此处仅重新导出，供既有引用）。 */
 
 /** 空概览（快照尚未产出时的结构占位，不伪造数值）。 */
 export const EMPTY_OVERVIEW: Overview = {
@@ -99,60 +82,18 @@ export const EMPTY_DELAY_SUMMARY: DelaySummary = {
   total: 0,
 }
 
-/**
- * 产品域请求作用域。
- *
- * @returns 请求作用域。
- */
-function scope(): ModuleApiScope {
-  return requiredHostApi().product(MSG_PRODUCT, MSG_NAMESPACE)
-}
 
-/**
- * 清理查询参数（丢掉 `undefined` / `null` / 空串，避免把空筛选发给后端）。
- *
- * @param params 查询参数对象。
- * @returns 宿主请求层可接收的参数表。
- */
-export function toParams(params: object | undefined): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  if (params === undefined) {
-    return result
-  }
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== '') {
-      result[key] = value
-    }
-  }
-  return result
-}
-
-/**
- * 统一取数与业务码解包。
- *
- * @param path 相对产品域的资源路径。
- * @param params 查询参数。
- * @returns 统一响应体。
- * @throws MsgQueryError 业务码非 0。
- */
-async function request<E extends { code: number }>(path: string, params?: object): Promise<E> {
-  const envelope = await scope().get<E>(path, toParams(params))
-  if (envelope.code !== 0) {
-    throw new MsgQueryError(envelope.code)
-  }
-  return envelope
-}
 
 /** 平台概览四值。 */
 export async function fetchOverview(): Promise<Overview> {
-  const envelope = await request<Schema['ApiResponse_Overview_']>('/admin/overview')
-  return envelope.data ?? EMPTY_OVERVIEW
+  const data = await getData<Schema['Overview']>('/admin/overview')
+  return data ?? EMPTY_OVERVIEW
 }
 
 /** 主题列表。 */
 export async function fetchTopics(params: TopicQuery = {}): Promise<TopicPage> {
-  const envelope = await request<Schema['ApiResponse_TopicPage_']>('/admin/topics', params)
-  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+  const data = await getData<Schema['TopicPage']>('/admin/topics', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
 }
 
 /**
@@ -161,14 +102,14 @@ export async function fetchTopics(params: TopicQuery = {}): Promise<TopicPage> {
  * @param topicId 主题主键（雪花，JSON 字符串）。
  */
 export async function fetchTopicDetail(topicId: string): Promise<TopicDetail | null> {
-  const envelope = await request<Schema['ApiResponse_TopicDetail_']>(`/admin/topics/${topicId}`)
-  return envelope.data ?? null
+  const data = await getData<Schema['TopicDetail']>(`/admin/topics/${topicId}`)
+  return data ?? null
 }
 
 /** 消费组列表。 */
 export async function fetchGroups(params: GroupQuery = {}): Promise<GroupPage> {
-  const envelope = await request<Schema['ApiResponse_GroupPage_']>('/admin/groups', params)
-  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+  const data = await getData<Schema['GroupPage']>('/admin/groups', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
 }
 
 /**
@@ -184,32 +125,32 @@ export async function fetchGroupDetail(
   group: string,
 ): Promise<GroupDetail | null> {
   const path = `/admin/groups/${encodeURIComponent(namespace)}/${encodeURIComponent(topic)}/${encodeURIComponent(group)}`
-  const envelope = await request<Schema['ApiResponse_GroupDetail_']>(path)
-  return envelope.data ?? null
+  const data = await getData<Schema['GroupDetail']>(path)
+  return data ?? null
 }
 
 /** 分区详情（必填命名空间与主题）。 */
 export async function fetchPartitions(params: PartitionQuery): Promise<PartitionPage | null> {
-  const envelope = await request<Schema['ApiResponse_PartitionPage_']>('/admin/partitions', params)
-  return envelope.data ?? null
+  const data = await getData<Schema['PartitionPage']>('/admin/partitions', params)
+  return data ?? null
 }
 
 /** 消息检索（只返回头与摘要，不含正文）。 */
 export async function fetchMessages(params: MessageQuery): Promise<MessagePage | null> {
-  const envelope = await request<Schema['ApiResponse_MessagePage_']>('/admin/messages', params)
-  return envelope.data ?? null
+  const data = await getData<Schema['MessagePage']>('/admin/messages', params)
+  return data ?? null
 }
 
 /** 延迟待投列表。 */
 export async function fetchDelayed(params: DelayedQuery = {}): Promise<DelayedPage> {
-  const envelope = await request<Schema['ApiResponse_DelayedPage_']>('/admin/delayed', params)
-  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+  const data = await getData<Schema['DelayedPage']>('/admin/delayed', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
 }
 
 /** 延迟档位分布与堆积提示。 */
 export async function fetchDelaySummary(params: DelaySummaryQuery = {}): Promise<DelaySummary> {
-  const envelope = await request<Schema['ApiResponse_DelaySummary_']>('/admin/delayed/summary', params)
-  return envelope.data ?? EMPTY_DELAY_SUMMARY
+  const data = await getData<Schema['DelaySummary']>('/admin/delayed/summary', params)
+  return data ?? EMPTY_DELAY_SUMMARY
 }
 
 /** 主题列表投影取数器。 */
@@ -256,42 +197,10 @@ export type RetentionPatch = Schema['TopicRetentionUpdate']
 /** 位点重置请求体。 */
 export type OffsetResetBody = Schema['OffsetResetRequest']
 
-/**
- * 写请求统一解包（与读请求同一套业务码判定）。
- *
- * @param path 相对产品域的资源路径。
- * @param call 发起一次写请求（`post` / `patch` / `del` 由调用方绑定）。
- * @returns 统一响应体。
- * @throws MsgQueryError 业务码非 0。
- */
-async function requestWrite<E extends { code: number }>(path: string, call: (path: string) => Promise<E>): Promise<E> {
-  const envelope = await call(path)
-  if (envelope.code !== 0) {
-    throw new MsgQueryError(envelope.code)
-  }
-  return envelope
-}
-
-/**
- * 取必填响应体（`data` 为空视为契约违背，与业务码非 0 同路处理）。
- *
- * @param data 统一响应的 `data` 段。
- * @returns 非空数据。
- * @throws MsgQueryError `data` 为空（10000）。
- */
-function required<T>(data: T | null | undefined): T {
-  if (data === null || data === undefined) {
-    throw new MsgQueryError(10000)
-  }
-  return data
-}
-
 /** 新建主题（返回完整元数据）。 */
 export async function createTopic(body: TopicCreateBody): Promise<TopicItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_TopicItem_']>('/admin/topics', (path) =>
-    scope().post<Schema['ApiResponse_TopicItem_']>(path, body),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['TopicItem']>('/admin/topics', body)
+  return requiredData(data)
 }
 
 /**
@@ -300,9 +209,9 @@ export async function createTopic(body: TopicCreateBody): Promise<TopicItem> {
  * @param topicId 主题主键。
  */
 export async function fetchDeleteImpact(topicId: string): Promise<DeleteImpact> {
-  const envelope = await request<Schema['ApiResponse_DeleteImpact_']>(`/admin/topics/${topicId}/delete-impact`)
+  const data = await getData<Schema['DeleteImpact']>(`/admin/topics/${topicId}/delete-impact`)
   return (
-    envelope.data ?? {
+    data ?? {
       partition_count: 0,
       message_total: 0,
       group_count: 0,
@@ -318,11 +227,8 @@ export async function fetchDeleteImpact(topicId: string): Promise<DeleteImpact> 
  * @param topicId 主题主键。
  */
 export async function deleteTopic(topicId: string): Promise<TopicCleanupView> {
-  const envelope = await requestWrite<Schema['ApiResponse_TopicCleanupView_']>(
-    `/admin/topics/${topicId}`,
-    (path) => scope().del<Schema['ApiResponse_TopicCleanupView_']>(path, { confirm: true }),
-  )
-  return required(envelope.data)
+  const data = await delData<Schema['TopicCleanupView']>(`/admin/topics/${topicId}`, { confirm: true })
+  return requiredData(data)
 }
 
 /**
@@ -332,14 +238,13 @@ export async function deleteTopic(topicId: string): Promise<TopicCleanupView> {
  * @param partitionCount 目标分区数。
  */
 export async function expandPartitions(topicId: string, partitionCount: number): Promise<TopicDetail> {
-  const envelope = await requestWrite<Schema['ApiResponse_TopicDetail_']>(
+  const data = await postData<Schema['TopicDetail']>(
     `/admin/topics/${topicId}/partitions`,
-    (path) =>
-      scope().post<Schema['ApiResponse_TopicDetail_']>(path, {
-        partition_count: partitionCount,
-      } satisfies Schema['TopicPartitionExpandRequest']),
+    {
+      partition_count: partitionCount,
+    } satisfies Schema['TopicPartitionExpandRequest'],
   )
-  return required(envelope.data)
+  return requiredData(data)
 }
 
 /**
@@ -349,10 +254,8 @@ export async function expandPartitions(topicId: string, partitionCount: number):
  * @param patch 变更项。
  */
 export async function updateRetention(topicId: string, patch: RetentionPatch): Promise<TopicItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_TopicItem_']>(`/admin/topics/${topicId}`, (path) =>
-    scope().patch<Schema['ApiResponse_TopicItem_']>(path, patch),
-  )
-  return required(envelope.data)
+  const data = await patchData<Schema['TopicItem']>(`/admin/topics/${topicId}`, patch)
+  return requiredData(data)
 }
 
 /**
@@ -361,11 +264,8 @@ export async function updateRetention(topicId: string, patch: RetentionPatch): P
  * @param body 重置请求。
  */
 export async function resetOffset(body: OffsetResetBody): Promise<OffsetResetResult> {
-  const envelope = await requestWrite<Schema['ApiResponse_OffsetResetResult_']>(
-    '/admin/offsets/reset',
-    (path) => scope().post<Schema['ApiResponse_OffsetResetResult_']>(path, body),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['OffsetResetResult']>('/admin/offsets/reset', body)
+  return requiredData(data)
 }
 
 /** 死信列表响应。 */
@@ -381,8 +281,8 @@ export type DlqQuery = NonNullable<Ops['list_dead_letters_api_v1_msg_admin_dlq_g
 
 /** 死信列表（默认排除已归档）。 */
 export async function fetchDeadLetters(params: DlqQuery = {}): Promise<DlqPage> {
-  const envelope = await request<Schema['ApiResponse_DlqList_']>('/admin/dlq', params)
-  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+  const data = await getData<Schema['DlqList']>('/admin/dlq', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
 }
 
 /**
@@ -391,8 +291,8 @@ export async function fetchDeadLetters(params: DlqQuery = {}): Promise<DlqPage> 
  * @param dlqId 死信主键（雪花，JSON 字符串）。
  */
 export async function fetchDeadLetter(dlqId: string): Promise<DlqDetail | null> {
-  const envelope = await request<Schema['ApiResponse_DlqDetail_']>(`/admin/dlq/${dlqId}`)
-  return envelope.data ?? null
+  const data = await getData<Schema['DlqDetail']>(`/admin/dlq/${dlqId}`)
+  return data ?? null
 }
 
 /**
@@ -402,13 +302,11 @@ export async function fetchDeadLetter(dlqId: string): Promise<DlqDetail | null> 
  * @param ratePerSecond 重放速率（条/秒）。
  */
 export async function replayDeadLetter(dlqId: string, ratePerSecond: number): Promise<DlqDisposeResult> {
-  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/replay`, (path) =>
-    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, {
-      confirm: true,
-      rate_per_second: ratePerSecond,
-    } satisfies Schema['DlqReplayRequest']),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['DlqDisposeResult']>(`/admin/dlq/${dlqId}/replay`, {
+    confirm: true,
+    rate_per_second: ratePerSecond,
+  } satisfies Schema['DlqReplayRequest'])
+  return requiredData(data)
 }
 
 /**
@@ -418,13 +316,11 @@ export async function replayDeadLetter(dlqId: string, ratePerSecond: number): Pr
  * @param reason 忽略原因。
  */
 export async function ignoreDeadLetter(dlqId: string, reason: string): Promise<DlqDisposeResult> {
-  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/ignore`, (path) =>
-    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, {
-      confirm: true,
-      reason,
-    } satisfies Schema['DlqIgnoreRequest']),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['DlqDisposeResult']>(`/admin/dlq/${dlqId}/ignore`, {
+    confirm: true,
+    reason,
+  } satisfies Schema['DlqIgnoreRequest'])
+  return requiredData(data)
 }
 
 /**
@@ -438,10 +334,8 @@ export async function archiveDeadLetter(dlqId: string, reason?: string): Promise
   if (reason !== undefined && reason !== '') {
     body.reason = reason
   }
-  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/archive`, (path) =>
-    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, body),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['DlqDisposeResult']>(`/admin/dlq/${dlqId}/archive`, body)
+  return requiredData(data)
 }
 
 /** 死信列表投影取数器。 */
@@ -463,8 +357,8 @@ export type ReplayQuery = NonNullable<Ops['list_replay_api_v1_msg_admin_replay_g
 
 /** 重放任务列表（创建时间倒序；`total` 为 ACL 过滤前计数）。 */
 export async function fetchReplayTasks(params: ReplayQuery = {}): Promise<ReplayTaskPage> {
-  const envelope = await request<Schema['ApiResponse_ReplayTaskPage_']>('/admin/replay', params)
-  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+  const data = await getData<Schema['ReplayTaskPage']>('/admin/replay', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
 }
 
 /**
@@ -473,8 +367,8 @@ export async function fetchReplayTasks(params: ReplayQuery = {}): Promise<Replay
  * @param taskId 任务主键（雪花，JSON 字符串）。
  */
 export async function fetchReplayTask(taskId: string): Promise<ReplayTaskItem | null> {
-  const envelope = await request<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}`)
-  return envelope.data ?? null
+  const data = await getData<Schema['ReplayTaskItem']>(`/admin/replay/${taskId}`)
+  return data ?? null
 }
 
 /**
@@ -483,10 +377,8 @@ export async function fetchReplayTask(taskId: string): Promise<ReplayTaskItem | 
  * @param body 条件与速率。
  */
 export async function createReplayTask(body: Omit<ReplayCreateBody, 'confirm'>): Promise<ReplayTaskItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>('/admin/replay', (path) =>
-    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, { ...body, confirm: true }),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['ReplayTaskItem']>('/admin/replay', { ...body, confirm: true })
+  return requiredData(data)
 }
 
 /**
@@ -495,10 +387,8 @@ export async function createReplayTask(body: Omit<ReplayCreateBody, 'confirm'>):
  * @param taskId 任务主键。
  */
 export async function pauseReplayTask(taskId: string): Promise<ReplayTaskItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/pause`, (path) =>
-    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['ReplayTaskItem']>(`/admin/replay/${taskId}/pause`, {})
+  return requiredData(data)
 }
 
 /**
@@ -507,10 +397,8 @@ export async function pauseReplayTask(taskId: string): Promise<ReplayTaskItem> {
  * @param taskId 任务主键。
  */
 export async function resumeReplayTask(taskId: string): Promise<ReplayTaskItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/resume`, (path) =>
-    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['ReplayTaskItem']>(`/admin/replay/${taskId}/resume`, {})
+  return requiredData(data)
 }
 
 /**
@@ -519,10 +407,8 @@ export async function resumeReplayTask(taskId: string): Promise<ReplayTaskItem> 
  * @param taskId 任务主键。
  */
 export async function cancelReplayTask(taskId: string): Promise<ReplayTaskItem> {
-  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/cancel`, (path) =>
-    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
-  )
-  return required(envelope.data)
+  const data = await postData<Schema['ReplayTaskItem']>(`/admin/replay/${taskId}/cancel`, {})
+  return requiredData(data)
 }
 
 /** 重放任务列表投影取数器。 */

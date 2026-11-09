@@ -12,9 +12,10 @@ const { api, permissionRef } = vi.hoisted(() => ({
 
 vi.mock('../src/runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/runtime')>()
+  const { wrapScope } = await import('./support/product-mock')
   return {
     ...actual,
-    requiredHostApi: () => ({ product: () => api }),
+    requiredHostApi: () => ({ product: () => wrapScope(api) }),
     hostPermissions: () => permissionRef.value,
   }
 })
@@ -104,7 +105,7 @@ afterEach(() => {
 describe('配额管理页（Kiwi 2466）', () => {
   it('首屏按租户级取数并渲染六维行的可编辑硬限 / 软限', async () => {
     const page = await mountPage()
-    expect(api.get).toHaveBeenCalledWith('/admin/quotas', undefined)
+    expect(api.get).toHaveBeenCalledWith('/admin/quotas', {})
     expect(page.findAll('[data-test="quota-hard"]')).toHaveLength(2)
     expect(page.findAll('[data-test="quota-soft"]')).toHaveLength(2)
     expect(page.find('[data-test="quotas-table"]').text()).toContain('主题数')

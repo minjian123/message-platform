@@ -8,12 +8,16 @@ import { useRoute, useRouter } from 'vue-router'
 
 /** 路由上下文。 */
 export interface AdminRouteState {
+  /** 当前路径。 */
+  path: string
   /** 路径参数（值统一字符串）。 */
   params: Record<string, string>
   /** 查询参数（值统一字符串）。 */
   query: Record<string, string>
   /** 跳转到模块内路径。 */
   go: (path: string) => void
+  /** 替换当前路由查询参数（不新增历史记录）。 */
+  replaceQuery: (query: Record<string, string>) => void
 }
 
 /**
@@ -39,10 +43,14 @@ export function useAdminRoute(): AdminRouteState {
   }
 
   return {
+    path: route.path,
     params: asStrings(route.params as Record<string, unknown>),
     query: asStrings(route.query as Record<string, unknown>),
     go: (path: string) => {
       void router.push(path)
+    },
+    replaceQuery: (query: Record<string, string>) => {
+      void router.replace({ path: route.path, query })
     },
   }
 }
