@@ -29,7 +29,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.delay import DelayRecord, DelayStore
-from bms_msg.broker.log import InMemoryMessageStore, MessageStore, SegmentMeta, StoredMessage
+from bms_msg.broker.log import InMemoryMessageStore, MessageHeaderView, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 
 pytestmark = pytest.mark.kiwi_id(2417)
@@ -238,6 +238,38 @@ class _FailingMessageStore(MessageStore):
             int: 前移后的起点。
         """
         return await self._inner.truncate_before(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
+    async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
+        """转调真实实现（管理面检索不在本用例链路，仅满足端口）。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            MessageHeaderView | None: 头视图。
+        """
+        return await self._inner.find_by_log_id(log_id=log_id)
+
+    async def scan_headers(
+        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
+    ) -> ConcurrentStableList[MessageHeaderView]:
+        """转调真实实现（管理面检索不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            from_offset: 起始位点。
+            max_messages: 上限。
+
+        Returns:
+            ConcurrentStableList[MessageHeaderView]: 头视图列表。
+        """
+        return await self._inner.scan_headers(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            from_offset=from_offset,
+            max_messages=max_messages,
+        )
 
 
 class _ExplodingWheel(DelayWheel):

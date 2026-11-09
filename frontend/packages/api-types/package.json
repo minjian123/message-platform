@@ -1,0 +1,17 @@
+{
+  "name": "@msg/api-types",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "msg 产品前端契约生成类型（openapi-typescript 自 deploy/contracts/msg.json 生成；勿手改 src）",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "gen": "node scripts/generate.mjs",
+    "gen:check": "node scripts/generate.mjs --check"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0"
+  }
+}

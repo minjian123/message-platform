@@ -31,7 +31,14 @@ from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseValueObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
-from bms_msg.broker.log import MessageStore, PartitionNotBoundError, SegmentMeta, StoredMessage
+from bms_msg.broker.log import (
+    MessageHeaderView,
+    MessageStore,
+    PartitionNotBoundError,
+    SegmentMeta,
+    StoredMessage,
+    message_header_view,
+)
 from bms_msg.broker.offset import OffsetRealigner
 from bms_msg.broker.record import (
     ParsedRecord,
@@ -1410,6 +1417,28 @@ class FileMessageStore(MessageStore):
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_bytes(offset=offset)
 
+    def _resolve_log_id(self, *, log_id: str) -> tuple[int, int, int] | None:
+        """把记录身份解析成 `(topic_id, partition_no, offset)`（LRU 优先，其次扫已加载分区的段头）。
+
+        `locate_by_log_id()`（磁盘坐标）与 `find_by_log_id()`（只读头视图）共用同一份解析结果，
+        避免两处索引口径漂移。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            tuple[int, int, int] | None: 坐标三元组；不存在返回 None。
+        """
+        cached = self._log_ids.get(log_id)
+        if cached is not None:
+            self._log_ids.move_to_end(log_id)
+            return cached
+        for (topic_id, partition_no), partition in self._partitions.items():
+            for offset, _position, header in partition.iterate_headers():
+                if header.log_id == log_id:
+                    return (topic_id, partition_no, offset)
+        return None
+
     async def locate_by_log_id(self, *, log_id: str) -> FileSlice | None:
         """按记录身份定位（先查 LRU，未命中扫已加载分区的段头）。
 
@@ -1422,17 +1451,50 @@ class FileMessageStore(MessageStore):
         Returns:
             FileSlice | None: 坐标；不存在返回 None。
         """
-        cached = self._log_ids.get(log_id)
-        if cached is not None:
-            self._log_ids.move_to_end(log_id)
-            topic_id, partition_no, offset = cached
-            partition = self._partitions.get((topic_id, partition_no))
-            return None if partition is None else partition.locate(offset=offset)
-        for partition in self._partitions.values():
-            for offset, _position, header in partition.iterate_headers():
-                if header.log_id == log_id:
-                    return partition.locate(offset=offset)
-        return None
+        resolved = self._resolve_log_id(log_id=log_id)
+        if resolved is None:
+            return None
+        topic_id, partition_no, offset = resolved
+        partition = self._partitions.get((topic_id, partition_no))
+        return None if partition is None else partition.locate(offset=offset)
+
+    async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
+        """按记录身份取只读头视图（端口方法；命中即解码该条，不回退全量扫描）。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            MessageHeaderView | None: 头视图；不存在或分区已卸载返回 None。
+        """
+        resolved = self._resolve_log_id(log_id=log_id)
+        if resolved is None:
+            return None
+        topic_id, partition_no, offset = resolved
+        message = await self.read_bytes(topic_id=topic_id, partition_no=partition_no, offset=offset)
+        return None if message is None else message_header_view(message)
+
+    async def scan_headers(
+        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
+    ) -> ConcurrentStableList[MessageHeaderView]:
+        """取一段只读头视图（复用 `fetch` 的可读区间裁剪与 CRC 校验口径）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            from_offset: 起始位点（含）。
+            max_messages: 本次上限。
+
+        Returns:
+            ConcurrentStableList[MessageHeaderView]: 按 offset 升序的头视图（不含正文）。
+        """
+        messages = await self.fetch(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            from_offset=from_offset,
+            max_messages=max_messages,
+        )
+        return ConcurrentStableList(message_header_view(message) for message in messages)
 
     def _require_location(self, topic_id: int) -> TopicLocation:
         """取主题目录身份（未登记即抛错）。

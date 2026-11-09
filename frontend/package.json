@@ -11,7 +11,9 @@
     "msg:build:standalone": "pnpm --filter @msg/module_msg run build:standalone",
     "msg:budget": "pnpm --filter @msg/module_msg run budget",
     "msg:guard": "pnpm --filter @msg/module_msg run guard:isolation",
-    "msg:check": "pnpm run msg:lint && pnpm run msg:typecheck && pnpm run msg:test"
+    "msg:check": "pnpm run msg:lint && pnpm run msg:typecheck && pnpm run msg:test",
+    "api-types:gen": "pnpm --filter @msg/api-types run gen",
+    "api-types:check": "pnpm --filter @msg/api-types run gen:check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -488,6 +488,33 @@
         "title": "ApiResponse[ConsumeResult]",
         "type": "object"
       },
+      "ApiResponse_DelaySummary_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelaySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DelaySummary]",
+        "type": "object"
+      },
       "ApiResponse_DelayedPage_": {
         "additionalProperties": false,
         "properties": {
@@ -623,6 +650,33 @@
         "title": "ApiResponse[MemberAssignment]",
         "type": "object"
       },
+      "ApiResponse_MessagePage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessagePage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[MessagePage]",
+        "type": "object"
+      },
       "ApiResponse_NackResult_": {
         "additionalProperties": false,
         "properties": {
@@ -648,6 +702,60 @@
           }
         },
         "title": "ApiResponse[NackResult]",
+        "type": "object"
+      },
+      "ApiResponse_Overview_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Overview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[Overview]",
+        "type": "object"
+      },
+      "ApiResponse_PartitionPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartitionPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[PartitionPage]",
         "type": "object"
       },
       "ApiResponse_PublishResult_": {
@@ -1088,7 +1196,7 @@
           "messages": {
             "description": "本次投递的消息（按 offset 升序）",
             "items": {
-              "$ref": "#/components/schemas/MessageItem"
+              "$ref": "#/components/schemas/bms_msg__schemas__message__MessageItem"
             },
             "title": "Messages",
             "type": "array"
@@ -1118,6 +1226,75 @@
         ],
         "title": "DelayLevel",
         "type": "string"
+      },
+      "DelaySummary": {
+        "additionalProperties": false,
+        "description": "延迟汇总（与 `/admin/delayed` 同一份当前租户快照）。",
+        "properties": {
+          "hint": {
+            "description": "结构化堆积提示：normal / stale / near_quota",
+            "title": "Hint",
+            "type": "string"
+          },
+          "levels": {
+            "description": "九档分布（按档位声明序）",
+            "items": {
+              "$ref": "#/components/schemas/LevelBucket"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "命名空间过滤值",
+            "title": "Namespace"
+          },
+          "quota_used_ratio": {
+            "description": "当前租户待投量 / 软上限（夹到 0~1）",
+            "title": "Quota Used Ratio",
+            "type": "number"
+          },
+          "stale_count": {
+            "description": "已到期但未转投的条数",
+            "title": "Stale Count",
+            "type": "integer"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "主题过滤值",
+            "title": "Topic"
+          },
+          "total": {
+            "description": "过滤后待投总条数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic",
+          "total",
+          "levels",
+          "stale_count",
+          "quota_used_ratio",
+          "hint"
+        ],
+        "title": "DelaySummary",
+        "type": "object"
       },
       "DelayedItem": {
         "additionalProperties": false,
@@ -1507,6 +1684,34 @@
         "title": "LeaveResult",
         "type": "object"
       },
+      "LevelBucket": {
+        "additionalProperties": false,
+        "description": "一个延迟档位的汇总。",
+        "properties": {
+          "count": {
+            "description": "该档待投条数（无记录也输出 0）",
+            "title": "Count",
+            "type": "integer"
+          },
+          "level": {
+            "description": "延迟档位（1s / 5s / … / 60m）",
+            "title": "Level",
+            "type": "string"
+          },
+          "min_remaining_ms": {
+            "description": "该档最短剩余毫秒数；无记录为 0",
+            "title": "Min Remaining Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "level",
+          "count",
+          "min_remaining_ms"
+        ],
+        "title": "LevelBucket",
+        "type": "object"
+      },
       "MemberAssignment": {
         "additionalProperties": false,
         "description": "成员分配（`join` / `heartbeat` 响应：客户端按 `partitions` 拉取，`generation` 变了即换分配）。",
@@ -1618,115 +1823,53 @@
         "title": "MemberRequest",
         "type": "object"
       },
-      "MessageItem": {
+      "MessagePage": {
         "additionalProperties": false,
-        "description": "一条投递的消息（`delivery_count` 供消费端识别重复；幂等键由业务自选）。",
+        "description": "消息检索分页（`total` 为过滤后总数）。",
         "properties": {
-          "compression": {
-            "default": "none",
-            "description": "压缩算法（none 表示未压缩，恒有值）",
-            "title": "Compression",
-            "type": "string"
-          },
-          "content_type": {
-            "default": "application/msgpack",
-            "description": "消息体内容类型（缺省 application/msgpack，恒有值）",
-            "title": "Content Type",
-            "type": "string"
-          },
-          "delivery_count": {
-            "description": "投递次数（首次 1，重投递增）",
-            "title": "Delivery Count",
-            "type": "integer"
-          },
-          "headers": {
-            "additionalProperties": {
-              "type": "string"
+          "items": {
+            "description": "当页消息头（按分区号、offset 升序）",
+            "items": {
+              "$ref": "#/components/schemas/bms_msg__schemas__admin_view__MessageItem"
             },
-            "description": "结构化头",
-            "title": "Headers",
-            "type": "object"
+            "title": "Items",
+            "type": "array"
           },
-          "key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "分区键",
-            "title": "Key"
-          },
-          "message_id": {
-            "description": "消息 ID（重投保持不变）",
-            "title": "Message Id",
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
             "type": "string"
           },
-          "offset": {
-            "description": "分区内序号",
-            "title": "Offset",
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
             "type": "integer"
           },
-          "partition": {
-            "description": "分区号",
-            "title": "Partition",
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
             "type": "integer"
-          },
-          "payload": {
-            "description": "消息体（base64 编码；帧路径由私有原始字节通道替代）",
-            "title": "Payload",
-            "type": "string"
-          },
-          "published_at": {
-            "description": "发布时间（UTC）",
-            "format": "date-time",
-            "title": "Published At",
-            "type": "string"
           },
           "topic": {
             "description": "主题名",
             "title": "Topic",
             "type": "string"
           },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "链路标识",
-            "title": "Trace Id"
-          },
-          "uncompressed_len": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "解压后字节数（生产者可选声明）",
-            "title": "Uncompressed Len"
+          "total": {
+            "description": "过滤后总数",
+            "title": "Total",
+            "type": "integer"
           }
         },
         "required": [
-          "message_id",
+          "namespace",
           "topic",
-          "partition",
-          "offset",
-          "key",
-          "payload",
-          "trace_id",
-          "delivery_count",
-          "published_at"
+          "total",
+          "page",
+          "size",
+          "items"
         ],
-        "title": "MessageItem",
+        "title": "MessagePage",
         "type": "object"
       },
       "NackReason": {
@@ -1825,44 +1968,94 @@
         "title": "NackResult",
         "type": "object"
       },
-      "PartitionItem": {
+      "Overview": {
         "additionalProperties": false,
-        "description": "分区明细（详情接口的 `partitions` 元素）。",
+        "description": "平台概览四张数字卡 + 快照可用性。",
         "properties": {
-          "checkpoint_hw": {
-            "description": "检查点 HW",
-            "title": "Checkpoint Hw",
+          "consumer_lag": {
+            "description": "当前租户积压条数",
+            "title": "Consumer Lag",
             "type": "integer"
           },
-          "checkpoint_leo": {
-            "description": "检查点 LEO",
-            "title": "Checkpoint Leo",
+          "disk_used_ratio": {
+            "description": "磁盘使用率（多卷取最大值）",
+            "title": "Disk Used Ratio",
+            "type": "number"
+          },
+          "dlq_total": {
+            "description": "当前租户死信存量",
+            "title": "Dlq Total",
             "type": "integer"
           },
-          "epoch": {
-            "description": "领导者任期（复制阶段使用）",
-            "title": "Epoch",
-            "type": "integer"
+          "messages_in_per_second": {
+            "description": "入口吞吐（本采样周期条数 / 周期秒数）",
+            "title": "Messages In Per Second",
+            "type": "number"
           },
-          "leader": {
-            "description": "当前 leader 标识",
-            "title": "Leader",
-            "type": "string"
-          },
-          "partition_no": {
-            "description": "分区号（0 起）",
-            "title": "Partition No",
-            "type": "integer"
+          "snapshot_available": {
+            "description": "采样快照是否可用；进程刚启动时为 false，四值返回 0",
+            "title": "Snapshot Available",
+            "type": "boolean"
           }
         },
         "required": [
-          "partition_no",
-          "leader",
-          "checkpoint_leo",
-          "checkpoint_hw",
-          "epoch"
+          "messages_in_per_second",
+          "consumer_lag",
+          "dlq_total",
+          "disk_used_ratio",
+          "snapshot_available"
         ],
-        "title": "PartitionItem",
+        "title": "Overview",
+        "type": "object"
+      },
+      "PartitionPage": {
+        "additionalProperties": false,
+        "description": "分区详情响应。",
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "消费组；未指定时为 null",
+            "title": "Group"
+          },
+          "items": {
+            "description": "分区明细（按分区号升序）",
+            "items": {
+              "$ref": "#/components/schemas/bms_msg__schemas__admin_view__PartitionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "partition_count": {
+            "description": "主题分区总数",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "topic",
+          "group",
+          "partition_count",
+          "items"
+        ],
+        "title": "PartitionPage",
         "type": "object"
       },
       "PublishRequest": {
@@ -2736,7 +2929,7 @@
           "partitions": {
             "description": "分区明细（按分区号升序）",
             "items": {
-              "$ref": "#/components/schemas/PartitionItem"
+              "$ref": "#/components/schemas/bms_msg__schemas__topic__PartitionItem"
             },
             "title": "Partitions",
             "type": "array"
@@ -2922,6 +3115,315 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "bms_msg__schemas__admin_view__MessageItem": {
+        "additionalProperties": false,
+        "description": "一条消息的头信息与载荷摘要（**不含正文**）。",
+        "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结构化头（不含载荷）",
+            "title": "Headers",
+            "type": "object"
+          },
+          "log_id": {
+            "description": "记录 ID（精确检索入口）",
+            "title": "Log Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "消息 ID（重投 / 重放不变）",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "offset": {
+            "description": "分区内序号",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "分区号",
+            "title": "Partition",
+            "type": "integer"
+          },
+          "payload_len": {
+            "description": "落盘载荷字节数",
+            "title": "Payload Len",
+            "type": "integer"
+          },
+          "payload_sha256": {
+            "description": "落盘载荷 SHA-256（64 位小写十六进制）",
+            "title": "Payload Sha256",
+            "type": "string"
+          },
+          "published_at": {
+            "description": "发布时间（UTC）",
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_id",
+          "message_id",
+          "partition",
+          "offset",
+          "published_at",
+          "headers",
+          "payload_len",
+          "payload_sha256"
+        ],
+        "title": "MessageItem",
+        "type": "object"
+      },
+      "bms_msg__schemas__admin_view__PartitionItem": {
+        "additionalProperties": false,
+        "description": "单个分区的实时运行态（LEO 来自 `MessageStore`，非落库检查点）。",
+        "properties": {
+          "committed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "已提交位点；未指定消费组时为 null",
+            "title": "Committed"
+          },
+          "hw": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "高水位；02-4 交付前恒 null，不伪造单副本数值",
+            "title": "Hw"
+          },
+          "isr": {
+            "description": "同步副本集；02-5 交付前恒空集合",
+            "items": {
+              "type": "string"
+            },
+            "title": "Isr",
+            "type": "array"
+          },
+          "lag": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "积压（leo - committed）；未指定消费组时为 null",
+            "title": "Lag"
+          },
+          "leader": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "当前 leader 实例标识；元数据缺行时为 null",
+            "title": "Leader"
+          },
+          "leo": {
+            "description": "日志末端位点（下一条待分配 offset）",
+            "title": "Leo",
+            "type": "integer"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区持有者；未指定消费组或组无分配时为 null",
+            "title": "Owner"
+          },
+          "partition": {
+            "description": "分区号（0 起）",
+            "title": "Partition",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partition",
+          "leader",
+          "leo",
+          "hw",
+          "isr",
+          "committed",
+          "lag",
+          "owner"
+        ],
+        "title": "PartitionItem",
+        "type": "object"
+      },
+      "bms_msg__schemas__message__MessageItem": {
+        "additionalProperties": false,
+        "description": "一条投递的消息（`delivery_count` 供消费端识别重复；幂等键由业务自选）。",
+        "properties": {
+          "compression": {
+            "default": "none",
+            "description": "压缩算法（none 表示未压缩，恒有值）",
+            "title": "Compression",
+            "type": "string"
+          },
+          "content_type": {
+            "default": "application/msgpack",
+            "description": "消息体内容类型（缺省 application/msgpack，恒有值）",
+            "title": "Content Type",
+            "type": "string"
+          },
+          "delivery_count": {
+            "description": "投递次数（首次 1，重投递增）",
+            "title": "Delivery Count",
+            "type": "integer"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "结构化头",
+            "title": "Headers",
+            "type": "object"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分区键",
+            "title": "Key"
+          },
+          "message_id": {
+            "description": "消息 ID（重投保持不变）",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "offset": {
+            "description": "分区内序号",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition": {
+            "description": "分区号",
+            "title": "Partition",
+            "type": "integer"
+          },
+          "payload": {
+            "description": "消息体（base64 编码；帧路径由私有原始字节通道替代）",
+            "title": "Payload",
+            "type": "string"
+          },
+          "published_at": {
+            "description": "发布时间（UTC）",
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识",
+            "title": "Trace Id"
+          },
+          "uncompressed_len": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "解压后字节数（生产者可选声明）",
+            "title": "Uncompressed Len"
+          }
+        },
+        "required": [
+          "message_id",
+          "topic",
+          "partition",
+          "offset",
+          "key",
+          "payload",
+          "trace_id",
+          "delivery_count",
+          "published_at"
+        ],
+        "title": "MessageItem",
+        "type": "object"
+      },
+      "bms_msg__schemas__topic__PartitionItem": {
+        "additionalProperties": false,
+        "description": "分区明细（详情接口的 `partitions` 元素）。",
+        "properties": {
+          "checkpoint_hw": {
+            "description": "检查点 HW",
+            "title": "Checkpoint Hw",
+            "type": "integer"
+          },
+          "checkpoint_leo": {
+            "description": "检查点 LEO",
+            "title": "Checkpoint Leo",
+            "type": "integer"
+          },
+          "epoch": {
+            "description": "领导者任期（复制阶段使用）",
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "leader": {
+            "description": "当前 leader 标识",
+            "title": "Leader",
+            "type": "string"
+          },
+          "partition_no": {
+            "description": "分区号（0 起）",
+            "title": "Partition No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partition_no",
+          "leader",
+          "checkpoint_leo",
+          "checkpoint_hw",
+          "epoch"
+        ],
+        "title": "PartitionItem",
         "type": "object"
       }
     }
@@ -3680,6 +4182,153 @@
         ]
       }
     },
+    "/api/v1/msg/admin/delayed/summary": {
+      "get": {
+        "description": "延迟档位分布与堆积提示（服务端当前时间计算剩余时间；只读，不触发转投）。\n\n命名空间非法 350010，主题不存在 350001，分区越界 350009。",
+        "operationId": "get_delay_summary_api_v1_msg_admin_delayed_summary_get",
+        "parameters": [
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "分区号过滤",
+            "in": "query",
+            "name": "partition",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区号过滤",
+              "title": "Partition"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DelaySummary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Delay Summary",
+        "tags": [
+          "msg-admin-delayed-summary"
+        ],
+        "x-error-codes": [
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
     "/api/v1/msg/admin/groups": {
       "get": {
         "description": "消费组列表（组名升序；可按命名空间 / 主题过滤）。\n\n需要 msg:query 权限；按租户隔离；主题已删的孤儿组记录不展示。命名空间过滤值非法返回 350010。",
@@ -3963,6 +4612,506 @@
           350010,
           350011,
           350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/messages": {
+      "get": {
+        "description": "按组合条件检索消息头（只返回头与摘要，不返回正文）。\n\n命名空间非法 350010，主题不存在 350001，分区越界 350009；\n条件区间倒置 / 分页越界 10001。",
+        "operationId": "search_messages_api_v1_msg_admin_messages_get",
+        "parameters": [
+          {
+            "description": "命名空间",
+            "in": "query",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "description": "命名空间",
+              "maxLength": 64,
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "description": "主题名",
+            "in": "query",
+            "name": "topic",
+            "required": true,
+            "schema": {
+              "description": "主题名",
+              "maxLength": 200,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          {
+            "description": "分区号过滤（缺省全部）",
+            "in": "query",
+            "name": "partition",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区号过滤（缺省全部）",
+              "title": "Partition"
+            }
+          },
+          {
+            "description": "起始 offset（含）",
+            "in": "query",
+            "name": "offset_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "起始 offset（含）",
+              "title": "Offset From"
+            }
+          },
+          {
+            "description": "结束 offset（不含）",
+            "in": "query",
+            "name": "offset_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "结束 offset（不含）",
+              "title": "Offset To"
+            }
+          },
+          {
+            "description": "分区键精确值",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区键精确值",
+              "title": "Key"
+            }
+          },
+          {
+            "description": "发布时间下界（ISO 8601，含）",
+            "in": "query",
+            "name": "time_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "发布时间下界（ISO 8601，含）",
+              "title": "Time From"
+            }
+          },
+          {
+            "description": "发布时间上界（ISO 8601，不含）",
+            "in": "query",
+            "name": "time_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "发布时间上界（ISO 8601，不含）",
+              "title": "Time To"
+            }
+          },
+          {
+            "description": "记录 ID（精确命中走索引）",
+            "in": "query",
+            "name": "log_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "记录 ID（精确命中走索引）",
+              "title": "Log Id"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数（1~100）",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数（1~100）",
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MessagePage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Search Messages",
+        "tags": [
+          "msg-admin-messages"
+        ],
+        "x-error-codes": [
+          350001,
+          350009,
+          350010,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
+    "/api/v1/msg/admin/overview": {
+      "get": {
+        "description": "四张数字卡（入口吞吐 / 当前积压 / 死信数 / 磁盘使用率）。\n\n快照尚未产出时四值返回 0 且 `snapshot_available=false`，不回源扫描。",
+        "operationId": "get_overview_api_v1_msg_admin_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Overview_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Overview",
+        "tags": [
+          "msg-admin-overview"
+        ],
+        "x-error-codes": [
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/partitions": {
+      "get": {
+        "description": "分区详情（按分区号升序；只读）。\n\n命名空间非法 350010，主题不存在 350001，分区越界 350009，组不存在 350013。",
+        "operationId": "list_partitions_api_v1_msg_admin_partitions_get",
+        "parameters": [
+          {
+            "description": "命名空间",
+            "in": "query",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "description": "命名空间",
+              "maxLength": 64,
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "description": "主题名",
+            "in": "query",
+            "name": "topic",
+            "required": true,
+            "schema": {
+              "description": "主题名",
+              "maxLength": 200,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          {
+            "description": "分区号过滤（缺省全部）",
+            "in": "query",
+            "name": "partition",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区号过滤（缺省全部）",
+              "title": "Partition"
+            }
+          },
+          {
+            "description": "消费组（缺省不给已提交位点）",
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "消费组（缺省不给已提交位点）",
+              "title": "Group"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PartitionPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Partitions",
+        "tags": [
+          "msg-admin-partitions"
+        ],
+        "x-error-codes": [
+          350001,
+          350009,
+          350010,
+          350013,
+          350011,
+          350012,
+          350027
         ]
       }
     },

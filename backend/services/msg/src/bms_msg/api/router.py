@@ -18,7 +18,11 @@ from bms_core.core.concurrent import ConcurrentStableList
 
 from bms_msg.api.admin import acls as admin_acls
 from bms_msg.api.admin import delayed as admin_delayed
+from bms_msg.api.admin import delayed_summary as admin_delayed_summary
 from bms_msg.api.admin import groups as admin_groups
+from bms_msg.api.admin import messages as admin_messages
+from bms_msg.api.admin import overview as admin_overview
+from bms_msg.api.admin import partitions as admin_partitions
 from bms_msg.api.admin import quota as admin_quota
 from bms_msg.api.admin import replay as admin_replay
 from bms_msg.api.admin import topics
@@ -37,6 +41,10 @@ api_router = mount_service_routers(
             data_groups.router,
             admin_groups.router,
             admin_delayed.router,
+            admin_delayed_summary.router,
+            admin_partitions.router,
+            admin_messages.router,
+            admin_overview.router,
             admin_acls.router,
             admin_replay.router,
             admin_quota.router,

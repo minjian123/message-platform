@@ -26,7 +26,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.roots import BaseFrameworkObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
-from bms_msg.broker.log import MessageStore, SegmentMeta, StoredMessage
+from bms_msg.broker.log import MessageHeaderView, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.core.config import MAX_LONG_POLL_WAITERS, MS_PER_SECOND
 
 __all__ = ["DeliveryWaiter", "NotifyingMessageStore", "WaitKey", "WaitOutcome"]
@@ -300,3 +300,35 @@ class NotifyingMessageStore(MessageStore):
             int: 前移后的起点。
         """
         return await self._inner.truncate_before(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
+    async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
+        """按记录身份取只读头视图（原样委托）。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            MessageHeaderView | None: 头视图；未命中返回 None。
+        """
+        return await self._inner.find_by_log_id(log_id=log_id)
+
+    async def scan_headers(
+        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
+    ) -> ConcurrentStableList[MessageHeaderView]:
+        """取一段只读头视图（原样委托）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            from_offset: 起始位点（含）。
+            max_messages: 本次上限。
+
+        Returns:
+            ConcurrentStableList[MessageHeaderView]: 按 offset 升序的头视图。
+        """
+        return await self._inner.scan_headers(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            from_offset=from_offset,
+            max_messages=max_messages,
+        )

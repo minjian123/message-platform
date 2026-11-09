@@ -83,6 +83,12 @@ label = "契约：contract_snapshot check（公开契约零漂移）"
 cmd = ["{python}", "-m", "ops.contract_snapshot", "check"]
 cwd = "backend"
 
+# ---- 前端类型：契约快照 → TypeScript 生成物零漂移（06-1-3）----
+[[preflight.steps]]
+label = "前端类型：api-types --check（契约零漂移）"
+cmd = ["node", "packages/api-types/scripts/generate.mjs", "--check"]
+cwd = "frontend"
+
 # ---- 实现阶段启用（8B_01 起）----
 # [[preflight.steps]]
 # label = "门禁：check_modules（模块清单零漂移）"

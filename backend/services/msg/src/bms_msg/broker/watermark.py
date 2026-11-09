@@ -581,25 +581,27 @@ def _fields(reading: StorageReading) -> ConcurrentStableDict[str, object]:
     )
 
 
-def _payload(reading: StorageReading, reason: str) -> ConcurrentStableDict[str, object]:
+# bare-collections:allow `ApiResponse.data` 走 pydantic 序列化，自定义 Mapping 会把 507 退化成 500
+def _payload(reading: StorageReading, reason: str) -> dict[str, object]:
     """`350022` 的 `data` 段（JSON 与帧 `detail` 共用一份结构）。
+
+    **必须是普通 dict**：`ApiResponse.data` 走 pydantic 序列化，自定义 Mapping 会抛
+    `PydanticSerializationError`，把 507 退化成 500（02-7 实测，06-1-1 闭环）。
 
     Args:
         reading: 水位读数。
         reason: 拒绝原因。
 
     Returns:
-        ConcurrentStableDict[str, object]: 五个字段。
+        dict[str, object]: 五个字段。
     """
-    return ConcurrentStableDict(
-        {
-            "used_ratio": None if reading.used_ratio is None else round(reading.used_ratio, STORAGE_RATIO_DIGITS),
-            "threshold": reading.reject_ratio,
-            "volume": reading.volume,
-            "free_bytes": reading.free_bytes,
-            "reason": reason,
-        }
-    )
+    return {
+        "used_ratio": None if reading.used_ratio is None else round(reading.used_ratio, STORAGE_RATIO_DIGITS),
+        "threshold": reading.reject_ratio,
+        "volume": reading.volume,
+        "free_bytes": reading.free_bytes,
+        "reason": reason,
+    }
 
 
 def _message(reading: StorageReading) -> str:

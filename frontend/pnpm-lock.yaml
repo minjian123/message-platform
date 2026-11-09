@@ -249,6 +249,12 @@ importers:
         specifier: ^3.3.11
         version: 3.3.14(typescript@6.0.3)
 
+  packages/api-types:
+    devDependencies:
+      openapi-typescript:
+        specifier: ^7.13.0
+        version: 7.13.0(typescript@6.0.3)
+
 packages:
 
   '@asamuzakjp/css-color@7.1.9':

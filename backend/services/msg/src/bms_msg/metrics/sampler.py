@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.logging import get_logger
@@ -25,6 +26,7 @@ from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.watermark import StorageWatermark
 from bms_msg.core.config import METRICS_SAMPLE_INTERVAL_SECONDS
 from bms_msg.metrics.lag import MetricsSnapshotStore, topic_key
+from bms_msg.metrics.traffic import get_traffic_metrics
 from bms_msg.models.replay import MsgReplayTask
 from bms_msg.repositories.topic import TopicRepository
 
@@ -73,6 +75,8 @@ class MetricsSampler(BaseFrameworkObject):
         self._interval = interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._tenant_codes: ConcurrentStableDict[str, str] = ConcurrentStableDict()
+        self._last_messages_in: int | None = None
+        self._last_sample_at: float | None = None
 
     @property
     def running(self) -> bool:
@@ -128,6 +132,31 @@ class MetricsSampler(BaseFrameworkObject):
             self._watermark.force_refresh()
         except Exception as exc:
             _LOGGER.warning("msg_metrics_sample_failed", dimension="storage", error=type(exc).__name__)
+        try:
+            self._sample_ingress()
+        except Exception as exc:
+            _LOGGER.warning("msg_metrics_sample_failed", dimension="ingress", error=type(exc).__name__)
+
+    def _sample_ingress(self) -> None:
+        """差分累计入口消息数，写入本周期速率快照（06-1-1 概览「入口吞吐」）。
+
+        只读 `TrafficMetrics` 进程级单例的累计 Counter，不新增采集点、不请求内扫描；
+        首轮没有上一轮读数时写 0 / 0.0，端点据此判 `snapshot_available=false`。
+        """
+        counters = get_traffic_metrics().counter_snapshot().get("msg_messages_in_total")
+        total = 0
+        if counters is not None:
+            for _key, value in counters.items():
+                total += value
+        now = time.monotonic()
+        if self._last_messages_in is None or self._last_sample_at is None:
+            self._snapshots.replace(messages_in_window=0, window_seconds=0.0)
+        else:
+            elapsed = max(now - self._last_sample_at, 1e-6)
+            delta = max(total - self._last_messages_in, 0)
+            self._snapshots.replace(messages_in_window=delta, window_seconds=elapsed)
+        self._last_messages_in = total
+        self._last_sample_at = now
 
     async def _loop(self) -> None:
         """循环：采样后等待周期（首轮立即执行）。"""

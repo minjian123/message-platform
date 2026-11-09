@@ -36,7 +36,8 @@ from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry, StreamTuning, default_stream_tuning
 from bms_msg.broker.waiter import DeliveryWaiter
-from bms_msg.broker.watermark import StorageGate
+from bms_msg.broker.watermark import StorageGate, StorageMetrics
+from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.quota import QuotaRepository
@@ -66,6 +67,7 @@ __all__ = [
     "GroupStoreDep",
     "IdempotencyStoreDep",
     "MessageStoreDep",
+    "MetricsSnapshotsDep",
     "OffsetEnumeratorDep",
     "OffsetPurgerDep",
     "OffsetResetterDep",
@@ -78,6 +80,7 @@ __all__ = [
     "RetentionThrottleDep",
     "RpcRegistryDep",
     "StorageGateDep",
+    "StorageMetricsDep",
     "StreamRegistryDep",
     "StreamTuningDep",
     "TopicAclAdminServiceDep",
@@ -100,6 +103,7 @@ __all__ = [
     "get_group_store",
     "get_idempotency_store",
     "get_message_store",
+    "get_metrics_snapshots",
     "get_offset_enumerator",
     "get_offset_purger",
     "get_offset_resetter",
@@ -109,6 +113,7 @@ __all__ = [
     "get_replay_runner",
     "get_retention_throttle",
     "get_rpc_registry",
+    "get_storage_metrics",
     "get_stream_registry",
     "get_stream_tuning",
     "get_topic_acl_admin_service",
@@ -824,3 +829,47 @@ TopicAclServiceDep = Annotated[TopicAclService, Depends(get_topic_acl_service)]
 
 TopicAclAdminServiceDep = Annotated[TopicAclAdminService, Depends(get_topic_acl_admin_service)]
 """路由参数写法：`acls: TopicAclAdminServiceDep`（ACL 管理服务）。"""
+
+
+def get_metrics_snapshots(request: Request) -> MetricsSnapshotStore:
+    """取 06-3 采样快照（概览只读出口）。
+
+    自建最小 app 未装配该状态时惰性建一个空快照：进程刚启动本就应表现为
+    「快照不可用、四值返回 0」，不能让端点在测试 / 降级装配下抛 AttributeError。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        MetricsSnapshotStore: 进程级快照存储。
+    """
+    existing = getattr(request.app.state, "metrics_snapshots", None)
+    if isinstance(existing, MetricsSnapshotStore):
+        return existing
+    created = MetricsSnapshotStore()
+    request.app.state.metrics_snapshots = created
+    return created
+
+
+def get_storage_metrics(request: Request) -> StorageMetrics:
+    """取存储水位采集器（概览磁盘使用率出口；未装配时惰性建空采集器）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        StorageMetrics: 进程级水位采集器。
+    """
+    existing = getattr(request.app.state, "storage_metrics", None)
+    if isinstance(existing, StorageMetrics):
+        return existing
+    created = StorageMetrics()
+    request.app.state.storage_metrics = created
+    return created
+
+
+MetricsSnapshotsDep = Annotated[MetricsSnapshotStore, Depends(get_metrics_snapshots)]
+"""路由参数写法：`snapshots: MetricsSnapshotsDep`（06-3 采样快照）。"""
+
+StorageMetricsDep = Annotated[StorageMetrics, Depends(get_storage_metrics)]
+"""路由参数写法：`storage: StorageMetricsDep`（磁盘水位快照）。"""

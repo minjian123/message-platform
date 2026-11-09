@@ -17,6 +17,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import ParamError
@@ -27,11 +28,13 @@ from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
 
 __all__ = [
     "InMemoryMessageStore",
+    "MessageHeaderView",
     "MessageStore",
     "PartitionKey",
     "PartitionNotBoundError",
     "SegmentMeta",
     "StoredMessage",
+    "message_header_view",
 ]
 
 PartitionKey = tuple[int, int]
@@ -90,6 +93,60 @@ class StoredMessage(BaseValueObject):
 
     uncompressed_len: int | None = None
     """解压后字节数（生产者可选声明；broker 不校验也不解压）。"""
+
+
+@dataclass(frozen=True)
+class MessageHeaderView(BaseValueObject):
+    """一条消息的只读头视图（06-1-1：管理面检索只拿头，拿不到正文）。
+
+    **结构上不含 `payload`**：载荷长度与摘要由存储侧算好后随头传出，端点在类型上
+    就无法把消息正文写进响应；`payload_sha256` 取落盘字节的 SHA-256，便于与审计 / 日志侧互认。
+    """
+
+    message_id: str
+    """消息身份（重投 / 重放不变）。"""
+
+    log_id: str
+    """记录身份（精确检索入口）。"""
+
+    topic_id: int
+    partition_no: int
+    offset: int
+    key: str | None
+    headers: ConcurrentStableDict[str, str]
+    trace_id: str | None
+    published_at: datetime
+    content_type: str
+    payload_len: int
+    """落盘载荷字节数。"""
+
+    payload_sha256: str
+    """落盘载荷的 SHA-256（64 位小写十六进制）。"""
+
+
+def message_header_view(message: StoredMessage) -> MessageHeaderView:
+    """把存储记录映射为只读头视图（三个实现共用，避免摘要口径漂移）。
+
+    Args:
+        message: 存储中的一条消息。
+
+    Returns:
+        MessageHeaderView: 不含正文的头视图。
+    """
+    return MessageHeaderView(
+        message_id=message.message_id,
+        log_id=message.log_id,
+        topic_id=message.topic_id,
+        partition_no=message.partition_no,
+        offset=message.offset,
+        key=message.key,
+        headers=message.headers,
+        trace_id=message.trace_id,
+        published_at=message.published_at,
+        content_type=message.content_type,
+        payload_len=len(message.payload),
+        payload_sha256=sha256(message.payload).hexdigest(),
+    )
 
 
 @dataclass(frozen=True)
@@ -218,6 +275,36 @@ class MessageStore(BaseFrameworkObject, ABC):
 
         Raises:
             ParamError: `offset > leo`（10001）。
+        """
+
+    @abstractmethod
+    async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
+        """按记录身份取只读头视图（管理面精确检索入口）。
+
+        **命名避让**：不叫 `locate_by_log_id`——`FileMessageStore` 已有同名方法且返回
+        `FileSlice`（磁盘坐标），端口若同名会覆盖它、打断 02-7 恢复期去重链路。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            MessageHeaderView | None: 命中的头视图；未命中返回 None（不回退全量扫描）。
+        """
+
+    @abstractmethod
+    async def scan_headers(
+        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
+    ) -> ConcurrentStableList[MessageHeaderView]:
+        """从 `from_offset` 起取至多 `max_messages` 条只读头视图（不把正文交给上层）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            from_offset: 起始位点（含）。
+            max_messages: 本次上限。
+
+        Returns:
+            ConcurrentStableList[MessageHeaderView]: 按 offset 升序的头视图。
         """
 
 
@@ -394,6 +481,43 @@ class InMemoryMessageStore(MessageStore):
         del log[: offset - start]
         self._starts[bucket] = offset
         return offset
+
+    async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
+        """按记录身份取头视图（替身：按分区键插入序逐桶查找）。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            MessageHeaderView | None: 命中的头视图；未命中返回 None。
+        """
+        for messages in self._logs.values():
+            for message in messages:
+                if message.log_id == log_id:
+                    return message_header_view(message)
+        return None
+
+    async def scan_headers(
+        self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
+    ) -> ConcurrentStableList[MessageHeaderView]:
+        """取一段只读头视图（复用 `fetch` 的可读区间裁剪口径）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            from_offset: 起始位点（含）。
+            max_messages: 本次上限。
+
+        Returns:
+            ConcurrentStableList[MessageHeaderView]: 按 offset 升序的头视图。
+        """
+        messages = await self.fetch(
+            topic_id=topic_id,
+            partition_no=partition_no,
+            from_offset=from_offset,
+            max_messages=max_messages,
+        )
+        return ConcurrentStableList(message_header_view(message) for message in messages)
 
 
 def _record_bytes(message: StoredMessage) -> int:

@@ -53,6 +53,12 @@ class LagSnapshot(BaseValueObject):
     replay_failed: int = 0
     """失败重放任务累计数（按 `failed` 状态任务数；非严格单调）。"""
 
+    messages_in_window: int = 0
+    """本采样周期的入口消息数（06-1-1：概览「入口吞吐」数字卡的分子）。"""
+
+    window_seconds: float = 0.0
+    """本采样周期的实际秒数（分母；为 0 表示尚无差分结果）。"""
+
 
 class MetricsSnapshotStore(BaseFrameworkObject):
     """采样快照存储（进程级；采样器写、Collector 读）。"""
@@ -79,6 +85,8 @@ class MetricsSnapshotStore(BaseFrameworkObject):
         replay: ConcurrentStableDict[str, int] | None = None,
         replay_replayed: int | None = None,
         replay_failed: int | None = None,
+        messages_in_window: int | None = None,
+        window_seconds: float | None = None,
     ) -> None:
         """整体替换快照（未给的维度沿用上一次）。
 
@@ -89,6 +97,8 @@ class MetricsSnapshotStore(BaseFrameworkObject):
             replay: 重放任务数（None 表示不更新）。
             replay_replayed: 重放累计写入条数（None 表示不更新）。
             replay_failed: 失败重放任务累计数（None 表示不更新）。
+            messages_in_window: 本周期入口消息数（None 表示不更新）。
+            window_seconds: 本周期实际秒数（None 表示不更新）。
         """
         current = self._snapshot
         self._snapshot = LagSnapshot(
@@ -98,6 +108,8 @@ class MetricsSnapshotStore(BaseFrameworkObject):
             replay=ConcurrentStableFrozenDict(replay) if replay is not None else current.replay,
             replay_replayed=replay_replayed if replay_replayed is not None else current.replay_replayed,
             replay_failed=replay_failed if replay_failed is not None else current.replay_failed,
+            messages_in_window=(messages_in_window if messages_in_window is not None else current.messages_in_window),
+            window_seconds=window_seconds if window_seconds is not None else current.window_seconds,
         )
 
     def reset(self) -> None:
