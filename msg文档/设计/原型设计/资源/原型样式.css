@@ -1,30 +1,24 @@
 /**
  * msg 原型补充样式（在 bms《原型样式.css》之后加载）。
  *
- * 用途分两块：
- * 1. 外壳与布局（`app-shell` / `app-menu` / `app-body` / `metric-*` / `levels` 等）：供 03~08 六页
- *    使用。六页与 bms / mdm 原型同构，用本地 vendor 的 Vue 3 + Element Plus 真组件渲染，
- *    表格 / 按钮 / 分页 / 状态 / 空错态一律由组件提供，本文件只管外壳与少量排布。
- * 2. 手写公共类（`proto-header` / `proto-table` / `proto-button` / `state` / `banner` 等）：
- *    02 配额管理（05-2 交付）仍在使用，保留；01 总览同时使用 `layout` / `sidebar` / `content`。
+ * 页面原型（02 配额管理 + 03~08 六页）与 bms / mdm 原型同构：用本地 vendor 的
+ * Vue 3 + Element Plus 真组件渲染，表格 / 按钮 / 分页 / 空错态一律由组件提供。
+ * 本文件只负责三件事：
+ *   1. 外壳：顶部原型条右侧信息、黄色「原型演示」条、模拟宿主内容区的 `app-shell` 与菜单/正文容器；
+ *   2. 少量布局：页头、数字卡网格、延迟九档分布、分页行、区块标题、说明列表；
+ *   3. 状态徽标 `state` 与说明文字 `hint`（Element Plus 无对应组件的部分）。
+ *
+ * 01 总览页是文档式页面，用本文件的 `topnav` / `layout` / `sidebar` / `content`。
  *
  * 色板与控件观感对齐 bms / mdm 原型的 Element Plus + GitHub 风格：
  * 文本 #24292f、边框 #d0d7de、主色 #0969da、浅底 #f6f8fa。
  *
- * 工程约定（供后续补页面参考）：状态徽标统一用 `state` / `state ok|info|warn|hard` 类，
- * **不要用 `el-tag`** —— 在 file:// 静态页里 el-tag 会偶发卡在入场态
- * （`transform: scaleX(0)` + `opacity: 0`，占位为 0 宽），截图与阅读时表现为整列空白。
+ * 工程约定（供后续补页面参考）：
+ *   - 状态徽标统一用 `state` / `state ok|info|warn|hard` 类，**不要用 `el-tag`**
+ *     —— 在 file:// 静态页里 el-tag 会偶发卡在入场态（`transform: scaleX(0)` + `opacity: 0`，
+ *     占位为 0 宽），截图与阅读时表现为整列空白。
+ *   - 页面支持 `?scene=<状态>` 深链，便于评审与批量截图。
  */
-
-/* 设计令牌（原型内联样式大量引用；bms 原型样式用固定色值，未定义变量，这里补齐） */
-:root {
-  --bms-color-primary: #0969da;
-  --bms-color-border: #d0d7de;
-  --bms-color-text: #24292f;
-  --bms-color-text-secondary: #57606a;
-  --bms-color-bg: #ffffff;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
 
 /* 页面基础 */
 body {
@@ -37,339 +31,13 @@ body {
   line-height: 1.6;
 }
 
-/* 顶部原型条（深色，固定） */
-.proto-header {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: #24292f;
-  color: #fff;
-  font-size: 13px;
-  padding: 8px 20px;
-}
-.proto-header a {
-  color: #8cc9ff;
-}
-
-/* 内容区 */
-.proto-main {
-  max-width: 1320px;
-  margin: 0 auto;
-  padding: 20px 24px 48px;
-}
-.proto-main > h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: 600;
-}
-.proto-main > p {
-  margin: 0 0 16px;
-  color: #57606a;
-}
-
-/* 原型页签（状态切换） */
-.proto-nav {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin: 12px 0 16px;
-}
-.proto-nav a,
-.proto-nav span {
-  display: inline-block;
-  padding: 5px 12px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #fff;
-  color: #24292f;
-  font-size: 13px;
-  text-decoration: none;
-}
-.proto-nav a:hover {
-  border-color: #0969da;
-  color: #0969da;
-}
-.proto-nav a.is-active {
-  border-color: #0969da;
-  color: #0969da;
-  background: #ddf4ff;
-  font-weight: 600;
-}
-.proto-nav span {
-  color: #8c959f;
-  background: #fafbfc;
-}
-
-/* 状态切换按钮组 */
-.proto-states {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 12px 0 16px;
-}
-.proto-states button {
-  padding: 5px 12px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #fff;
-  color: #24292f;
-  font-size: 12px;
-  cursor: pointer;
-}
-.proto-states button:hover {
-  border-color: #0969da;
-  color: #0969da;
-}
-.proto-states button.is-active {
-  border-color: #0969da;
-  background: #0969da;
-  color: #fff;
-}
-
-/* 原型区块容器 */
-.proto-frame {
-  background: #fff;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  padding: 16px 20px;
-  margin: 0 0 16px;
-}
-.proto-page {
-  display: none;
-}
-.proto-page.is-active {
-  display: block;
-}
-
-/* 按钮 */
-.proto-button {
-  display: inline-block;
-  border: 1px solid #d0d7de;
-  background: #fff;
-  color: #24292f;
-  border-radius: 6px;
-  padding: 5px 14px;
-  font-size: 13px;
-  line-height: 1.6;
-  cursor: pointer;
-  user-select: none;
-}
-.proto-button:hover {
-  border-color: #0969da;
-  color: #0969da;
-}
-.proto-button--primary {
-  border-color: #0969da;
-  background: #0969da;
-  color: #fff;
-}
-.proto-button--primary:hover {
-  background: #0a5fc0;
-  border-color: #0a5fc0;
-  color: #fff;
-}
-
-/* 表格 */
-.proto-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: #fff;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  overflow: hidden;
-  font-size: 13px;
-  margin: 8px 0 12px;
-}
-.proto-table th,
-.proto-table td {
-  padding: 9px 12px;
-  border-bottom: 1px solid #eaeef2;
-  text-align: left;
-  vertical-align: top;
-  white-space: nowrap;
-}
-.proto-table th {
-  background: #f6f8fa;
-  color: #57606a;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.proto-table tbody tr:last-child td {
-  border-bottom: none;
-}
-.proto-table tbody tr:hover {
-  background: #f6f8fa;
-}
-.proto-table td.mono,
-.mono {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
-}
-
-/* 卡片与卡片网格 */
-.proto-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin: 12px 0;
-}
-.proto-card {
-  background: #fff;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  padding: 14px 16px;
-}
-.proto-card small {
-  display: block;
-  color: #57606a;
-  font-size: 12px;
-}
-.proto-card strong {
-  display: block;
-  margin: 6px 0 4px;
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-/* 行内操作条 */
-.row-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 0 0 12px;
-}
-
-/* 状态徽标 */
-.state {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 10px;
-  background: #eaeef2;
-  color: #57606a;
-  font-size: 12px;
-  line-height: 18px;
-}
-.state.ok {
-  background: #dafbe1;
-  color: #1a7f37;
-}
-.state.info {
-  background: #ddf4ff;
-  color: #0969da;
-}
-.state.warn,
-.state.soft {
-  background: #fff8c5;
-  color: #9a6700;
-}
-.state.hard,
-.state.bad {
-  background: #ffebe9;
-  color: #cf222e;
-}
-
-/* 提示与说明 */
-.hint {
-  color: #57606a;
-  font-size: 12px;
-  line-height: 1.7;
-}
-.banner {
-  background: #ddf4ff;
-  border-left: 4px solid #0969da;
-  border-radius: 4px;
-  padding: 10px 14px;
-  margin: 12px 0;
-  color: #1f2328;
-  font-size: 13px;
-}
-.later {
-  border: 1px dashed #d0d7de;
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-top: 14px;
-  color: #57606a;
-  font-size: 12px;
-  background: #fafbfc;
-}
-
-/* 分页条 */
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  gap: 4px;
-  margin: 12px 0 0;
-  font-size: 12px;
-  color: #57606a;
-}
-.pager .pp {
-  min-width: 26px;
-  padding: 2px 6px;
-  border: 1px solid #d0d7de;
-  border-radius: 4px;
-  text-align: center;
-  background: #fff;
-}
-.pager .pp.active {
-  background: #0969da;
-  border-color: #0969da;
-  color: #fff;
-}
-
-/* 延迟档位分布 */
-.levels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-  gap: 8px;
-  margin: 12px 0;
-}
-.level {
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  padding: 10px 12px;
-  background: #fff;
-  text-align: center;
-}
-.level b {
-  display: block;
-  font-size: 16px;
-}
-
-/* 页签（总览 / 页面内分组） */
-.proto-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid #d0d7de;
-  margin: 16px 0 12px;
-}
-.proto-tab {
-  padding: 6px 12px;
-  border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
-  color: #57606a;
-  text-decoration: none;
-  font-size: 13px;
-}
-.proto-tab.is-active {
-  color: #0969da;
-  border-bottom-color: #0969da;
-  font-weight: 600;
-}
-.proto-tabs-line {
-  border-bottom: 1px solid #d0d7de;
-  margin: 16px 0 12px;
-}
-
-/* ===== Element Plus 原型外壳（03~08 页：Vue 3 + Element Plus 真组件渲染） ===== */
-/* 顶部原型条右侧信息 */
+/* 顶部原型条右侧信息（左侧结构与配色来自 bms《原型样式.css》的 .proto-bar） */
 .proto-bar-right {
   margin-left: auto;
   color: #b6bec7;
 }
-/* 原型演示工具条（切换状态用，非产品界面） */
+
+/* 原型演示工具条（切换页面 / 状态用，非产品界面） */
 .proto-demo {
   display: flex;
   align-items: center;
@@ -388,6 +56,7 @@ body {
   font-weight: 600;
   color: #7d4e00;
 }
+
 /* 产品页面外壳（模拟宿主内容区） */
 .app-shell {
   max-width: 1320px;
@@ -403,6 +72,7 @@ body {
 .app-body {
   padding: 16px 20px 24px;
 }
+
 /* 页头（标题 + 右侧操作） */
 .page-head {
   display: flex;
@@ -429,6 +99,7 @@ body {
   align-items: center;
   flex-wrap: wrap;
 }
+
 /* 数字卡 */
 .metric-row {
   display: grid;
@@ -459,6 +130,7 @@ body {
   color: #8c959f;
   font-size: 12px;
 }
+
 /* 延迟九档分布 */
 .levels {
   display: grid;
@@ -479,7 +151,22 @@ body {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-/* 口径说明列表 */
+
+/* 分页行（右下对齐，总数由分页组件自带） */
+.pager-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* 表格内的紧凑区块标题 */
+.block-title {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 说明列表（配 el-alert 使用） */
 .note-list {
   margin: 0;
   padding-left: 18px;
@@ -487,29 +174,47 @@ body {
   font-size: 12px;
   line-height: 1.8;
 }
+
+/* 等宽字（log_id / 摘要 / trace_id） */
 .mono {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12px;
 }
-/* 分页行（右下对齐，总数由分页组件自带） */
-.pager-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
+
+/* 状态徽标（不用 el-tag，原因见文件头） */
+.state {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #eaeef2;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 18px;
 }
-/* 分区 / 消息头等表格内的紧凑区块标题 */
-.block-title {
-  margin: 16px 0 8px;
-  font-size: 14px;
-  font-weight: 600;
+.state.ok {
+  background: #dafbe1;
+  color: #1a7f37;
 }
-@media (max-width: 1100px) {
-  .metric-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .levels {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
+.state.info {
+  background: #ddf4ff;
+  color: #0969da;
+}
+.state.warn,
+.state.soft {
+  background: #fff8c5;
+  color: #9a6700;
+}
+.state.hard,
+.state.bad {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+/* 说明文字 */
+.hint {
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 /* 总览页布局（侧栏 + 正文） */
@@ -627,6 +332,15 @@ body {
 }
 .content li {
   margin: 4px 0;
+}
+
+@media (max-width: 1100px) {
+  .metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .levels {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {

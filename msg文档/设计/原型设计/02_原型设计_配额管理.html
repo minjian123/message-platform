@@ -4,104 +4,163 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 配额管理（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
     <link rel="stylesheet" href="资源/原型样式.css" />
-    <style>
-      .proto-tabs { display: flex; gap: 8px; margin: 16px 0; }
-      .proto-tab { padding: 6px 14px; border: 1px solid var(--bms-color-border); border-radius: 4px; cursor: pointer; background: #fff; }
-      .proto-tab.is-active { border-color: var(--bms-color-primary); color: var(--bms-color-primary); }
-      .proto-page { display: none; }
-      .proto-page.is-active { display: block; }
-      .proto-frame { border: 1px solid var(--bms-color-border); border-radius: 6px; padding: 16px; background: var(--bms-color-bg); }
-      .proto-tabs-line { display: flex; gap: 24px; border-bottom: 1px solid var(--bms-color-border); margin-bottom: 16px; }
-      .proto-tabs-line span { padding: 8px 0; color: var(--bms-color-text-secondary); }
-      .proto-tabs-line span.is-active { color: var(--bms-color-primary); border-bottom: 2px solid var(--bms-color-primary); }
-      .state { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
-      .state.ok { background: #f0f9eb; color: #67c23a; }
-      .state.soft { background: #fdf6ec; color: #e6a23c; }
-      .state.hard { background: #fef0f0; color: #f56c6c; }
-      .state.info { background: #f4f4f5; color: #909399; }
-      .hint { color: var(--bms-color-text-secondary); font-size: 12px; }
-      .row-actions { display: flex; gap: 8px; align-items: center; }
-    </style>
   </head>
   <body>
-    <header class="proto-header">
-      <span>原型设计 · 配额管理</span>
-    </header>
-    <main class="proto-main">
-      <h1>配额管理</h1>
-      <p>msg 消息平台 · 05-2 消息维度配额（租户只读页 + msg 管理模块调整页）</p>
-
-      <div class="proto-tabs">
-        <button class="proto-tab is-active" data-page="tenant">页面 1 · 租户记录页「消息配额」</button>
-        <button class="proto-tab" data-page="admin">页面 2 · msg 管理模块「配额管理」</button>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">配额管理（页面 07）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 05-2 消息维度配额</span>
       </div>
 
-      <section class="proto-page is-active" id="page-tenant">
-        <div class="proto-frame">
-          <div class="proto-tabs-line">
-            <span>详细信息</span>
-            <span class="is-active">消息配额</span>
-            <span>系统信息</span>
-          </div>
-          <p class="hint">只读页签：由 msg 前端插件注册在 `sys.record.detail.tabs`，按 `formKey=tenant` 显示；无编辑与保存。</p>
-          <table class="proto-table">
-            <thead>
-              <tr><th>配额维度</th><th>硬限</th><th>软限</th><th>用量</th><th>状态</th><th>更新时间</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>主题数</td><td>10</td><td>8</td><td>10</td><td><span class="state hard">已超限</span></td><td>2026-11-08 10:00</td></tr>
-              <tr><td>消费组数</td><td>100</td><td>80</td><td>12</td><td><span class="state ok">正常</span></td><td>2026-11-08 10:00</td></tr>
-              <tr><td>生产速率</td><td>1000/s</td><td>800/s</td><td>—</td><td><span class="state info">暂不可用</span></td><td>—</td></tr>
-              <tr><td>消息存储</td><td>1 GiB</td><td>819.2 MiB</td><td>900 MiB</td><td><span class="state soft">接近上限</span></td><td>—</td></tr>
-              <tr><td>未确认数</td><td>不限</td><td>—</td><td>128</td><td><span class="state info">未配置</span></td><td>—</td></tr>
-              <tr><td>连接数</td><td>5</td><td>4</td><td>2</td><td><span class="state ok">正常</span></td><td>2026-11-08 09:30</td></tr>
-            </tbody>
-          </table>
-          <p class="hint" style="margin-top: 12px">失败降级：请求失败时整块显示「暂不可用：无查询权限或服务未接入」，不阻断租户页其它内容。</p>
-        </div>
-      </section>
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="tenant">页面 1 · 租户记录页「消息配额」</el-radio-button>
+          <el-radio-button value="admin">页面 2 · msg 管理模块「配额管理」</el-radio-button>
+        </el-radio-group>
+        <span>页面切换条仅原型使用，不属于产品界面</span>
+      </div>
 
-      <section class="proto-page" id="page-admin">
-        <div class="proto-frame">
-          <div class="row-actions" style="justify-content: space-between; margin-bottom: 12px">
-            <div>
-              <label class="hint">作用域</label>
-              <select>
-                <option>租户级</option>
-                <option>msg（命名空间）</option>
-              </select>
+      <div class="app-shell">
+        <div class="app-body">
+          <!-- 页面 1：租户记录页「消息配额」只读页签 -->
+          <div v-if="scene === 'tenant'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户记录 · 消息配额</h2>
+                <p class="page-sub">
+                  只读页签：由 msg 前端插件注册在 <code>sys.record.detail.tabs</code>，按 <code>formKey=tenant</code> 显示；无编辑与保存
+                </p>
+              </div>
             </div>
-            <button class="proto-button proto-button--primary">保存调整</button>
+
+            <el-tabs v-model="hostTab">
+              <el-tab-pane label="详细信息" name="detail">
+                <p class="hint" style="margin: 8px 0">宿主自带页签（租户基本信息、状态、到期时间等），与配额无关。</p>
+              </el-tab-pane>
+              <el-tab-pane label="消息配额" name="quota">
+                <el-table :data="tenantRows" border stripe style="width: 100%">
+                  <el-table-column prop="dimension" label="配额维度" min-width="140"></el-table-column>
+                  <el-table-column prop="hard" label="硬限" width="120" align="right"></el-table-column>
+                  <el-table-column prop="soft" label="软限" width="120" align="right"></el-table-column>
+                  <el-table-column prop="used" label="用量" width="120" align="right"></el-table-column>
+                  <el-table-column label="状态" width="120">
+                    <template #default="{ row }">
+                      <span :class="row.cls">{{ row.status }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="updatedAt" label="更新时间" min-width="160"></el-table-column>
+                </el-table>
+                <p class="hint" style="margin-top: 12px">
+                  失败降级：请求失败时整块显示「暂不可用：无查询权限或服务未接入」，不阻断租户页其它内容。
+                </p>
+              </el-tab-pane>
+              <el-tab-pane label="系统信息" name="system">
+                <p class="hint" style="margin: 8px 0">宿主自带页签（记录标识、创建 / 更新时间等），与配额无关。</p>
+              </el-tab-pane>
+            </el-tabs>
           </div>
-          <table class="proto-table">
-            <thead>
-              <tr><th>配额维度</th><th>硬限</th><th>软限</th><th>当前用量</th><th>状态</th><th>来源</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>主题数</td><td><input value="10" /></td><td><input value="8" /></td><td>10</td><td><span class="state hard">已超限</span></td><td>已配置</td></tr>
-              <tr><td>消费组数</td><td><input value="100" /></td><td><input value="80" /></td><td>12</td><td><span class="state ok">正常</span></td><td>已配置</td></tr>
-              <tr><td>生产速率</td><td><input value="1000" /></td><td><input value="800" /></td><td>—</td><td><span class="state info">暂不可用</span></td><td>缺省</td></tr>
-              <tr><td>消息存储</td><td><input value="1073741824" /></td><td><input value="858993459" /></td><td>943718400</td><td><span class="state soft">接近上限</span></td><td>缺省</td></tr>
-              <tr><td>未确认数</td><td><input value="0" /></td><td><input value="0" /></td><td>128</td><td><span class="state info">未配置</span></td><td>缺省</td></tr>
-              <tr><td>连接数</td><td><input value="5" /></td><td><input value="4" /></td><td>2</td><td><span class="state ok">正常</span></td><td>已配置</td></tr>
-            </tbody>
-          </table>
-          <p class="hint" style="margin-top: 12px">保存即生效：批量校验（未知维度 / 软限 &gt; 硬限 / 负数 → 10001）；调整写审计 `msg:quota.update`，并即时失效配额缓存与同步限流器。</p>
-          <p class="hint">硬限 `0` 表示不限；软限留空表示按硬限 × 80% 派生；平台租户页只读，不提供调整入口。</p>
+
+          <!-- 页面 2：msg 管理模块「配额管理」调整页 -->
+          <div v-else>
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">配额管理</h2>
+                <p class="page-sub">调整生效即时：保存后失效配额缓存并同步限流器；平台租户页只读，不提供调整入口</p>
+              </div>
+              <div class="page-actions">
+                <span class="hint">作用域</span>
+                <el-select v-model="scope" style="width: 180px">
+                  <el-option label="租户级" value="tenant"></el-option>
+                  <el-option label="msg（命名空间）" value="namespace"></el-option>
+                </el-select>
+                <el-button type="primary" @click="saveQuota">保存调整</el-button>
+              </div>
+            </div>
+
+            <el-table :data="adminRows" border stripe style="width: 100%">
+              <el-table-column prop="dimension" label="配额维度" min-width="140"></el-table-column>
+              <el-table-column label="硬限" width="190">
+                <template #default="{ row }">
+                  <el-input v-model="row.hard" size="small"></el-input>
+                </template>
+              </el-table-column>
+              <el-table-column label="软限" width="190">
+                <template #default="{ row }">
+                  <el-input v-model="row.soft" size="small"></el-input>
+                </template>
+              </el-table-column>
+              <el-table-column prop="used" label="当前用量" width="130" align="right"></el-table-column>
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }">
+                  <span :class="row.cls">{{ row.status }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="origin" label="来源" min-width="110"></el-table-column>
+            </el-table>
+
+            <el-alert type="info" :closable="false" show-icon title="保存口径" style="margin-top: 12px">
+              <template #default>
+                <ul class="note-list">
+                  <li>批量校验：未知维度 / 软限 &gt; 硬限 / 负数 → <code>10001</code></li>
+                  <li>调整写审计 <code>msg:quota.update</code>，并即时失效配额缓存与同步限流器</li>
+                  <li>硬限 <code>0</code> 表示不限；软限留空表示按硬限 × 80% 派生</li>
+                  <li>平台租户页只读，不提供调整入口</li>
+                </ul>
+              </template>
+            </el-alert>
+          </div>
         </div>
-      </section>
-    </main>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
     <script>
-      document.querySelectorAll('.proto-tab').forEach((tab) => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.proto-tab').forEach((item) => item.classList.remove('is-active'))
-          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
-          tab.classList.add('is-active')
-          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
-        })
+      const { createApp, ref } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=tenant|admin 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['tenant', 'admin']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'tenant')
+          const hostTab = ref('quota')
+          const scope = ref('tenant')
+
+          const tenantRows = ref([
+            { dimension: '主题数', hard: '10', soft: '8', used: '10', status: '已超限', cls: 'state hard', updatedAt: '2026-11-08 10:00' },
+            { dimension: '消费组数', hard: '100', soft: '80', used: '12', status: '正常', cls: 'state ok', updatedAt: '2026-11-08 10:00' },
+            { dimension: '生产速率', hard: '1000/s', soft: '800/s', used: '—', status: '暂不可用', cls: 'state info', updatedAt: '—' },
+            { dimension: '消息存储', hard: '1 GiB', soft: '819.2 MiB', used: '900 MiB', status: '接近上限', cls: 'state soft', updatedAt: '—' },
+            { dimension: '未确认数', hard: '不限', soft: '—', used: '128', status: '未配置', cls: 'state info', updatedAt: '—' },
+            { dimension: '连接数', hard: '5', soft: '4', used: '2', status: '正常', cls: 'state ok', updatedAt: '2026-11-08 09:30' },
+          ])
+
+          const adminRows = ref([
+            { dimension: '主题数', hard: '10', soft: '8', used: '10', status: '已超限', cls: 'state hard', origin: '已配置' },
+            { dimension: '消费组数', hard: '100', soft: '80', used: '12', status: '正常', cls: 'state ok', origin: '已配置' },
+            { dimension: '生产速率', hard: '1000', soft: '800', used: '—', status: '暂不可用', cls: 'state info', origin: '缺省' },
+            { dimension: '消息存储', hard: '1073741824', soft: '858993459', used: '943718400', status: '接近上限', cls: 'state soft', origin: '缺省' },
+            { dimension: '未确认数', hard: '0', soft: '0', used: '128', status: '未配置', cls: 'state info', origin: '缺省' },
+            { dimension: '连接数', hard: '5', soft: '4', used: '2', status: '正常', cls: 'state ok', origin: '已配置' },
+          ])
+
+          function saveQuota() {
+            ElMessage.success(`已保存调整（原型演示，作用域：${scope.value === 'tenant' ? '租户级' : 'msg 命名空间'}）`)
+          }
+
+          return { scene, hostTab, scope, tenantRows, adminRows, saveQuota }
+        },
       })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
     </script>
   </body>
 </html>
