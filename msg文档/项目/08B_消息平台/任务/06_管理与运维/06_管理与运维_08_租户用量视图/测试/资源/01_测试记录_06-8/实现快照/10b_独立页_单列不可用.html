@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 租户用量 · 单列不可用</title>
+<link rel="stylesheet" href="../../../../../../../../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
+<style>
+:root{--bms-spacing-sm:8px;--bms-spacing-lg:16px;--bms-space-1:8px;--bms-space-2:12px;
+--bms-color-border:#dcdfe6;--bms-color-bg:#fff;--bms-radius-md:6px;--bms-radius-sm:4px;
+--bms-color-text:#303133;--bms-color-text-secondary:#909399;--bms-color-fill-light:#f5f7fa;
+--bms-font-size:13px;--bms-color-warning:#e6a23c}
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+.hint{color:#909399;font-size:12px}
+/* 以下为模块 scoped 样式在快照中的等价还原（快照不含构建期 data-v 属性） */
+.usage-cards{display:grid;gap:var(--bms-space-2)}
+.usage-cards--4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.usage-cards--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.bms-metric-card{display:flex;flex-direction:column;gap:var(--bms-spacing-sm);padding:var(--bms-spacing-lg);
+border:1px solid var(--bms-color-border);border-radius:var(--bms-radius-md);background:var(--bms-color-bg)}
+.bms-metric-card__header{display:flex;align-items:center;justify-content:space-between}
+.bms-metric-card__title{color:var(--bms-color-text-secondary);font-size:var(--bms-font-size)}
+.bms-metric-card__refresh{display:none}
+.bms-metric-card__value{display:flex;align-items:baseline;gap:var(--bms-spacing-sm)}
+.bms-metric-card__number{font-size:24px;font-weight:600}
+.bms-metric-card__unit{color:var(--bms-color-text-secondary);font-size:14px}
+.bms-metric-card__caption{color:var(--bms-color-text-secondary);font-size:12px}
+.bms-metric-card__placeholder{color:var(--bms-color-warning);font-size:14px}
+.usage-card__head{color:var(--bms-color-text-secondary);font-size:13px}
+.usage-card__degraded{color:var(--bms-color-warning);font-size:16px}
+.usage-card__note{color:var(--bms-color-text-secondary);font-size:12px}
+.usage-panel{display:flex;flex-direction:column;gap:var(--bms-space-2);min-height:160px}
+.usage-panel__hint{display:flex;align-items:center;gap:4px;margin:0;color:var(--bms-color-text-secondary);font-size:12px}
+.usage-panel__sep{opacity:.6}
+.usage-panel__actions{display:flex;justify-content:flex-end}
+.usage-note{margin-top:var(--bms-space-2);padding:var(--bms-space-2);border-radius:var(--bms-radius-sm);
+background:var(--bms-color-fill-light)}
+.usage-note__title{margin:0 0 var(--bms-space-1);font-size:13px;font-weight:600}
+.usage-note__list{margin:0;padding-left:18px;color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+.admin-page{display:flex;flex-direction:column;gap:var(--bms-space-2)}
+.admin-page__head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--bms-space-2)}
+.admin-page__hint{margin:0;color:var(--bms-color-text-secondary);font-size:12px}
+</style></head><body>
+<h1>实现渲染快照 · 租户用量 · 单列不可用</h1>
+<div class="frame"><section data-v-33b87360="" class="admin-page" data-test="page-usage">
+  <div data-v-33b87360="" class="admin-page__head">
+    <div data-v-33b87360="">
+      <h1 data-v-33b87360="">租户用量</h1>
+      <p data-v-33b87360="" class="admin-page__hint" data-test="usage-subtitle">当前租户的消息平台用量总量</p>
+    </div><button data-v-33b87360="" aria-disabled="false" type="button" class="el-button" data-test="usage-refresh">
+      <!--v-if--><span class="">重新加载</span>
+    </button>
+  </div>
+  <div data-v-b0688537="" data-v-33b87360="" class="usage-cards usage-cards--4" data-test="usage-cards" data-layout="4">
+    <div data-v-23066fe2="" data-v-b0688537="" class="bms-metric-card" data-test="usage-card-topic_count" data-ready="true" data-degraded="false">
+      <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">主题数</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+      <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+        <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">1,280</span>
+        <!--v-if-->
+      </div>
+      <!--v-if-->
+      <div data-v-23066fe2="" class="bms-metric-card__trend">
+        <!--v-if-->
+      </div>
+      <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">含停用主题</div>
+    </div>
+    <div data-v-23066fe2="" data-v-b0688537="" class="bms-metric-card" data-test="usage-card-partition_count" data-ready="true" data-degraded="false">
+      <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">分区数</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+      <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+        <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">15,360</span>
+        <!--v-if-->
+      </div>
+      <!--v-if-->
+      <div data-v-23066fe2="" class="bms-metric-card__trend">
+        <!--v-if-->
+      </div>
+      <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">全部主题的分区合计</div>
+    </div>
+    <div data-v-23066fe2="" data-v-b0688537="" class="bms-metric-card" data-test="usage-card-storage_bytes" data-ready="false" data-degraded="true">
+      <div data-v-b0688537="" class="usage-card__head" data-test="usage-card-head">消息存储</div>
+      <div data-v-b0688537="" class="usage-card__degraded" data-test="usage-card-degraded">暂不可用</div>
+      <div data-v-b0688537="" class="usage-card__note">数据目录占用</div>
+    </div>
+    <div data-v-23066fe2="" data-v-b0688537="" class="bms-metric-card" data-test="usage-card-delivered_today" data-ready="true" data-degraded="false">
+      <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">今日投递量</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+      <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+        <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">1,234,567</span>
+        <!--v-if-->
+      </div>
+      <!--v-if-->
+      <div data-v-23066fe2="" class="bms-metric-card__trend">
+        <!--v-if-->
+      </div>
+      <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">UTC 日计数</div>
+    </div>
+  </div>
+  <section data-v-33b87360="" class="usage-note" data-test="usage-note">
+    <h2 data-v-33b87360="" class="usage-note__title">口径说明</h2>
+    <ul data-v-33b87360="" class="usage-note__list">
+      <li data-v-33b87360="">主题数：含已停用主题，停用仍占元数据</li>
+      <li data-v-33b87360="">分区数：当前租户全部主题的分区合计</li>
+      <li data-v-33b87360="">消息存储：数据目录实际占用（含延迟消息）；采集失败显示「暂不可用」，不影响配额</li>
+      <li data-v-33b87360="">今日投递量：进程内 UTC 日计数，服务重启后从零累计</li>
+      <li data-v-33b87360="">数据来自消息平台用量端点，实时读取，不在前端重算</li>
+      <li data-v-33b87360="">趋势图走 bms Grafana，本页不自绘</li>
+    </ul>
+  </section>
+</section></div>
+</body></html>

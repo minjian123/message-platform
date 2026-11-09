@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 租户用量（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <link rel="stylesheet" href="资源/原型样式.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">租户用量（页面 10）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-8 租户用量视图</span>
+      </div>
+
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="page">独立页</el-radio-button>
+          <el-radio-button value="tab">租户记录页页签</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="partial">单列不可用</el-radio-button>
+          <el-radio-button value="error">请求失败</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+          <el-radio-button value="large">千分位与大值</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
+
+      <div class="app-shell">
+        <el-menu :default-active="activeNav" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl">主题授权</el-menu-item>
+          <el-menu-item index="usage">租户用量</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 独立页：就绪 -->
+          <div v-if="scene === 'page'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">
+                  取数 <code>GET /api/v1/msg/admin/tenant-usage</code>；挂 <code>msg:query</code>；
+                  四列顺序与展示名取自端点 <code>columns</code>，前端不重算
+                </p>
+              </div>
+              <div class="page-actions">
+                <el-button data-test="usage-refresh">刷新</el-button>
+              </div>
+            </div>
+
+            <div class="metric-row">
+              <el-card v-for="item in cards" :key="item.key" shadow="never">
+                <div class="metric-title">{{ item.label }}</div>
+                <div class="metric-value">{{ item.text }}</div>
+                <div class="metric-note">{{ item.caption }}</div>
+              </el-card>
+            </div>
+
+            <div class="block-title">口径说明</div>
+            <el-alert type="info" :closable="false" show-icon>
+              <template #title>四列口径</template>
+              <template #default>
+                <ul class="note-list">
+                  <li>主题数：含已停用主题，停用仍占元数据</li>
+                  <li>分区数：当前租户全部主题的分区合计</li>
+                  <li>消息存储：数据目录实际占用（含延迟消息）；采集失败显示「暂不可用」，不影响配额</li>
+                  <li>今日投递量：进程内 UTC 日计数，服务重启后从零累计</li>
+                  <li>数据来自消息平台用量端点，实时读取，不在前端重算</li>
+                  <li>趋势图走 bms Grafana，本页不自绘</li>
+                </ul>
+              </template>
+            </el-alert>
+          </div>
+
+          <!-- bms 租户记录页内嵌页签 -->
+          <div v-else-if="scene === 'tab'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户记录 · 消息用量</h2>
+                <p class="page-sub">
+                  bms 租户记录页 <code>sys.record.detail.tabs</code> 区域；与「消息配额」页签并列，
+                  本页签只看四列总量，配额页签看限额与软硬限状态
+                </p>
+              </div>
+            </div>
+
+            <el-tabs v-model="hostTab">
+              <el-tab-pane label="详细信息" name="detail">
+                <p class="hint" style="margin: 0">租户基本信息（bms 内置页签，原型不展开）</p>
+              </el-tab-pane>
+              <el-tab-pane label="消息配额" name="quota">
+                <p class="hint" style="margin: 0">限额 / 软硬限状态（05-2 已交付页签，原型不展开）</p>
+              </el-tab-pane>
+              <el-tab-pane label="消息用量" name="usage">
+                <div class="usage-hint">
+                  <span>按当前登录租户统计</span>
+                  <span class="usage-hint__sep">·</span>
+                  <span>记录页租户 2026011500001</span>
+                </div>
+                <el-row :gutter="12">
+                  <el-col v-for="item in cards" :key="item.key" :span="12">
+                    <el-card shadow="never" class="usage-card">
+                      <div class="metric-title">{{ item.label }}</div>
+                      <div class="metric-value">{{ item.text }}</div>
+                      <div class="metric-note">{{ item.caption }}</div>
+                    </el-card>
+                  </el-col>
+                </el-row>
+                <div class="usage-actions">
+                  <el-link type="primary" data-test="usage-open-page">打开用量页</el-link>
+                </div>
+              </el-tab-pane>
+              <el-tab-pane label="系统信息" name="sys">
+                <p class="hint" style="margin: 0">字段标识 / 创建人 / 创建时间（bms 内置页签，原型不展开）</p>
+              </el-tab-pane>
+            </el-tabs>
+          </div>
+
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">首次加载：四张数字卡显示骨架块，不显示旧值；刷新期间同样走骨架</p>
+              </div>
+              <div class="page-actions">
+                <el-button disabled>刷新</el-button>
+              </div>
+            </div>
+            <div class="metric-row">
+              <el-card v-for="n in 4" :key="n" shadow="never">
+                <el-skeleton :rows="2" animated />
+              </el-card>
+            </div>
+          </div>
+
+          <!-- 单列不可用 -->
+          <div v-else-if="scene === 'partial'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">
+                  存储采集失败时该列为 <code>null</code>，单卡降级为「暂不可用」；其余三列照常展示
+                </p>
+              </div>
+              <div class="page-actions">
+                <el-button>刷新</el-button>
+              </div>
+            </div>
+            <div class="metric-row">
+              <el-card v-for="item in partialCards" :key="item.key" shadow="never">
+                <div class="metric-title">{{ item.label }}</div>
+                <div class="metric-value" :class="{ 'is-degraded': item.degraded }">{{ item.text }}</div>
+                <div class="metric-note">{{ item.caption }}</div>
+              </el-card>
+            </div>
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="单列不可用不阻塞其它列，也不影响配额判定"
+              style="margin-top: 12px"
+            />
+          </div>
+
+          <!-- 请求失败 -->
+          <div v-else-if="scene === 'error'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">请求失败降级：页面给提示与重试，不显示半截数据</p>
+              </div>
+            </div>
+            <el-result icon="warning" title="查询失败" sub-title="消息平台服务未接入或当前会话已失效">
+              <template #extra>
+                <el-button type="primary">重新加载</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else-if="scene === 'denied'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">无 msg:query 时菜单与页签均不渲染；直接访问路径时页面给提示，不白屏</p>
+              </div>
+            </div>
+            <el-result icon="warning" title="无 msg:query 查询权限" sub-title="菜单项、页签与刷新入口均不渲染">
+              <template #extra>
+                <p class="hint" style="margin: 0">无权限时不做置灰处理</p>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 千分位与大值 -->
+          <div v-else>
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">租户用量</h2>
+                <p class="page-sub">
+                  计数千分位；字节按 1024 进制 B / KiB / MiB / GiB / TiB，非整数保留一位小数
+                </p>
+              </div>
+              <div class="page-actions">
+                <el-button>刷新</el-button>
+              </div>
+            </div>
+            <div class="metric-row">
+              <el-card v-for="item in largeCards" :key="item.key" shadow="never">
+                <div class="metric-title">{{ item.label }}</div>
+                <div class="metric-value">{{ item.text }}</div>
+                <div class="metric-note">{{ item.caption }}</div>
+              </el-card>
+            </div>
+            <p class="hint" style="margin: 12px 0 4px">数值对照（仅原型辅助，不属于产品界面）</p>
+            <el-descriptions :column="4" border>
+              <el-descriptions-item v-for="item in largeCards" :key="item.key" :label="item.label">
+                {{ item.text }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
+    <script>
+      const { createApp, ref, computed } = Vue
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['page', 'tab', 'loading', 'partial', 'error', 'denied', 'large']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'page')
+          const hostTab = ref('usage')
+          const activeNav = computed(() => (scene.value === 'tab' ? 'overview' : 'usage'))
+
+          /** 列元数据（正式实现取端点 columns[].label，原型按同一顺序固化）。 */
+          const COLUMNS = [
+            { key: 'topic_count', label: '主题数', caption: '含停用主题' },
+            { key: 'partition_count', label: '分区数', caption: '全部主题的分区合计' },
+            { key: 'storage_bytes', label: '消息存储', caption: '数据目录占用' },
+            { key: 'delivered_today', label: '今日投递量', caption: 'UTC 日计数' },
+          ]
+
+          /** 就绪数据。 */
+          const VALUES = { topic_count: 24, partition_count: 96, storage_bytes: 3650722201, delivered_today: 182430 }
+          /** 大值数据。 */
+          const LARGE_VALUES = { topic_count: 1280, partition_count: 15360, storage_bytes: 9610825277440, delivered_today: 1234567 }
+          /** 单列不可用数据。 */
+          const PARTIAL_VALUES = { topic_count: 24, partition_count: 96, storage_bytes: null, delivered_today: 182430 }
+
+          function formatCount(value) {
+            return new Intl.NumberFormat('zh-CN').format(value)
+          }
+
+          function formatBytes(value) {
+            const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+            let amount = value
+            let index = 0
+            while (amount >= 1024 && index < units.length - 1) {
+              amount /= 1024
+              index += 1
+            }
+            return `${Number.isInteger(amount) ? amount : amount.toFixed(1)} ${units[index]}`
+          }
+
+          function textOf(key, value) {
+            if (value === null || value === undefined) {
+              return '暂不可用'
+            }
+            return key === 'storage_bytes' ? formatBytes(value) : formatCount(value)
+          }
+
+          function buildColumns(values) {
+            return COLUMNS.map((column) => ({
+              ...column,
+              text: textOf(column.key, values[column.key]),
+              degraded: values[column.key] === null || values[column.key] === undefined,
+            }))
+          }
+
+          const cards = buildColumns(VALUES)
+          const partialCards = buildColumns(PARTIAL_VALUES)
+          const largeCards = buildColumns(LARGE_VALUES)
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+            acl: '09_原型设计_主题授权.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          return { scene, hostTab, activeNav, cards, partialCards, largeCards, onNav }
+        },
+      })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
+    </script>
+
+    <style>
+      .usage-hint {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-bottom: 8px;
+        color: var(--bms-color-text-secondary);
+        font-size: 12px;
+      }
+      .usage-hint__sep {
+        opacity: 0.6;
+      }
+      .usage-card {
+        margin-bottom: 12px;
+      }
+      .usage-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .is-degraded {
+        color: var(--bms-color-text-secondary);
+        font-size: 16px;
+      }
+    </style>
+  </body>
+</html>
