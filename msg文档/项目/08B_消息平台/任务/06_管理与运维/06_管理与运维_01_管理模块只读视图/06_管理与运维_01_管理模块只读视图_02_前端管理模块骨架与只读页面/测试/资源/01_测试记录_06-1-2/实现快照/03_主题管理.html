@@ -18,8 +18,11 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 03 · 主题管理</h1>
 <div class="frame"><section data-v-020e1dd2="" class="admin-page" data-test="page-topics">
-  <h1 data-v-020e1dd2="">主题管理</h1>
-  <p data-v-020e1dd2="" class="admin-page__hint">新建主题归 06-2，本页只读</p>
+  <div data-v-020e1dd2="" class="admin-page__head">
+    <h1 data-v-020e1dd2="">主题管理</h1><button data-v-020e1dd2="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="topics-create">
+      <!--v-if--><span class="">新建主题</span>
+    </button>
+  </div>
   <section data-v-2f1cb3c3="" data-v-020e1dd2="" class="readonly-list" data-test="readonly-list" data-state="ready">
     <header data-v-2f1cb3c3="" class="readonly-list__head">
       <h2 data-v-2f1cb3c3="">主题管理</h2>
@@ -36,7 +39,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
         <!--v-if-->
         <div class="el-input__wrapper" tabindex="-1">
           <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="topics-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-393-0"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+          <!--v-if--><input class="el-input__inner" data-test="topics-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-8451-2"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
         </div><!-- append slot -->
         <!--v-if-->
       </div>
@@ -46,7 +49,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
         <!--v-if-->
         <div class="el-input__wrapper" tabindex="-1">
           <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="topics-keyword" type="text" autocomplete="off" tabindex="0" placeholder="名称关键字" id="el-id-393-1"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+          <!--v-if--><input class="el-input__inner" data-test="topics-keyword" type="text" autocomplete="off" tabindex="0" placeholder="名称关键字" id="el-id-8451-3"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
         </div><!-- append slot -->
         <!--v-if-->
       </div><button data-v-020e1dd2="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="topics-query">
@@ -208,5 +211,12 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
           </svg></i></button>
     </div>
   </section>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2001; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="新建主题" aria-describedby="el-id-8451-1" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
 </section></div>
 </body></html>

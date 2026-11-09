@@ -18,7 +18,18 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 03b · 主题详情</h1>
 <div class="frame"><section data-v-be821548="" class="admin-page" data-test="page-topic-detail">
-  <h1 data-v-be821548="">order.created</h1>
+  <div data-v-be821548="" class="admin-page__head">
+    <h1 data-v-be821548="">order.created</h1>
+    <div data-v-be821548="" class="admin-page__actions"><button data-v-be821548="" aria-disabled="false" type="button" class="el-button" data-test="topic-expand">
+        <!--v-if--><span class="">扩分区</span>
+      </button><button data-v-be821548="" aria-disabled="false" type="button" class="el-button" data-test="topic-retention">
+        <!--v-if--><span class="">改保留期</span>
+      </button><button data-v-be821548="" aria-disabled="false" type="button" class="el-button el-button--danger is-plain" data-test="topic-delete">
+        <!--v-if--><span class="">删除主题（不可恢复）</span>
+      </button></div>
+  </div>
+  <!--v-if-->
+  <!--v-if-->
   <!--v-if-->
   <div data-v-be821548="" class="el-descriptions el-descriptions--small" data-test="topic-detail-meta">
     <!--v-if-->
@@ -45,6 +56,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
       </table>
     </div>
   </div>
+  <!--v-if-->
   <section data-v-2f1cb3c3="" data-v-be821548="" class="readonly-list" data-test="readonly-list" data-state="ready">
     <header data-v-2f1cb3c3="" class="readonly-list__head">
       <h2 data-v-2f1cb3c3="">分区明细</h2>
@@ -118,7 +130,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
                     </div>
                   </th>
                   <th class="el-table_2_column_13 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
-                    <div class="cell">msg.admin.partitions.lag
+                    <div class="cell">积压
                       <!---->
                       <!---->
                     </div>
@@ -264,5 +276,27 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
     </div>
     <!--v-if-->
   </section>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="扩分区" aria-describedby="el-id-8451-9" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2002; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="改保留期" aria-describedby="el-id-8451-5" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2003; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="删除主题（不可恢复）" aria-describedby="el-id-8451-7" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--v-if-->
 </section></div>
 </body></html>

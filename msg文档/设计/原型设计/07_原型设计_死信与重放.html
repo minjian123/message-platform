@@ -12,14 +12,16 @@
     <div id="app">
       <div class="proto-bar">
         <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
-        <span class="pb-name">死信与重放（页面 06 · 只读入口）</span>
-        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-1-2 只读视图</span>
+        <span class="pb-name">死信与重放（页面 06 · 06-5 处置）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-5-2 查询处置接口与页面</span>
       </div>
 
       <div class="proto-demo">
         <span class="pd-label">原型演示</span>
         <el-radio-group v-model="scene" size="small">
-          <el-radio-button value="list">只读列表</el-radio-button>
+          <el-radio-button value="list">列表</el-radio-button>
+          <el-radio-button value="detail">详情抽屉</el-radio-button>
+          <el-radio-button value="dispose">处置确认</el-radio-button>
           <el-radio-button value="loading">加载态</el-radio-button>
           <el-radio-button value="empty">空态</el-radio-button>
           <el-radio-button value="error">错误态</el-radio-button>
@@ -42,28 +44,45 @@
         </el-menu>
 
         <div class="app-body">
-          <!-- 只读列表 -->
-          <div v-if="scene === 'list'">
+          <!-- 列表 / 详情 / 处置共用同一页 -->
+          <div v-if="scene === 'list' || scene === 'detail' || scene === 'dispose'">
             <div class="page-head">
               <div>
                 <h2 class="page-title">死信与重放</h2>
-                <p class="page-sub">只读入口：两张只读表；写操作与处置交互归 06-2 / 06-5 / 06-6</p>
+                <p class="page-sub">
+                  死信可按状态 / 原因 / 主题 / 分区 / 时间 / 关键字筛选；重放、忽略、归档均挂 <code>msg:manage</code> 并二次确认。
+                </p>
               </div>
             </div>
 
             <el-form :inline="true" @submit.prevent>
               <el-form-item label="主题">
-                <el-select v-model="query.topic" style="width: 180px">
+                <el-select v-model="query.topic" style="width: 170px">
                   <el-option label="全部" value=""></el-option>
                   <el-option label="order.created" value="order.created"></el-option>
+                  <el-option label="invoice.issued" value="invoice.issued"></el-option>
                 </el-select>
               </el-form-item>
               <el-form-item label="状态">
-                <el-select v-model="query.status" style="width: 160px">
-                  <el-option label="全部" value=""></el-option>
+                <el-select v-model="query.status" style="width: 150px">
+                  <el-option label="全部（不含归档）" value=""></el-option>
                   <el-option label="待处置" value="pending"></el-option>
+                  <el-option label="重放中" value="replaying"></el-option>
                   <el-option label="已解决" value="resolved"></el-option>
+                  <el-option label="已忽略" value="ignored"></el-option>
+                  <el-option label="已归档" value="archived"></el-option>
                 </el-select>
+              </el-form-item>
+              <el-form-item label="原因">
+                <el-select v-model="query.reason" style="width: 150px">
+                  <el-option label="全部" value=""></el-option>
+                  <el-option label="重投超限" value="delivery_exhausted"></el-option>
+                  <el-option label="反序列化失败" value="schema_invalid"></el-option>
+                  <el-option label="消费端异常" value="processing_failed"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="关键字">
+                <el-input v-model="query.keyword" placeholder="log_id / message_id" style="width: 190px" clearable />
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" @click="applyFilter">查询</el-button>
@@ -71,27 +90,52 @@
               </el-form-item>
             </el-form>
 
-            <div class="block-title" style="margin-top: 4px">死信（只读）</div>
-            <el-table :data="dlq" border stripe style="width: 100%">
-              <el-table-column label="log_id" width="130">
-                <template #default="{ row }"><span class="mono">{{ row.logId }}</span></template>
-              </el-table-column>
-              <el-table-column prop="topicPartition" label="主题 / 分区" min-width="180"></el-table-column>
-              <el-table-column prop="originOffset" label="原 offset" width="120" align="right"></el-table-column>
-              <el-table-column prop="reason" label="原因" min-width="140"></el-table-column>
-              <el-table-column prop="retries" label="重试次数" width="100" align="right"></el-table-column>
-              <el-table-column label="状态" width="110">
+            <div class="block-title" style="margin-top: 4px">死信</div>
+            <el-table :data="dlq" border stripe style="width: 100%" empty-text="暂无死信">
+              <el-table-column label="log_id" width="132">
                 <template #default="{ row }">
-                  <span class="state warn">{{ row.status }}</span>
+                  <el-link type="primary" class="mono" @click="openDetail(row)">{{ row.logId }}</el-link>
                 </template>
               </el-table-column>
-              <el-table-column label="trace_id" min-width="130">
+              <el-table-column prop="topicPartition" label="主题 / 分区" min-width="180"></el-table-column>
+              <el-table-column prop="originOffset" label="原 offset" width="112" align="right"></el-table-column>
+              <el-table-column label="原因" min-width="130">
+                <template #default="{ row }">{{ reasonText(row.reason) }}</template>
+              </el-table-column>
+              <el-table-column prop="retries" label="重试次数" width="96" align="right"></el-table-column>
+              <el-table-column label="状态" width="104">
+                <template #default="{ row }">
+                  <span :class="['state', statusClass(row.status)]">{{ statusText(row.status) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="失败时间" width="168">
+                <template #default="{ row }"><span class="mono">{{ row.failedAt }}</span></template>
+              </el-table-column>
+              <el-table-column label="trace_id" min-width="120">
                 <template #default="{ row }"><span class="mono">{{ row.traceId }}</span></template>
+              </el-table-column>
+              <el-table-column label="操作" width="230" fixed="right">
+                <template #default="{ row }">
+                  <template v-if="canManage">
+                    <el-button v-if="row.status === 'pending'" link type="primary" @click="openDispose(row, 'replay')">重放</el-button>
+                    <el-button v-if="row.status === 'pending'" link type="warning" @click="openDispose(row, 'ignore')">忽略</el-button>
+                    <el-button
+                      v-if="row.status === 'pending' || row.status === 'ignored' || row.status === 'resolved'"
+                      link
+                      type="info"
+                      @click="openDispose(row, 'archive')"
+                    >
+                      归档
+                    </el-button>
+                    <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+                  </template>
+                  <span v-else class="hint">无处置权限</span>
+                </template>
               </el-table-column>
             </el-table>
 
-            <div class="block-title">重放任务（只读）</div>
-            <el-table :data="replays" border stripe style="width: 100%">
+            <div class="block-title">重放任务</div>
+            <el-table :data="replays" border stripe style="width: 100%" empty-text="暂无重放任务">
               <el-table-column prop="task" label="任务" width="120"></el-table-column>
               <el-table-column prop="target" label="目标主题" min-width="160"></el-table-column>
               <el-table-column prop="condition" label="条件" min-width="150"></el-table-column>
@@ -106,19 +150,18 @@
               </el-table-column>
             </el-table>
 
-            <el-alert type="info" :closable="false" show-icon title="后续任务占位（本页不提供可交互控件）" style="margin-top: 12px">
+            <el-alert type="info" :closable="false" show-icon title="边界说明" style="margin-top: 12px">
               <template #default>
                 <ul class="note-list">
-                  <li>死信处置（重放 / 忽略 / 归档 + 二次确认）归 06-5</li>
-                  <li>重放任务的创建 / 暂停 / 恢复 / 取消与限速、进度联动归 06-6</li>
-                  <li>写操作归 06-2</li>
-                  <li>本任务只搭导航与只读入口，不重复搭壳；后续任务在骨架上追加页面与交互原型</li>
+                  <li>重放复用 01-6 任务化重放：按该死信所在分区 / offset 建单条任务，默认 100 条/秒，可调 1~1000。</li>
+                  <li>忽略必须填写原因；归档只改状态并从活跃列表隐藏，原始消息仍在日志保留期内可查。</li>
+                  <li>重放任务的创建 / 暂停 / 恢复 / 取消与进度联动归 06-6；写操作归 06-2。</li>
                 </ul>
               </template>
             </el-alert>
 
             <p class="hint" style="margin-top: 12px">
-              权限：只读列表挂 <code>msg:query</code>；后续写操作挂 <code>msg:manage</code>。无权限时菜单 / 按钮不渲染而非置灰。
+              权限：查询挂 <code>msg:query</code>；重放 / 忽略 / 归档挂 <code>msg:manage</code>。无权限时操作列不渲染而非置灰。
             </p>
           </div>
 
@@ -133,10 +176,10 @@
           <!-- 空态 -->
           <div v-else-if="scene === 'empty'">
             <h2 class="page-title">死信与重放</h2>
-            <div class="block-title" style="margin-top: 4px">死信（只读）</div>
-            <el-empty description="暂无记录" :image-size="72"></el-empty>
-            <div class="block-title">重放任务（只读）</div>
-            <el-empty description="暂无记录" :image-size="72"></el-empty>
+            <div class="block-title" style="margin-top: 4px">死信</div>
+            <el-empty description="暂无死信" :image-size="72"></el-empty>
+            <div class="block-title">重放任务</div>
+            <el-empty description="暂无重放任务" :image-size="72"></el-empty>
             <p class="hint">两张表独立判空，不互相影响。</p>
           </div>
 
@@ -156,6 +199,54 @@
           </div>
         </div>
       </div>
+
+      <!-- 详情抽屉 -->
+      <el-drawer v-model="detail.visible" title="死信详情" size="480px" data-test="dlq-detail-drawer">
+        <el-descriptions v-if="detail.row" :column="1" border size="small">
+          <el-descriptions-item label="死信 ID">{{ detail.row.logId }}</el-descriptions-item>
+          <el-descriptions-item label="message_id">{{ detail.row.messageId }}</el-descriptions-item>
+          <el-descriptions-item label="主题 / 分区">{{ detail.row.topicPartition }}</el-descriptions-item>
+          <el-descriptions-item label="原 offset">{{ detail.row.originOffset }}</el-descriptions-item>
+          <el-descriptions-item label="原因">{{ reasonText(detail.row.reason) }}</el-descriptions-item>
+          <el-descriptions-item label="重试次数">{{ detail.row.retries }}</el-descriptions-item>
+          <el-descriptions-item label="失败时间">{{ detail.row.failedAt }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ statusText(detail.row.status) }}</el-descriptions-item>
+          <el-descriptions-item label="重放任务">{{ detail.row.replayTaskId || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="处置原因">{{ detail.row.dispositionReason || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="处置时间">{{ detail.row.disposedAt || '—' }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="block-title" style="margin-top: 16px">失败上下文</div>
+        <pre class="code-block">{{ detail.row ? detail.row.detail : '' }}</pre>
+        <template #footer>
+          <el-button @click="detail.visible = false">关闭</el-button>
+        </template>
+      </el-drawer>
+
+      <!-- 处置确认 -->
+      <el-dialog v-model="dialog.visible" :title="dialogTitle()" width="460px" data-test="dlq-dispose-dialog">
+        <p v-if="dialog.row" class="hint" style="margin-top: 0">
+          影响范围：{{ dialog.row.topicPartition }} · offset {{ dialog.row.originOffset }} · log_id {{ dialog.row.logId }}
+        </p>
+        <el-form v-if="dialog.action === 'replay'" label-width="96px">
+          <el-form-item label="重放速率">
+            <el-input-number v-model="dialog.rate" :min="1" :max="1000" :step="100" />
+            <span class="hint" style="margin-left: 8px">条/秒（默认 100）</span>
+          </el-form-item>
+        </el-form>
+        <el-form v-if="dialog.action === 'ignore'" label-width="96px">
+          <el-form-item label="忽略原因" required>
+            <el-input v-model="dialog.reason" type="textarea" :rows="3" maxlength="256" show-word-limit placeholder="必填，1~256 字" />
+          </el-form-item>
+        </el-form>
+        <p v-if="dialog.action === 'archive'" class="hint">
+          归档后该死信从活跃列表隐藏；原始消息仍在日志保留期内可查，操作会写入审计链。
+        </p>
+        <p v-if="dialog.error" class="state danger">{{ dialog.error }}</p>
+        <template #footer>
+          <el-button @click="dialog.visible = false">取消</el-button>
+          <el-button type="primary" @click="confirmDispose">确认{{ actionText(dialog.action) }}</el-button>
+        </template>
+      </el-dialog>
     </div>
 
     <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
@@ -168,18 +259,130 @@
       createApp({
         setup() {
           /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
-          const SCENES = ['list', 'loading', 'empty', 'error', 'denied']
+          const SCENES = ['list', 'detail', 'dispose', 'loading', 'empty', 'error', 'denied']
           const wanted = new URLSearchParams(window.location.search).get('scene')
           const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
           const activeNav = ref('dlq')
-          const query = reactive({ topic: '', status: '' })
+          /** 原型中的权限开关：list/detail/dispose 场景默认有 msg:manage；denied 场景整页不渲染。 */
+          const canManage = ref(true)
+          const query = reactive({ topic: '', status: '', reason: '', keyword: '' })
+
           const dlq = ref([
-            { logId: '01J8Y9…', topicPartition: 'order.created / 1', originOffset: '18,004', reason: '消费端异常', retries: 5, status: '待处置', traceId: '4bf92f…' },
-            { logId: '01J8Y7…', topicPartition: 'invoice.issued / 0', originOffset: '8,912', reason: '反序列化失败', retries: 5, status: '待处置', traceId: '91c0a3…' },
+            {
+              logId: '01J8Y9…',
+              messageId: 'msg-7f31a2',
+              topicPartition: 'order.created / 1',
+              originOffset: '18,004',
+              reason: 'processing_failed',
+              retries: 5,
+              status: 'pending',
+              failedAt: '2026-11-09 10:42:18',
+              traceId: '4bf92f…',
+              replayTaskId: '',
+              dispositionReason: '',
+              disposedAt: '',
+              detail: '{\n  "error": "NullPointerException",\n  "consumer": "order-sync"\n}',
+            },
+            {
+              logId: '01J8Y7…',
+              messageId: 'msg-5c09e1',
+              topicPartition: 'invoice.issued / 0',
+              originOffset: '8,912',
+              reason: 'schema_invalid',
+              retries: 5,
+              status: 'pending',
+              failedAt: '2026-11-09 09:18:03',
+              traceId: '91c0a3…',
+              replayTaskId: '',
+              dispositionReason: '',
+              disposedAt: '',
+              detail: '{\n  "field": "amount",\n  "expected": "number"\n}',
+            },
+            {
+              logId: '01J8X2…',
+              messageId: 'msg-3a77bd',
+              topicPartition: 'order.created / 0',
+              originOffset: '17,442',
+              reason: 'delivery_exhausted',
+              retries: 5,
+              status: 'ignored',
+              failedAt: '2026-11-08 16:05:44',
+              traceId: '2d8e11…',
+              replayTaskId: '',
+              dispositionReason: '上游已确认该批次数据作废',
+              disposedAt: '2026-11-08 17:20:00',
+              detail: '{}',
+            },
           ])
           const replays = ref([
             { task: 'rp-0007', target: 'order.created', condition: 'offset 100~200', rate: '500/s', progress: 62, status: '运行中' },
           ])
+
+          const detail = reactive({ visible: false, row: null })
+          const dialog = reactive({ visible: false, row: null, action: 'replay', rate: 100, reason: '', error: '' })
+
+          function statusText(value) {
+            return {
+              pending: '待处置',
+              replaying: '重放中',
+              resolved: '已解决',
+              ignored: '已忽略',
+              archived: '已归档',
+            }[value] || value
+          }
+          function statusClass(value) {
+            return { pending: 'warn', replaying: 'info', resolved: 'ok', ignored: 'info', archived: 'muted' }[value] || 'info'
+          }
+          function reasonText(value) {
+            return {
+              delivery_exhausted: '重投超限',
+              schema_invalid: '反序列化失败',
+              processing_failed: '消费端异常',
+            }[value] || value
+          }
+          function actionText(value) {
+            return { replay: '重放', ignore: '忽略', archive: '归档' }[value] || '处置'
+          }
+          function dialogTitle() {
+            return `${actionText(dialog.action)}死信`
+          }
+
+          function openDetail(row) {
+            detail.row = row
+            detail.visible = true
+          }
+          function openDispose(row, action) {
+            dialog.row = row
+            dialog.action = action
+            dialog.rate = 100
+            dialog.reason = ''
+            dialog.error = ''
+            dialog.visible = true
+          }
+          function confirmDispose() {
+            if (dialog.action === 'ignore' && !dialog.reason.trim()) {
+              dialog.error = '忽略原因必填（1~256 字）'
+              return
+            }
+            if (dialog.action === 'replay' && (!dialog.rate || dialog.rate < 1 || dialog.rate > 1000)) {
+              dialog.error = '重放速率须在 1~1000 条/秒'
+              return
+            }
+            const row = dialog.row
+            if (dialog.action === 'replay') {
+              row.status = 'replaying'
+              row.replayTaskId = 'rp-0008'
+            } else if (dialog.action === 'ignore') {
+              row.status = 'ignored'
+              row.dispositionReason = dialog.reason.trim()
+              row.disposedAt = '2026-11-09 11:00:00'
+            } else {
+              row.status = 'archived'
+              row.disposedAt = '2026-11-09 11:00:00'
+            }
+            dialog.visible = false
+            ElMessage.success(`${actionText(dialog.action)}已提交（原型演示）`)
+          }
 
           const navMap = {
             overview: '03_原型设计_平台概览.html',
@@ -195,17 +398,41 @@
             const href = navMap[index]
             if (href) window.location.href = href
           }
-
           function applyFilter() {
             ElMessage.success('查询完成（原型演示）')
           }
-
           function resetFilter() {
             query.topic = ''
             query.status = ''
+            query.reason = ''
+            query.keyword = ''
           }
 
-          return { scene, activeNav, query, dlq, replays, onNav, applyFilter, resetFilter }
+          /** 深链场景：进入页面即展示对应交互，便于逐页截图核对。 */
+          if (scene.value === 'detail') openDetail(dlq.value[0])
+          if (scene.value === 'dispose') openDispose(dlq.value[0], 'replay')
+
+          return {
+            scene,
+            activeNav,
+            canManage,
+            query,
+            dlq,
+            replays,
+            detail,
+            dialog,
+            statusText,
+            statusClass,
+            reasonText,
+            actionText,
+            dialogTitle,
+            openDetail,
+            openDispose,
+            confirmDispose,
+            onNav,
+            applyFilter,
+            resetFilter,
+          }
         },
       })
         .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
