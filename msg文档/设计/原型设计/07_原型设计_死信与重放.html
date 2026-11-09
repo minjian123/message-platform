@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>原型设计 · 死信与重放（msg 消息平台）</title>
     <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <link rel="stylesheet" href="资源/原型样式.css" />
     <style>
       .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
       .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
@@ -12,10 +13,10 @@
       .proto-nav span{opacity:.5}
       .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
       .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);background:var(--bms-color-primary);color:#fff}
       .proto-page{display:none}.proto-page.is-active{display:block}
       .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
-      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      .row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap;margin-bottom:12px}
       .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
       .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#f4f4f5;color:#909399}
       .later{border:1px dashed var(--bms-color-border);border-radius:6px;padding:12px;margin-top:14px;color:var(--bms-color-text-secondary);font-size:12px}
@@ -50,14 +51,14 @@
           <table class="proto-table">
             <thead><tr><th>log_id</th><th>主题 / 分区</th><th>原 offset</th><th>原因</th><th>重试次数</th><th>状态</th><th>trace_id</th></tr></thead>
             <tbody>
-              <tr><td>01J8Y9…</td><td>order.created / 1</td><td>18,004</td><td>消费端异常</td><td>5</td><td><span class="state">待处置</span></td><td>4bf92f…</td></tr>
-              <tr><td>01J8Y7…</td><td>invoice.issued / 0</td><td>8,912</td><td>反序列化失败</td><td>5</td><td><span class="state">待处置</span></td><td>91c0a3…</td></tr>
+              <tr><td>01J8Y9…</td><td>order.created / 1</td><td>18,004</td><td>消费端异常</td><td>5</td><td><span class="state warn">待处置</span></td><td>4bf92f…</td></tr>
+              <tr><td>01J8Y7…</td><td>invoice.issued / 0</td><td>8,912</td><td>反序列化失败</td><td>5</td><td><span class="state warn">待处置</span></td><td>91c0a3…</td></tr>
             </tbody>
           </table>
           <h2 style="margin-top:18px">重放任务（只读）</h2>
           <table class="proto-table">
             <thead><tr><th>任务</th><th>目标主题</th><th>条件</th><th>速率上限</th><th>进度</th><th>状态</th></tr></thead>
-            <tbody><tr><td>rp-0007</td><td>order.created</td><td>offset 100~200</td><td>500/s</td><td>62%</td><td><span class="state">运行中</span></td></tr></tbody>
+            <tbody><tr><td>rp-0007</td><td>order.created</td><td>offset 100~200</td><td>500/s</td><td>62%</td><td><span class="state info">运行中</span></td></tr></tbody>
           </table>
           <div class="later">
             <strong>后续任务占位（本页不提供可交互控件）</strong><br />
