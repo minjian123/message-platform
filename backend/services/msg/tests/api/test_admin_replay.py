@@ -42,10 +42,13 @@ from bms_msg.api.admin import replay as admin_replay
 from bms_msg.api.admin import topics
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.group import ConsumerGroup, InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner
 from bms_msg.errors import MsgErrorCode
+from bms_msg.repositories.replay import ReplayTaskRepository
+from bms_msg.tenant.context import CurrentTenant
 from tests_support.frame_app import install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2418)
@@ -173,6 +176,7 @@ def api_app(db_session: AsyncSession, tenant_source: object) -> FastAPI:
     app.state.message_store = InMemoryMessageStore()
     install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
+    app.state.group_store = InMemoryGroupStore()
     app.state.dead_letter_queue = InMemoryDeadLetterQueue()
     app.state.delivery_state = DeliveryState()
     sink = RecordingSink()
@@ -442,3 +446,100 @@ async def test_permission_denied_blocks_create(client: AsyncClient, api_app: Fas
     response = await _create_replay(client)
 
     assert (response.status_code, _body(response)["code"]) == (403, 30001)
+
+
+async def _seed_group(api_app: FastAPI, *, topic_id: int, tenant_id: int, group: str = "g1") -> None:
+    """向组存储写入一个空组（影响基线按组订阅关系解析）。
+
+    Args:
+        api_app: 应用实例。
+        topic_id: 主题主键。
+        tenant_id: 租户主键。
+        group: 组名。
+    """
+    await cast("InMemoryGroupStore", api_app.state.group_store).save(
+        ConsumerGroup(
+            tenant_id=tenant_id,
+            topic_id=topic_id,
+            group=group,
+            state="empty",
+            generation=1,
+            members=ConcurrentStableList(),
+        )
+    )
+
+
+def _affected(response: Response) -> ConcurrentStableList[ConcurrentStableDict[str, object]]:
+    """取详情响应的影响段。
+
+    Args:
+        response: 响应。
+
+    Returns:
+        ConcurrentStableList[ConcurrentStableDict[str, object]]: 影响行。
+    """
+    return ConcurrentStableList(
+        ConcurrentStableDict(item) for item in cast("list[dict[str, object]]", _data(response)["affected_groups"])
+    )
+
+
+async def test_detail_reports_affected_groups(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant
+) -> None:
+    """详情返回受影响组：基线 = 创建时积压，当前值随写入增长，delta 为差量。"""
+    topic_id = await _create_topic(client)
+    await _seed(api_app, topic_id=topic_id, count=3)
+    await _seed_group(api_app, topic_id=topic_id, tenant_id=int(current_tenant.tenant_id))
+    created = _data(await _create_replay(client))
+
+    first = _affected(await client.get(f"/api/v1/msg/admin/replay/{created['task_id']}", headers=DEMO_HEADERS))
+    await _seed(api_app, topic_id=topic_id, count=2)
+    second = _affected(await client.get(f"/api/v1/msg/admin/replay/{created['task_id']}", headers=DEMO_HEADERS))
+
+    assert [(item["group"], item["baseline_lag"], item["current_lag"], item["delta"]) for item in first] == [
+        ("g1", 3, 3, 0)
+    ]
+    assert [(item["current_lag"], item["delta"]) for item in second] == [(5, 2)]
+    assert first[0]["captured_at"] == second[0]["captured_at"]
+
+
+async def test_detail_keeps_snapshot_after_terminal(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant, db_session: AsyncSession
+) -> None:
+    """任务终态后首次查询落快照；之后继续写入不再改变影响视图。"""
+    topic_id = await _create_topic(client)
+    await _seed(api_app, topic_id=topic_id, count=2)
+    await _seed_group(api_app, topic_id=topic_id, tenant_id=int(current_tenant.tenant_id))
+    task_id = cast("str", _data(await _create_replay(client))["task_id"])
+    assert (await client.post(f"/api/v1/msg/admin/replay/{task_id}/cancel", headers=DEMO_HEADERS)).status_code == 200
+
+    first = _affected(await client.get(f"/api/v1/msg/admin/replay/{task_id}", headers=DEMO_HEADERS))
+    await _seed(api_app, topic_id=topic_id, count=3)
+    second = _affected(await client.get(f"/api/v1/msg/admin/replay/{task_id}", headers=DEMO_HEADERS))
+    stored = await ReplayTaskRepository(cast("DbSession", db_session)).get(int(task_id))
+
+    assert [(item["current_lag"], item["delta"]) for item in first] == [(2, 0)]
+    assert (second[0]["current_lag"], second[0]["captured_at"]) == (2, first[0]["captured_at"])
+    assert stored is not None
+    assert stored.impact_snapshot
+
+
+async def test_detail_without_baseline_returns_empty(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant, db_session: AsyncSession
+) -> None:
+    """历史任务（无基线列）→ 影响为空数组，不报错。"""
+    del current_tenant
+    topic_id = await _create_topic(client)
+    await _seed(api_app, topic_id=topic_id, count=1)
+    task_id = cast("str", _data(await _create_replay(client))["task_id"])
+    empty_baseline: ConcurrentStableDict[str, object] = ConcurrentStableDict()
+    await ReplayTaskRepository(cast("DbSession", db_session)).update(int(task_id), impact_groups=empty_baseline)
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/msg/admin/replay/{task_id}", headers=DEMO_HEADERS)
+
+    assert (response.status_code, _data(response)["affected_groups"], _data(response)["affected_truncated"]) == (
+        200,
+        [],
+        False,
+    )

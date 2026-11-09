@@ -8,12 +8,14 @@
   两者都不由对端反推，避免「进度与写入不一致」。
 - **游标存 JSON 文本**：游标是任务内部执行位置，没有独立查询需求（按任务整取整存）；拆子表只会多两次
   往返与一批无用索引。列名用 `cursor_state` 避开 SQL 保留字 `cursor`。
+- **影响两列分工**（06-6-1）：`impact_groups` 是创建时的影响起点（写一次不改），`impact_snapshot` 是
+  终态后保留的最后快照（首次查询已终结任务时写一次）；基线不被快照覆盖，两者都可追溯。
 - **不软删除**：终态用 `status` 表达，`deleted_at` 恒为 NULL（与 `msg_topic` 同口径）。
 """
 
 from datetime import datetime
 
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenList, ConcurrentStableList
 from bms_core.models.base import BaseModel, SnowflakeId, StableJson
 from sqlalchemy import BigInteger, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,6 +42,18 @@ TASK_FAILED = "failed"
 
 TASK_TERMINAL_STATUSES: tuple[str, ...] = (TASK_CANCELLED, TASK_COMPLETED, TASK_FAILED)
 """终态集合（终态不可逆：不提供重开，重试即按原范围重建任务）。"""
+
+REPLAY_STATUSES: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+    (
+        TASK_PENDING,
+        TASK_RUNNING,
+        TASK_PAUSED,
+        TASK_CANCELLED,
+        TASK_COMPLETED,
+        TASK_FAILED,
+    )
+)
+"""全部合法状态（列表过滤的白名单；非法值按 `10001` 拒绝，不静默当「不过滤」）。"""
 
 DEFAULT_STATUS = TASK_PENDING
 """建任务时的缺省状态。"""
@@ -83,3 +97,14 @@ class MsgReplayTask(BaseModel):
     log_id_last: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="末条成功写入的记录标识")
     error_msg: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="失败原因（截断 512）")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="终态时刻（UTC）")
+    impact_groups: Mapped[ConcurrentStableDict[str, object]] = mapped_column(
+        StableJson,
+        default=dict,
+        comment='影响基线（创建时写一次不改）：{"captured_at":"...","truncated":false,"groups":[...]}',
+    )
+    impact_snapshot: Mapped[ConcurrentStableDict[str, object] | None] = mapped_column(
+        StableJson,
+        nullable=True,
+        default=None,
+        comment="终态影响快照（首次查询已终结任务时写一次）：{captured_at, truncated, groups}",
+    )

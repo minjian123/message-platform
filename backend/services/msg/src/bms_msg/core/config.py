@@ -189,6 +189,13 @@ REPLAY_TASK_BATCH = 5
 REPLAY_ERROR_MSG_MAX_LENGTH = 512
 """任务失败原因落库截断长度（对齐列宽）。"""
 
+REPLAY_IMPACT_MAX_GROUPS = 100
+"""影响基线最多采集的消费组数（组名升序截断；超出置 `truncated` 并回 `affected_truncated`）。
+
+**为什么设上限**：基线在**建任务请求内同步采集**（每组每分区两次取值），异常租户的上千个组会把建任务
+拖成数十秒；100 组足够覆盖真实排障场景（单主题的消费组通常个位数），超出时页面可提示「仅展示前 100 组」。
+"""
+
 SUBSCRIBE_POLL_INTERVAL_MS = 200
 """长驻流无消息时的重试拉取间隔（毫秒）。
 

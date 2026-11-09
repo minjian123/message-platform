@@ -22,7 +22,7 @@ from bms_msg.core.config import (
 )
 from bms_msg.schemas.fields import NAMESPACE_FIELD, TOPIC_FIELD
 
-__all__ = ["ReplayRequest", "ReplayTaskItem"]
+__all__ = ["AffectedGroupItem", "ReplayRequest", "ReplayTaskItem", "ReplayTaskPage"]
 
 
 class ReplayRequest(BaseSchema):
@@ -79,8 +79,22 @@ class ReplayRequest(BaseSchema):
         return self
 
 
+class AffectedGroupItem(BaseSchema):
+    """受影响消费组的影响视图（基线 / 当前 / 变化）。
+
+    口径与 01-4 组详情同源：`lag = leo - committed`，**不夹取负值**；度量固定按基线时刻的分区集合，
+    主题事后扩分区不影响可比性。
+    """
+
+    group: str = Field(description="消费组名")
+    baseline_lag: int = Field(description="创建任务时的组级积压（基线）")
+    current_lag: int = Field(description="当前组级积压（同一分区集合；可负）")
+    delta: int = Field(description="变化量（当前 - 基线；可负）")
+    captured_at: datetime = Field(description="该值所属时刻（UTC；未终结为基线时刻，已终结为快照时刻）")
+
+
 class ReplayTaskItem(BaseSchema):
-    """重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消的响应主体）。"""
+    """重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消 / 列表的响应主体）。"""
 
     task_id: SnowflakeIdStr = Field(description="任务 ID（雪花，JSON 输出为字符串）")
     namespace: str = Field(description="命名空间")
@@ -102,3 +116,21 @@ class ReplayTaskItem(BaseSchema):
     created_at: datetime = Field(description="创建时间（UTC）")
     finished_at: datetime | None = Field(description="终态时刻（UTC）；未终结为 null")
     error_msg: str | None = Field(description="失败原因；非 failed 为 null")
+    affected_groups: Annotated[ConcurrentStableList[AffectedGroupItem], CONTRACT_COLLECTION] | None = Field(
+        default=None,
+        description="受影响消费组的影响视图（列表端点为 null，仅详情返回；无订阅组为空数组）",
+    )
+    affected_truncated: bool = Field(
+        default=False, description="影响基线是否因组数上限被截断（true 表示只展示前若干个组）"
+    )
+
+
+class ReplayTaskPage(BaseSchema):
+    """重放任务列表分页（`total` 为 ACL 过滤前的 SQL 计数）。"""
+
+    items: Annotated[ConcurrentStableList[ReplayTaskItem], CONTRACT_COLLECTION] = Field(
+        description="当页任务（创建时间倒序；已按主题 describe 权限过滤）"
+    )
+    total: int = Field(description="过滤前总数（ACL 过滤只影响 items，不影响分页基数）")
+    page: int = Field(description="页码（从 1 起）")
+    size: int = Field(description="每页条数")

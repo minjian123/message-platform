@@ -299,6 +299,47 @@
         "title": "AclRuleRequest",
         "type": "object"
       },
+      "AffectedGroupItem": {
+        "additionalProperties": false,
+        "description": "受影响消费组的影响视图（基线 / 当前 / 变化）。\n\n口径与 01-4 组详情同源：`lag = leo - committed`，**不夹取负值**；度量固定按基线时刻的分区集合，\n主题事后扩分区不影响可比性。",
+        "properties": {
+          "baseline_lag": {
+            "description": "创建任务时的组级积压（基线）",
+            "title": "Baseline Lag",
+            "type": "integer"
+          },
+          "captured_at": {
+            "description": "该值所属时刻（UTC；未终结为基线时刻，已终结为快照时刻）",
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "current_lag": {
+            "description": "当前组级积压（同一分区集合；可负）",
+            "title": "Current Lag",
+            "type": "integer"
+          },
+          "delta": {
+            "description": "变化量（当前 - 基线；可负）",
+            "title": "Delta",
+            "type": "integer"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "baseline_lag",
+          "current_lag",
+          "delta",
+          "captured_at"
+        ],
+        "title": "AffectedGroupItem",
+        "type": "object"
+      },
       "ApiResponse": {
         "additionalProperties": false,
         "description": "统一响应体：`code=0` 成功，非 0 业务错误码。\n\n- `data` 为业务数据（泛型）；失败时为 `null`；分页载荷复用分页契约基类。\n- 雪花 ID 在 JSON 中以字符串输出（`BaseSchema` 统一序列化口径）。",
@@ -972,6 +1013,33 @@
           }
         },
         "title": "ApiResponse[ReplayTaskItem]",
+        "type": "object"
+      },
+      "ApiResponse_ReplayTaskPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplayTaskPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[ReplayTaskPage]",
         "type": "object"
       },
       "ApiResponse_RpcResult_": {
@@ -3339,8 +3407,29 @@
       },
       "ReplayTaskItem": {
         "additionalProperties": false,
-        "description": "重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消的响应主体）。",
+        "description": "重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消 / 列表的响应主体）。",
         "properties": {
+          "affected_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AffectedGroupItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "受影响消费组的影响视图（列表端点为 null，仅详情返回；无订阅组为空数组）",
+            "title": "Affected Groups"
+          },
+          "affected_truncated": {
+            "default": false,
+            "description": "影响基线是否因组数上限被截断（true 表示只展示前若干个组）",
+            "title": "Affected Truncated",
+            "type": "boolean"
+          },
           "created_at": {
             "description": "创建时间（UTC）",
             "format": "date-time",
@@ -3523,6 +3612,43 @@
           "error_msg"
         ],
         "title": "ReplayTaskItem",
+        "type": "object"
+      },
+      "ReplayTaskPage": {
+        "additionalProperties": false,
+        "description": "重放任务列表分页（`total` 为 ACL 过滤前的 SQL 计数）。",
+        "properties": {
+          "items": {
+            "description": "当页任务（创建时间倒序；已按主题 describe 权限过滤）",
+            "items": {
+              "$ref": "#/components/schemas/ReplayTaskItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "过滤前总数（ACL 过滤只影响 items，不影响分页基数）",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "ReplayTaskPage",
         "type": "object"
       },
       "RpcRequest": {
@@ -7006,8 +7132,217 @@
       }
     },
     "/api/v1/msg/admin/replay": {
+      "get": {
+        "description": "重放任务列表（创建时间倒序；可按状态 / 命名空间 / 主题 / 创建时间过滤）。\n\n需要 msg:query 权限；按租户隔离；无主题 `describe` 权限的任务不出现在 items（`total` 仍为过滤前\n计数，与 06-1 组列表同口径）。状态取值非法 / 分页越界 / 创建时间区间颠倒返回 10001。",
+        "operationId": "list_replay_api_v1_msg_admin_replay_get",
+        "parameters": [
+          {
+            "description": "状态过滤（六态之一）",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "状态过滤（六态之一）",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "命名空间过滤",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "命名空间过滤",
+              "title": "Namespace"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "创建时间下限（含，UTC）",
+            "in": "query",
+            "name": "created_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "创建时间下限（含，UTC）",
+              "title": "Created From"
+            }
+          },
+          {
+            "description": "创建时间上限（不含，UTC）",
+            "in": "query",
+            "name": "created_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "创建时间上限（不含，UTC）",
+              "title": "Created To"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ReplayTaskPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Replay",
+        "tags": [
+          "msg-admin-replay"
+        ],
+        "x-error-codes": [
+          350010,
+          350011,
+          350012
+        ]
+      },
       "post": {
-        "description": "建重放任务（按条件把历史再写一遍，返回任务快照）。\n\n需要 msg:manage 权限；范围条件左闭右开、跨类相与，`partitions` 缺省为全部分区。\n命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。\n入口先写「建任务」审计，再惰性启动执行器（保证留痕顺序先创建后终态）。",
+        "description": "建重放任务（按条件把历史再写一遍，返回任务快照）。\n\n需要 msg:manage 权限；范围条件左闭右开、跨类相与，`partitions` 缺省为全部分区。\n命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。\n任务落库前采集影响基线（受影响组 + 分区级积压）；入口先写「建任务」审计，再惰性启动执行器\n（保证留痕顺序先创建后终态）。",
         "operationId": "create_replay_api_v1_msg_admin_replay_post",
         "requestBody": {
           "content": {
@@ -7108,7 +7443,7 @@
     },
     "/api/v1/msg/admin/replay/{task_id}": {
       "get": {
-        "description": "查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识）。\n\n需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。",
+        "description": "查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识 + 受影响组影响视图）。\n\n需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。任务已终结且尚无影响快照时，\n本次查询顺带落一次快照（之后恒返回该快照），任务本身的状态与进度不变。",
         "operationId": "get_replay_api_v1_msg_admin_replay__task_id__get",
         "parameters": [
           {

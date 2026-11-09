@@ -29,6 +29,7 @@ from typing import Protocol, cast
 from bms_core.audit.base import RecordRef
 from bms_core.audit.events import build_operation_event
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseDataContract, BaseValueObject
 from bms_core.db.session import DbSession
@@ -49,16 +50,20 @@ from bms_msg.core.config import (
 from bms_msg.core.message_id import new_message_id
 from bms_msg.errors import MsgReplayTaskInvalidStateError, MsgReplayTaskNotFoundError
 from bms_msg.models.replay import (
+    REPLAY_STATUSES,
     TASK_CANCELLED,
     TASK_COMPLETED,
     TASK_FAILED,
     TASK_PAUSED,
     TASK_PENDING,
     TASK_RUNNING,
+    TASK_TERMINAL_STATUSES,
     MsgReplayTask,
 )
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.schemas.replay import ReplayRequest
+from bms_msg.services.replay_impact import AffectedGroup, ReplayImpactInspector
+from bms_msg.services.topic import MAX_LIST_SIZE
 from bms_msg.tenant.context import CurrentTenant
 
 __all__ = [
@@ -66,6 +71,7 @@ __all__ = [
     "REPLAY_PATH",
     "AuditSink",
     "ReplayAuditor",
+    "ReplayDetailView",
     "ReplayRunner",
     "ReplayService",
     "ReplayWindow",
@@ -195,6 +201,24 @@ class ReplayWindow(BaseValueObject):
         return self.key is None or message.key == self.key
 
 
+@dataclass(frozen=True)
+class ReplayDetailView(BaseValueObject):
+    """任务详情视图（任务行 + 影响视图，06-6-1）。
+
+    任务行与影响分开返回：影响段可能是「实时度量」也可能是「终态快照」，但它**不改变**任务行的任何字段，
+    接口层各取所需（任务快照仍按 01-6 契约输出）。
+    """
+
+    task: MsgReplayTask
+    """任务行。"""
+
+    affected: ConcurrentStableList[AffectedGroup]
+    """受影响组的影响视图（无订阅组为空）。"""
+
+    truncated: bool
+    """影响基线是否因组数上限被截断。"""
+
+
 class ReplayService:
     """重放任务服务（请求级：平台库会话 + 进程级消息存储）。
 
@@ -209,6 +233,7 @@ class ReplayService:
         router: TopicRouter,
         store: MessageStore,
         uow: UnitOfWork,
+        impact: ReplayImpactInspector,
         now: Callable[[], datetime] = _utcnow,
     ) -> None:
         """初始化。
@@ -218,16 +243,21 @@ class ReplayService:
             router: 主题路由（请求级，绑定平台库主题仓储）。
             store: 消息存储（范围计数与重放写入）。
             uow: 工作单元（事务边界）。
+            impact: 影响投影（建任务采基线、详情出影响 / 惰性落快照）。
             now: 时钟（缺省 UTC 当前时间）。
         """
         self._tasks = tasks
         self._router = router
         self._store = store
         self._uow = uow
+        self._impact = impact
         self._now = now
 
     async def create(self, *, tenant: CurrentTenant, request: ReplayRequest) -> MsgReplayTask:
-        """建重放任务（范围解析 + 精确计数 + 落库）。
+        """建重放任务（范围解析 + 精确计数 + 影响基线 + 落库）。
+
+        **基线在落任务行前采集**（同一事务）：任务一旦建成，影响起点就固定下来；采集失败即建任务失败，
+        不留「没有基线的任务」（事后不可追溯的操作比操作失败更糟）。
 
         Args:
             tenant: 当前租户。
@@ -248,6 +278,11 @@ class ReplayService:
             partitions = self._resolve_partitions(topic=topic, requested=request.partitions)
             window = ReplayWindow.of(request)
             cursors, total = await self._scan(topic_id=topic_id, partitions=partitions, window=window)
+            baseline = await self._impact.capture(
+                tenant_id=int(tenant.tenant_id),
+                topic_id=topic_id,
+                partition_count=int(topic.partition_count),
+            )
             task = await self._tasks.create(
                 tenant_id=int(tenant.tenant_id),
                 namespace=request.namespace,
@@ -264,6 +299,7 @@ class ReplayService:
                 total=total,
                 replayed=0,
                 cursor_state=cursors,
+                impact_groups=baseline.payload(),
             )
         return task
 
@@ -282,6 +318,81 @@ class ReplayService:
         """
         async with self._uow.begin():
             return await self._load(tenant=tenant, task_id=task_id)
+
+    async def get_detail(self, *, tenant: CurrentTenant, task_id: int) -> ReplayDetailView:
+        """取任务详情（任务快照 + 影响视图）。
+
+        **终态快照惰性落库**：任务已终结且尚无快照时，本次查询度量后写一次 `impact_snapshot`，之后
+        恒返回该快照（同一事务内完成，查询与落库不会分叉）。
+
+        Args:
+            tenant: 当前租户（显式归属校验）。
+            task_id: 任务 ID。
+
+        Returns:
+            ReplayDetailView: 任务行 + 受影响组 + 截断标记。
+
+        Raises:
+            MsgReplayTaskNotFoundError: 不存在或不属于当前租户（350016）。
+        """
+        async with self._uow.begin():
+            task = await self._load(tenant=tenant, task_id=task_id)
+            return await self._impact_view(task=task)
+
+    async def list(
+        self,
+        *,
+        tenant: CurrentTenant,
+        page: int,
+        size: int,
+        status: str | None = None,
+        namespace: str | None = None,
+        topic: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> tuple[ConcurrentStableList[MsgReplayTask], int]:
+        """按租户 + 条件分页列任务（创建时间倒序）。
+
+        Args:
+            tenant: 当前租户（列表按租户隔离）。
+            page: 页码（从 1 起）。
+            size: 每页条数（1~100）。
+            status: 状态精确匹配；None 不限制。
+            namespace: 命名空间精确匹配；None 不限制（给定时同样校验合法性）。
+            topic: 主题名精确匹配；None 不限制。
+            created_from: 创建时间下限（含）；None 不限制。
+            created_to: 创建时间上限（不含）；None 不限制。
+
+        Returns:
+            tuple[ConcurrentStableList[MsgReplayTask], int]: 当页行 + 过滤后总数。
+
+        Raises:
+            MsgNamespaceInvalidError: 命名空间过滤值非法（350010）。
+            ParamError: 分页参数越界 / 状态值非法 / 创建时间区间次序非法（10001）。
+        """
+        if namespace is not None:
+            tenant.ensure_namespace(namespace)
+        if status is not None and status not in REPLAY_STATUSES:
+            raise ParamError(f"状态取值非法：{status}")
+        if page < 1:
+            raise ParamError(f"页码须从 1 起：{page}")
+        if not 1 <= size <= MAX_LIST_SIZE:
+            raise ParamError(f"每页条数须在 1~{MAX_LIST_SIZE}：{size}")
+        begin = None if created_from is None else _utc_naive(created_from)
+        end = None if created_to is None else _utc_naive(created_to)
+        if begin is not None and end is not None and end <= begin:
+            raise ParamError("创建时间区间非法（结束须大于起始）")
+        async with self._uow.begin():
+            return await self._tasks.page_for_tenant(
+                tenant_id=int(tenant.tenant_id),
+                page=page,
+                size=size,
+                status=status,
+                namespace=namespace,
+                topic=topic,
+                created_from=begin,
+                created_to=end,
+            )
 
     async def pause(self, *, tenant: CurrentTenant, task_id: int) -> MsgReplayTask:
         """暂停任务（`pending` / `running` → `paused`，批边界生效）。
@@ -355,6 +466,39 @@ class ReplayService:
         if task is None or int(task.tenant_id) != int(tenant.tenant_id):
             raise MsgReplayTaskNotFoundError(f"重放任务不存在：{task_id}")
         return task
+
+    async def _impact_view(self, *, task: MsgReplayTask) -> ReplayDetailView:
+        """出影响视图（优先终态快照 → 否则实时度量；终态首次查询顺手落快照）。
+
+        调用方持有事务：快照落库与本次读取在同一事务里，不会出现「读到实时值、快照却写了另一版」。
+
+        Args:
+            task: 任务行（已通过归属校验）。
+
+        Returns:
+            ReplayDetailView: 任务行 + 影响视图 + 截断标记。
+        """
+        snapshot = self._impact.decode_snapshot(task.impact_snapshot)
+        if snapshot is not None:
+            affected, truncated = snapshot
+            return ReplayDetailView(task=task, affected=affected, truncated=truncated)
+        baseline = self._impact.decode_baseline(task.impact_groups)
+        if baseline is None:
+            # 历史任务（06-6-1 之前建的行）：无基线，影响为空而不是报错。
+            return ReplayDetailView(task=task, affected=ConcurrentStableList(), truncated=False)
+        topic_id = int(task.topic_id)
+        if task.status not in TASK_TERMINAL_STATUSES:
+            affected = await self._impact.measure(
+                topic_id=topic_id, baseline=baseline, captured_at=baseline.captured_at
+            )
+            return ReplayDetailView(task=task, affected=affected, truncated=baseline.truncated)
+        captured_at = _utc_naive(self._now())
+        affected = await self._impact.measure(topic_id=topic_id, baseline=baseline, captured_at=captured_at)
+        payload = self._impact.snapshot_payload(
+            affected=affected, truncated=baseline.truncated, captured_at=captured_at
+        )
+        await self._tasks.update(int(task.id), impact_snapshot=payload)
+        return ReplayDetailView(task=task, affected=affected, truncated=baseline.truncated)
 
     async def _transition(
         self, *, tenant: CurrentTenant, task_id: int, allowed: tuple[str, ...], target: str

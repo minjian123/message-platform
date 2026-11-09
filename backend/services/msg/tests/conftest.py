@@ -47,6 +47,7 @@ from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 from bms_msg.schemas.group import MemberRequest
 from bms_msg.schemas.topic import TopicCreateRequest
+from bms_msg.services.replay_impact import ReplayImpactInspector
 from bms_msg.services.topic import TopicService
 from bms_msg.tenant.context import CurrentTenant
 
@@ -663,12 +664,20 @@ def retention_service(message_store: InMemoryMessageStore, clock: ManualClock) -
 
 
 @pytest.fixture
-def replay_service(db_session: AsyncSession, message_store: InMemoryMessageStore, clock: ManualClock) -> ReplayService:
-    """重放任务服务（请求级平台库会话 + 进程级消息存储 + 可推进时钟）。
+def replay_service(
+    db_session: AsyncSession,
+    message_store: InMemoryMessageStore,
+    offset_store: InMemoryOffsetStore,
+    group_store: InMemoryGroupStore,
+    clock: ManualClock,
+) -> ReplayService:
+    """重放任务服务（请求级平台库会话 + 进程级消息 / 位点 / 组存储 + 可推进时钟）。
 
     Args:
         db_session: 请求级会话。
         message_store: 消息存储。
+        offset_store: 位点存储（影响基线取已提交位点）。
+        group_store: 组存储（影响基线解析受影响组）。
         clock: 可推进时钟。
 
     Returns:
@@ -680,6 +689,7 @@ def replay_service(db_session: AsyncSession, message_store: InMemoryMessageStore
         router=TopicRouter(TopicRepository(session)),
         store=message_store,
         uow=DbUnitOfWork(session),
+        impact=ReplayImpactInspector(groups=group_store, offsets=offset_store, messages=message_store, now=clock),
         now=clock,
     )
 

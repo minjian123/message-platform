@@ -446,7 +446,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Replay
+         * @description 重放任务列表（创建时间倒序；可按状态 / 命名空间 / 主题 / 创建时间过滤）。
+         *
+         *     需要 msg:query 权限；按租户隔离；无主题 `describe` 权限的任务不出现在 items（`total` 仍为过滤前
+         *     计数，与 06-1 组列表同口径）。状态取值非法 / 分页越界 / 创建时间区间颠倒返回 10001。
+         */
+        get: operations["list_replay_api_v1_msg_admin_replay_get"];
         put?: never;
         /**
          * Create Replay
@@ -454,7 +461,8 @@ export interface paths {
          *
          *     需要 msg:manage 权限；范围条件左闭右开、跨类相与，`partitions` 缺省为全部分区。
          *     命名空间非法 350010，主题不存在或未启用 350001，分区号越界 350009，区间次序非法 10001。
-         *     入口先写「建任务」审计，再惰性启动执行器（保证留痕顺序先创建后终态）。
+         *     任务落库前采集影响基线（受影响组 + 分区级积压）；入口先写「建任务」审计，再惰性启动执行器
+         *     （保证留痕顺序先创建后终态）。
          */
         post: operations["create_replay_api_v1_msg_admin_replay_post"];
         delete?: never;
@@ -472,9 +480,10 @@ export interface paths {
         };
         /**
          * Get Replay
-         * @description 查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识）。
+         * @description 查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识 + 受影响组影响视图）。
          *
-         *     需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。
+         *     需要 msg:query 权限；任务不存在或不属于当前租户返回 350016。任务已终结且尚无影响快照时，
+         *     本次查询顺带落一次快照（之后恒返回该快照），任务本身的状态与进度不变。
          */
         get: operations["get_replay_api_v1_msg_admin_replay__task_id__get"];
         put?: never;
@@ -1453,6 +1462,41 @@ export interface components {
             topic: string;
         };
         /**
+         * AffectedGroupItem
+         * @description 受影响消费组的影响视图（基线 / 当前 / 变化）。
+         *
+         *     口径与 01-4 组详情同源：`lag = leo - committed`，**不夹取负值**；度量固定按基线时刻的分区集合，
+         *     主题事后扩分区不影响可比性。
+         */
+        AffectedGroupItem: {
+            /**
+             * Baseline Lag
+             * @description 创建任务时的组级积压（基线）
+             */
+            baseline_lag: number;
+            /**
+             * Captured At
+             * Format: date-time
+             * @description 该值所属时刻（UTC；未终结为基线时刻，已终结为快照时刻）
+             */
+            captured_at: string;
+            /**
+             * Current Lag
+             * @description 当前组级积压（同一分区集合；可负）
+             */
+            current_lag: number;
+            /**
+             * Delta
+             * @description 变化量（当前 - 基线；可负）
+             */
+            delta: number;
+            /**
+             * Group
+             * @description 消费组名
+             */
+            group: string;
+        };
+        /**
          * ApiResponse
          * @description 统一响应体：`code=0` 成功，非 0 业务错误码。
          *
@@ -1803,6 +1847,20 @@ export interface components {
              */
             code: number;
             data?: components["schemas"]["ReplayTaskItem"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[ReplayTaskPage] */
+        ApiResponse_ReplayTaskPage_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["ReplayTaskPage"] | null;
             /**
              * Message
              * @default ok
@@ -3367,9 +3425,20 @@ export interface components {
         };
         /**
          * ReplayTaskItem
-         * @description 重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消的响应主体）。
+         * @description 重放任务快照（建任务 / 进度 / 暂停 / 恢复 / 取消 / 列表的响应主体）。
          */
         ReplayTaskItem: {
+            /**
+             * Affected Groups
+             * @description 受影响消费组的影响视图（列表端点为 null，仅详情返回；无订阅组为空数组）
+             */
+            affected_groups?: components["schemas"]["AffectedGroupItem"][] | null;
+            /**
+             * Affected Truncated
+             * @description 影响基线是否因组数上限被截断（true 表示只展示前若干个组）
+             * @default false
+             */
+            affected_truncated: boolean;
             /**
              * Created At
              * Format: date-time
@@ -3459,6 +3528,32 @@ export interface components {
             /**
              * Total
              * @description 选中总条数（进度分母；建任务时按条件精确计数）
+             */
+            total: number;
+        };
+        /**
+         * ReplayTaskPage
+         * @description 重放任务列表分页（`total` 为 ACL 过滤前的 SQL 计数）。
+         */
+        ReplayTaskPage: {
+            /**
+             * Items
+             * @description 当页任务（创建时间倒序；已按主题 describe 权限过滤）
+             */
+            items: components["schemas"]["ReplayTaskItem"][];
+            /**
+             * Page
+             * @description 页码（从 1 起）
+             */
+            page: number;
+            /**
+             * Size
+             * @description 每页条数
+             */
+            size: number;
+            /**
+             * Total
+             * @description 过滤前总数（ACL 过滤只影响 items，不影响分页基数）
              */
             total: number;
         };
@@ -5498,6 +5593,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_QuotaView_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    list_replay_api_v1_msg_admin_replay_get: {
+        parameters: {
+            query?: {
+                /** @description 状态过滤（六态之一） */
+                status?: string | null;
+                /** @description 命名空间过滤 */
+                namespace?: string | null;
+                /** @description 主题名过滤 */
+                topic?: string | null;
+                /** @description 创建时间下限（含，UTC） */
+                created_from?: string | null;
+                /** @description 创建时间上限（不含，UTC） */
+                created_to?: string | null;
+                /** @description 页码（从 1 起） */
+                page?: number;
+                /** @description 每页条数 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ReplayTaskPage_"];
                 };
             };
             /** @description 未认证 */

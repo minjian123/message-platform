@@ -32,6 +32,7 @@ from bms_msg.api.admin import topics
 from bms_msg.api.deps import get_topic_acl_service
 from bms_msg.broker.deadletter import DatabaseDeadLetterQueue, DeadLetter, DeadLetterReason
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner
@@ -138,6 +139,7 @@ def api_app(
     app.state.message_store = InMemoryMessageStore()
     install_backpressure_state(app)
     app.state.offset_store = InMemoryOffsetStore()
+    app.state.group_store = InMemoryGroupStore()
     app.state.dead_letter_queue = DatabaseDeadLetterQueue(uow_factory=replay_uow)
     app.state.delivery_state = DeliveryState()
     sink = RecordingSink()

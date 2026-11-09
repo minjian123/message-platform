@@ -21,7 +21,9 @@ from bms_core.db.session import DbSession
 from bms_core.db.unit_of_work import DbUnitOfWork
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
+from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayService
 from bms_msg.broker.router import TopicRouter
 from bms_msg.models.replay import MsgReplayTask
@@ -29,6 +31,7 @@ from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.replay import ReplayRequest
+from bms_msg.services.replay_impact import ReplayImpactInspector
 from bms_msg.tenant.context import CurrentTenant
 
 pytestmark = pytest.mark.kiwi_id(2418)
@@ -287,6 +290,9 @@ def _service(*, store: InMemoryMessageStore, db_session: AsyncSession, now: Call
         router=TopicRouter(TopicRepository(session)),
         store=store,
         uow=DbUnitOfWork(session),
+        impact=ReplayImpactInspector(
+            groups=InMemoryGroupStore(), offsets=InMemoryOffsetStore(), messages=store, now=now
+        ),
         now=now,
     )
 

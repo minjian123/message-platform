@@ -24,7 +24,9 @@ from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
 from bms_msg.api.deps import (
     AuditSinkDep,
     CurrentTenantDep,
+    GroupStoreDep,
     MessageStoreDep,
+    OffsetStoreDep,
     ReplayRunnerDep,
     TopicAclServiceDep,
 )
@@ -53,6 +55,7 @@ from bms_msg.schemas.dead_letter import (
 )
 from bms_msg.schemas.replay import ReplayRequest
 from bms_msg.services.dead_letter import DeadLetterService
+from bms_msg.services.replay_impact import ReplayImpactInspector, build_impact_inspector
 from bms_msg.services.topic import MAX_LIST_SIZE
 
 __all__ = ["router"]
@@ -130,12 +133,13 @@ def _service(uow: UnitOfWork) -> DeadLetterService:
     )
 
 
-def _replay_service(uow: UnitOfWork, store: MessageStore) -> ReplayService:
-    """组装重放服务（复用 01-6 任务化重放）。
+def _replay_service(uow: UnitOfWork, store: MessageStore, impact: ReplayImpactInspector) -> ReplayService:
+    """组装重放服务（复用 01-6 任务化重放 + 06-6-1 影响投影）。
 
     Args:
         uow: 平台库工作单元。
         store: 消息存储。
+        impact: 影响投影（建任务时采集影响基线）。
 
     Returns:
         ReplayService: 重放任务服务。
@@ -146,6 +150,7 @@ def _replay_service(uow: UnitOfWork, store: MessageStore) -> ReplayService:
         router=TopicRouter(TopicRepository(session)),
         store=store,
         uow=uow,
+        impact=impact,
     )
 
 
@@ -289,6 +294,8 @@ async def replay_dead_letter(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     store: MessageStoreDep,
+    groups: GroupStoreDep,
+    offsets: OffsetStoreDep,
     runner: ReplayRunnerDep,
     sink: AuditSinkDep,
     acl: TopicAclServiceDep,
@@ -314,7 +321,9 @@ async def replay_dead_letter(
     if not batch or int(batch[0].offset) != msg_offset:
         raise MsgDeadLetterNotReplayableError("原消息已超出保留期或不存在，无法重放")
     await uow.rollback()
-    task = await _replay_service(uow, store).create(
+    task = await _replay_service(
+        uow, store, build_impact_inspector(groups=groups, offsets=offsets, messages=store)
+    ).create(
         tenant=tenant,
         request=ReplayRequest(
             namespace=namespace,
