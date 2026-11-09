@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, cast
+from typing import Annotated
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
@@ -39,7 +39,7 @@ from bms_msg.core.config import (
 from bms_msg.errors import MsgErrorCode
 from bms_msg.quota.service import QuotaAssessment, QuotaService, QuotaUpdate
 from bms_msg.schemas.quota import QuotaItem, QuotaUpdateRequest, QuotaView
-from bms_msg.usage.columns import USAGE_COLUMNS, column_payloads
+from bms_msg.usage.columns import column_payloads, usage_row
 
 __all__ = ["admin_router", "router"]
 
@@ -82,19 +82,18 @@ PlatformUowDep = Annotated[UnitOfWork, Depends(get_platform_uow)]
 """平台库工作单元依赖（元数据表归平台库）。"""
 
 
-def _usage_row(snapshot: object) -> ConcurrentStableDict[str, int | None]:
-    """把用量快照装配成表单行（列键与 `USAGE_COLUMNS` 闭合）。
+def _usage_payload(snapshot: object) -> JSONResponse:
+    """把用量快照装配成 05-1 投影响应（四列元数据 + 一行值）。
 
     Args:
         snapshot: 用量快照（`UsageSnapshot`）。
 
     Returns:
-        dict[str, int | None]: 行值。
+        JSONResponse: `{"columns": [...], "items": [row], "total": 1}`。
     """
-    values: ConcurrentStableDict[str, int | None] = ConcurrentStableDict()
-    for column in USAGE_COLUMNS:
-        values[column.key] = cast("int | None", getattr(snapshot, column.key, None))
-    return values
+    columns = [dict(item) for item in column_payloads()]
+    row = dict(usage_row(snapshot))
+    return JSONResponse(content={"columns": columns, "items": [row], "total": 1})
 
 
 @router.get("", openapi_extra={"x-error-codes": _TENANT_ERRORS})
@@ -109,9 +108,7 @@ async def tenant_usage(usage: UsageSnapshotDep, tenant: CurrentTenantDep) -> JSO
         JSONResponse: `{"columns": [...], "items": [row], "total": 1}`。
     """
     snapshot = await usage.snapshot(int(tenant.tenant_id))
-    columns = [dict(item) for item in column_payloads()]
-    row = dict(_usage_row(snapshot))
-    return JSONResponse(content={"columns": columns, "items": [row], "total": 1})
+    return _usage_payload(snapshot)
 
 
 def _projection_payload(

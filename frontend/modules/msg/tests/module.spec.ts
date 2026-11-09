@@ -13,18 +13,23 @@ describe('msg 模块定义（Kiwi 2454）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('登记十一条管理模块路由、一张概览卡片与租户记录页「消息配额」只读页签、文案包', async () => {
+  it('登记十二条管理模块路由、一张概览卡片与两条租户记录页只读页签、文案包（06-8 扩展）', async () => {
     const registration = await msgModule.setup({} as never)
-    expect(registration.routes ?? []).toHaveLength(11)
-    expect((registration.routes ?? []).filter((route) => route.meta?.menu !== false)).toHaveLength(9)
+    expect(registration.routes ?? []).toHaveLength(12)
+    expect((registration.routes ?? []).filter((route) => route.meta?.menu !== false)).toHaveLength(10)
     expect((registration.cards ?? []) as unknown[]).toHaveLength(1)
     const regions = registration.regions ?? []
-    expect(regions).toHaveLength(1)
+    expect(regions).toHaveLength(2)
     expect(regions[0]?.key).toBe('msg:tenant-quota')
     expect(regions[0]?.area).toBe('sys.record.detail.tabs')
     expect(regions[0]?.order).toBe(40)
     expect(regions[0]?.title).toBe('消息配额')
     expect(regions[0]?.perm).toBe('msg:query')
+    expect(regions[1]?.key).toBe('msg:tenant-usage')
+    expect(regions[1]?.area).toBe('sys.record.detail.tabs')
+    expect(regions[1]?.order).toBe(41)
+    expect(regions[1]?.title).toBe('消息用量')
+    expect(regions[1]?.perm).toBe('msg:query')
     expect((registration.i18nPacks ?? []).map((pack) => pack.key)).toEqual(['msg:zh-cn', 'msg:en'])
   })
 })

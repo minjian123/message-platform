@@ -3,14 +3,14 @@
 /**
  * msg 消息平台运行时模块定义（Module Federation remote 入口：默认导出模块定义）。
  *
- * 注册扩展点：`routes`（管理模块九条路由，含两条详情深链）、`cards`（消息平台概览）、
- * `regions`（租户记录页「消息配额」只读页签）与 `i18nPacks`（中英两包）。
+ * 注册扩展点：`routes`（管理模块十二条路由，含两条详情深链）、`cards`（消息平台概览）、
+ * `regions`（租户记录页「消息配额」「消息用量」两条只读页签）与 `i18nPacks`（中英两包）。
  * 只声明注册项，不写注册表、不替换宿主路由、不自建宿主级实例。
  */
 
 import { MODULE_CONTRACT_VERSION, WorkbenchCardProvider, defineModule } from '@bms/core'
 
-import { MSG_MENU_GROUP, ORDER_RESERVED_TOPIC_ACL } from './constants'
+import { MSG_MENU_GROUP, ORDER_RESERVED_TENANT_USAGE, ORDER_RESERVED_TOPIC_ACL } from './constants'
 import { applyHostContext, MSG_MANAGE_PERMISSION, MSG_QUERY_PERMISSION } from './runtime'
 
 /** 菜单项公共元信息（分组与权限由宿主读取）。 */
@@ -93,6 +93,18 @@ export const msgModule = defineModule({
             order: ORDER_RESERVED_TOPIC_ACL,
           },
         },
+        {
+          path: '/msg/usage',
+          name: 'msg.usage',
+          component: () => import('./views/UsagePage.vue'),
+          meta: {
+            title: '租户用量',
+            group: MSG_MENU_GROUP,
+            icon: 'el:DataAnalysis',
+            perm: MSG_QUERY_PERMISSION,
+            order: ORDER_RESERVED_TENANT_USAGE,
+          },
+        },
       ],
       cards: [
         new WorkbenchCardProvider(
@@ -108,6 +120,14 @@ export const msgModule = defineModule({
           component: () => import('./components/QuotaPanel.vue'),
           order: 40,
           title: '消息配额',
+          perm: MSG_QUERY_PERMISSION,
+        },
+        {
+          key: 'msg:tenant-usage',
+          area: 'sys.record.detail.tabs',
+          component: () => import('./components/UsagePanel.vue'),
+          order: 41,
+          title: '消息用量',
           perm: MSG_QUERY_PERMISSION,
         },
       ],

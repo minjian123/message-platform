@@ -133,6 +133,31 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.quotas.saved': ['配额已生效', 'Quota applied'],
   'msg.admin.quotas.empty': ['该作用域暂无配额数据', 'No quota data for this scope'],
 
+  // 租户用量（06-8）：独立页与租户记录页「消息用量」页签共用。
+  'msg.admin.usage.title': ['租户用量', 'Tenant usage'],
+  'msg.admin.usage.subtitle': ['当前租户的消息平台用量总量', 'Message platform usage of the current tenant'],
+  'msg.admin.usage.note': ['口径说明', 'Definitions'],
+  'msg.usage.caption.topicCount': ['含停用主题', 'Includes disabled topics'],
+  'msg.usage.caption.partitionCount': ['全部主题的分区合计', 'Partitions of all topics'],
+  'msg.usage.caption.storage': ['数据目录占用', 'Data directory usage'],
+  'msg.usage.caption.deliveredToday': ['UTC 日计数', 'UTC daily count'],
+  'msg.usage.note.topicCount': ['主题数：含已停用主题，停用仍占元数据', 'Topics: disabled topics are still counted'],
+  'msg.usage.note.partitionCount': ['分区数：当前租户全部主题的分区合计', 'Partitions: sum over all topics of the tenant'],
+  'msg.usage.note.storage': [
+    '消息存储：数据目录实际占用（含延迟消息）；采集失败显示「暂不可用」，不影响配额',
+    'Storage: actual data directory usage (incl. delayed messages); shows unavailable when sampling fails',
+  ],
+  'msg.usage.note.deliveredToday': [
+    '今日投递量：进程内 UTC 日计数，服务重启后从零累计',
+    'Delivered today: in-process UTC daily counter, resets when the service restarts',
+  ],
+  'msg.usage.note.source': ['数据来自消息平台用量端点，实时读取，不在前端重算', 'Read live from the msg usage endpoint, never recomputed in the browser'],
+  'msg.usage.note.grafana': ['趋势图走 bms Grafana，本页不自绘', 'Trends live in bms Grafana; not drawn here'],
+  'msg.usage.tenantHint': ['按当前登录租户统计', 'Counted for the signed-in tenant'],
+  'msg.usage.tenantTarget': ['记录页租户', 'Record tenant'],
+  'msg.usage.openPage': ['打开用量页', 'Open usage page'],
+  'msg.usage.unavailable': ['暂不可用：无「消息用量」查询权限或消息平台服务未接入', 'Unavailable: missing usage permission or service not connected'],
+
   // 主题授权（06-7）。
   'msg.admin.acls.title': ['主题授权', 'Topic ACLs'],
   'msg.admin.acls.namespace': ['命名空间', 'Namespace'],

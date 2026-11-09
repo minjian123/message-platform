@@ -28,6 +28,7 @@ from bms_msg.api.admin import partitions as admin_partitions
 from bms_msg.api.admin import quota as admin_quota
 from bms_msg.api.admin import replay as admin_replay
 from bms_msg.api.admin import topics
+from bms_msg.api.admin import usage as admin_usage
 from bms_msg.api.data import groups as data_groups
 from bms_msg.api.data import messages
 from bms_msg.api.frame import connection as frame_connection
@@ -51,6 +52,7 @@ api_router = mount_service_routers(
             admin_replay.router,
             admin_quota.router,
             admin_quota.admin_router,
+            admin_usage.router,
             admin_offsets.router,
             admin_dlq.router,
         ]

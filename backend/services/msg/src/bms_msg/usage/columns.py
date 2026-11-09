@@ -8,10 +8,11 @@
 """
 
 from dataclasses import dataclass
+from typing import cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenList, ConcurrentStableList
 
-__all__ = ["USAGE_COLUMNS", "UsageColumn", "column_payloads"]
+__all__ = ["USAGE_COLUMNS", "UsageColumn", "column_payloads", "usage_row"]
 
 
 @dataclass(frozen=True)
@@ -52,3 +53,21 @@ def column_payloads() -> ConcurrentStableList[ConcurrentStableDict[str, str]]:
     return ConcurrentStableList(
         ConcurrentStableDict({"key": column.key, "label": column.label}) for column in USAGE_COLUMNS
     )
+
+
+def usage_row(snapshot: object) -> ConcurrentStableDict[str, int | None]:
+    """把用量快照装配成一行四列值（键序与 `USAGE_COLUMNS` 一致）。
+
+    这是 05-1 投影端点与 06-8 管理面端点**共用的唯一装配**：不重算、不另起口径，
+    快照缺该属性时该列为 `None`（与「不可用」语义一致）。
+
+    Args:
+        snapshot: 用量快照（`UsageSnapshot`）。
+
+    Returns:
+        ConcurrentStableDict[str, int | None]: 列键 → 值。
+    """
+    values: ConcurrentStableDict[str, int | None] = ConcurrentStableDict()
+    for column in USAGE_COLUMNS:
+        values[column.key] = cast("int | None", getattr(snapshot, column.key, None))
+    return values

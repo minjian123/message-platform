@@ -37,6 +37,7 @@ const MENU_PATHS = [
   '/msg/quotas',
   '/msg/dlq',
   '/msg/acls',
+  '/msg/usage',
 ]
 
 describe('msg 模块注册（Kiwi 2464）', () => {
@@ -46,10 +47,10 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('十一条路由：九项菜单 + 两条详情深链', async () => {
+  it('十二条路由：十项菜单 + 两条详情深链', async () => {
     const result = await registration()
     const routes = result.routes ?? []
-    expect(routes).toHaveLength(11)
+    expect(routes).toHaveLength(12)
     expect(routes.map((route) => route.path)).toEqual([
       '/msg/overview',
       '/msg/topics',
@@ -62,6 +63,7 @@ describe('msg 模块注册（Kiwi 2464）', () => {
       '/msg/quotas',
       '/msg/dlq',
       '/msg/acls',
+      '/msg/usage',
     ])
     const menus = routes.filter((route) => route.meta?.menu !== false)
     expect(menus.map((route) => route.path)).toEqual(MENU_PATHS)
@@ -71,12 +73,12 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(routes.every((route) => typeof route.component === 'function')).toBe(true)
   })
 
-  it('菜单 meta：分组 / 权限 / 次序，主题授权用 msg:manage 与 el:Key', async () => {
+  it('菜单 meta：分组 / 权限 / 次序，主题授权用 msg:manage 与 el:Key，租户用量用 order 90', async () => {
     const result = await registration()
     const menus = (result.routes ?? []).filter((route) => route.meta?.menu !== false)
     expect(menus.every((route) => route.meta?.group === MSG_MENU_GROUP)).toBe(true)
     expect(menus.slice(0, 8).every((route) => route.meta?.perm === MSG_QUERY_PERMISSION)).toBe(true)
-    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 65, 70, 80])
+    expect(menus.map((route) => route.meta?.order)).toEqual([10, 20, 30, 40, 50, 60, 65, 70, 80, 90])
     const acl = menus[8]
     expect(acl?.name).toBe('msg.acl')
     expect(acl?.meta?.title).toBe('主题授权')
@@ -84,6 +86,14 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     expect(acl?.meta?.icon).toBe('el:Key')
     expect(acl?.meta?.order).toBe(ORDER_RESERVED_TOPIC_ACL)
     expect(ORDER_RESERVED_TENANT_USAGE).toBeGreaterThan(ORDER_RESERVED_TOPIC_ACL)
+
+    const usage = menus[9]
+    expect(usage?.name).toBe('msg.usage')
+    expect(usage?.path).toBe('/msg/usage')
+    expect(usage?.meta?.title).toBe('租户用量')
+    expect(usage?.meta?.perm).toBe(MSG_QUERY_PERMISSION)
+    expect(usage?.meta?.icon).toBe('el:DataAnalysis')
+    expect(usage?.meta?.order).toBe(ORDER_RESERVED_TENANT_USAGE)
   })
 
   it('工作台卡片：命名空间键、标题、异步加载器、装配器可识别的 provider', async () => {
@@ -105,16 +115,21 @@ describe('msg 模块注册（Kiwi 2464）', () => {
     const card = (result.cards ?? [])[0] as WorkbenchCardProvider
     const cardModule = await (card.component as () => Promise<unknown>)()
     expect(cardModule).toBeTruthy()
-    const region = result.regions?.[0]
-    const regionModule = await (region?.component as () => Promise<unknown>)()
-    expect(regionModule).toBeTruthy()
+    for (const region of result.regions ?? []) {
+      const regionModule = await (region.component as () => Promise<unknown>)()
+      expect(regionModule).toBeTruthy()
+    }
   })
 
-  it('既有租户配额页签与两个 i18n 包保持不变', async () => {
+  it('两条租户记录页签：配额 40 在前、用量 41 在后，同区域同权限', async () => {
     const result = await registration()
-    expect(result.regions).toHaveLength(1)
-    expect(result.regions?.[0]?.key).toBe('msg:tenant-quota')
-    expect(result.regions?.[0]?.perm).toBe('msg:query')
+    const regions = result.regions ?? []
+    expect(regions).toHaveLength(2)
+    expect(regions.map((region) => region.key)).toEqual(['msg:tenant-quota', 'msg:tenant-usage'])
+    expect(regions.every((region) => region.area === 'sys.record.detail.tabs')).toBe(true)
+    expect(regions.every((region) => region.perm === 'msg:query')).toBe(true)
+    expect(regions.map((region) => region.order)).toEqual([40, 41])
+    expect(regions.map((region) => region.title)).toEqual(['消息配额', '消息用量'])
     expect((result.i18nPacks ?? []).map((pack) => pack.key)).toEqual(['msg:zh-cn', 'msg:en'])
   })
 })

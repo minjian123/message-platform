@@ -560,6 +560,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/msg/admin/tenant-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tenant Usage
+         * @description 返回当前租户的消息平台用量（四列元数据 + 一行真实值）。
+         *
+         *     Args:
+         *         usage: 用量快照服务（与 05-1 投影端点同一实现）。
+         *         tenant: 当前租户（不接受入参租户，杜绝跨租户读取）。
+         *
+         *     Returns:
+         *         ApiResponse[TenantUsageView]: `{columns, items:[row], total:1}`。
+         */
+        get: operations["get_tenant_usage_api_v1_msg_admin_tenant_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/msg/admin/topics": {
         parameters: {
             query?: never;
@@ -1875,6 +1902,20 @@ export interface components {
              */
             code: number;
             data?: components["schemas"]["RpcResult"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[TenantUsageView] */
+        ApiResponse_TenantUsageView_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["TenantUsageView"] | null;
             /**
              * Message
              * @default ok
@@ -3635,6 +3676,53 @@ export interface components {
             payload: string;
         };
         /**
+         * TenantUsageRow
+         * @description 当前租户的一行用量（四列值）。
+         */
+        TenantUsageRow: {
+            /**
+             * Delivered Today
+             * @description 今日投递条数（进程内 UTC 日计数）
+             */
+            delivered_today: number;
+            /**
+             * Partition Count
+             * @description 分区数（全部主题合计）
+             */
+            partition_count: number;
+            /**
+             * Storage Bytes
+             * @description 消息存储字节数；目录扫描失败为 null
+             */
+            storage_bytes: number | null;
+            /**
+             * Topic Count
+             * @description 主题数（含停用主题）
+             */
+            topic_count: number;
+        };
+        /**
+         * TenantUsageView
+         * @description 租户用量响应（列元数据 + 一行值）。
+         */
+        TenantUsageView: {
+            /**
+             * Columns
+             * @description 列元数据（顺序即展示顺序）
+             */
+            columns?: components["schemas"]["UsageColumnView"][];
+            /**
+             * Items
+             * @description 用量行（恒为一行）
+             */
+            items?: components["schemas"]["TenantUsageRow"][];
+            /**
+             * Total
+             * @description 总行数（恒定 1）
+             */
+            total: number;
+        };
+        /**
          * TopicCleanupView
          * @description 删主题受理结果（**不是**「已删除」：主题进入 `deleting`，清理异步进行）。
          */
@@ -3874,6 +3962,22 @@ export interface components {
              * @description 保留时长（毫秒；null 表示不改）
              */
             retention_ms?: number | null;
+        };
+        /**
+         * UsageColumnView
+         * @description 一列的元数据（键与展示名）。
+         */
+        UsageColumnView: {
+            /**
+             * Key
+             * @description 列键（＝ `sys_field.field_key`）
+             */
+            key: string;
+            /**
+             * Label
+             * @description 展示名（＝ `sys_field.name`）
+             */
+            label: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -6154,6 +6258,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    get_tenant_usage_api_v1_msg_admin_tenant_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TenantUsageView_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
                 };
             };
             /** @description 限流 */

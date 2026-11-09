@@ -1069,6 +1069,33 @@
         "title": "ApiResponse[RpcResult]",
         "type": "object"
       },
+      "ApiResponse_TenantUsageView_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenantUsageView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[TenantUsageView]",
+        "type": "object"
+      },
       "ApiResponse_TopicCleanupView_": {
         "additionalProperties": false,
         "properties": {
@@ -3802,6 +3829,79 @@
         "title": "RpcResult",
         "type": "object"
       },
+      "TenantUsageRow": {
+        "additionalProperties": false,
+        "description": "当前租户的一行用量（四列值）。",
+        "properties": {
+          "delivered_today": {
+            "description": "今日投递条数（进程内 UTC 日计数）",
+            "title": "Delivered Today",
+            "type": "integer"
+          },
+          "partition_count": {
+            "description": "分区数（全部主题合计）",
+            "title": "Partition Count",
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "消息存储字节数；目录扫描失败为 null",
+            "title": "Storage Bytes"
+          },
+          "topic_count": {
+            "description": "主题数（含停用主题）",
+            "title": "Topic Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "topic_count",
+          "partition_count",
+          "storage_bytes",
+          "delivered_today"
+        ],
+        "title": "TenantUsageRow",
+        "type": "object"
+      },
+      "TenantUsageView": {
+        "additionalProperties": false,
+        "description": "租户用量响应（列元数据 + 一行值）。",
+        "properties": {
+          "columns": {
+            "description": "列元数据（顺序即展示顺序）",
+            "items": {
+              "$ref": "#/components/schemas/UsageColumnView"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "items": {
+            "description": "用量行（恒为一行）",
+            "items": {
+              "$ref": "#/components/schemas/TenantUsageRow"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "description": "总行数（恒定 1）",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "TenantUsageView",
+        "type": "object"
+      },
       "TopicCleanupView": {
         "additionalProperties": false,
         "description": "删主题受理结果（**不是**「已删除」：主题进入 `deleting`，清理异步进行）。",
@@ -4137,6 +4237,28 @@
           }
         },
         "title": "TopicRetentionUpdate",
+        "type": "object"
+      },
+      "UsageColumnView": {
+        "additionalProperties": false,
+        "description": "一列的元数据（键与展示名）。",
+        "properties": {
+          "key": {
+            "description": "列键（＝ `sys_field.field_key`）",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "description": "展示名（＝ `sys_field.name`）",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "UsageColumnView",
         "type": "object"
       },
       "ValidationError": {
@@ -7978,6 +8100,82 @@
           350001,
           350009,
           350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/tenant-usage": {
+      "get": {
+        "description": "返回当前租户的消息平台用量（四列元数据 + 一行真实值）。\n\nArgs:\n    usage: 用量快照服务（与 05-1 投影端点同一实现）。\n    tenant: 当前租户（不接受入参租户，杜绝跨租户读取）。\n\nReturns:\n    ApiResponse[TenantUsageView]: `{columns, items:[row], total:1}`。",
+        "operationId": "get_tenant_usage_api_v1_msg_admin_tenant_usage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TenantUsageView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Tenant Usage",
+        "tags": [
+          "msg-admin-tenant-usage"
+        ],
+        "x-error-codes": [
           350011,
           350012
         ]

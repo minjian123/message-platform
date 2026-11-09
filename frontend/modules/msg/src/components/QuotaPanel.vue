@@ -11,6 +11,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { msg } from '@msg/api-types'
 import { message } from '../i18n/messages'
 import { fetchQuotas } from '../services/quota-service'
+import { formatBytes } from '../services/usage-format'
 
 /** 宿主上下文：表单标识与记录主键。 */
 const formKey = useModuleSlotField<string>('formKey')
@@ -52,18 +53,6 @@ function keyLabel(key: string): string {
   return message(`msg.quota.${key}`)
 }
 
-/** 字节数人性化（B / KiB / MiB / GiB / TiB）。 */
-function humanBytes(value: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-  let amount = value
-  let index = 0
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024
-    index += 1
-  }
-  return `${Number.isInteger(amount) ? amount : amount.toFixed(1)} ${units[index]}`
-}
-
 /**
  * 配额值格式化。
  *
@@ -76,7 +65,7 @@ function formatValue(value: number | null, unit: string, usage = false): string 
     return usage ? message('msg.quota.state.unavailable') : message('msg.quota.unlimited')
   }
   if (unit === 'bytes') {
-    return humanBytes(value)
+    return formatBytes(value)
   }
   if (unit === 'qps') {
     return `${value}/s`
