@@ -100,3 +100,14 @@
 | 5 | 死信增长按存量差值、重启归零 | 8B_05 / 8B_12 |
 | 6 | 采样开销与组规模实测 | 8B_12 |
 | 7 | 真机 `/metrics` 抓取（服务器尚无 msg 服务） | 部署窗口 |
+
+## 8. 后续补充（2026-11-09，06-1-1） <a id="overview-rate"></a>
+
+概览「入口吞吐」数字卡需要速率值，而本域交付的是累计 Counter `msg_messages_in_total`。06-1-1 在本域采样器上做了兼容扩展：
+
+- `LagSnapshot` 增 `messages_in_window` / `window_seconds`，`MetricsSnapshotStore.replace()` 同步可写；
+- `MetricsSampler.sample_once()` 增一个独立容错维度：读 `TrafficMetrics` 进程级单例的累计 Counter，与上一轮读数按单调时钟差分写入快照；首轮写 `0 / 0.0`，端点据此判「快照不可用」；
+- `MsgMetricsCollector` 不消费这两个字段，Prometheus 文本、14 条告警规则与 Grafana 看板零变更；
+- `GET /api/v1/msg/admin/overview` 只读该快照，按当前租户编码前缀汇总，不在请求内扫描。
+
+设计口径同步回写[06-3-1 详细设计](../设计/01_详细设计_06-3-1_指标采集与Prometheus出口.md)；消费侧见[06-1-1 实施记录](../../../06_管理与运维_01_管理模块只读视图/06_管理与运维_01_管理模块只读视图_01_只读视图后端接口/实施/01_实施记录_06-1-1_只读视图后端接口.md)。
