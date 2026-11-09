@@ -176,7 +176,7 @@ flowchart LR
 
 ### 5.3 Collector 实现要点
 
-- 实现 `prometheus_client.core.Collector` 协议（`collect()` 返回 `Iterable[Metric]`）。
+- 实现 `prometheus_client.core.Collector` 协议（`collect()` 返回 `Iterable[Metric]`），并**提供 `describe()`**（返回与 `collect()` 同名的家族集合）——注册表据此在启动期检测同名冲突，避免抓取期才暴露。
 - 计数类用 `CounterMetricFamily`，瞬时类用 `GaugeMetricFamily`，延迟类用 `HistogramMetricFamily`。
 - **毫秒桶**（已拍板）：`5 / 10 / 25 / 50 / 100 / 250 / 500 / 1000 / 2500 / 5000 / 10000`；直方图内部维护累计桶计数与 `_sum` / `_count`，由 `TrafficMetrics` 提供原始桶数组。
 - **拼接键解析**：
@@ -227,7 +227,7 @@ def register_collector(self, collector: CollectorLike) -> bool:
 
 - `CollectorLike` 用最小 `Protocol`（只要求 `collect() -> Iterable[object]`），不把 `prometheus_client` 类型引入 `base.py`，避免契约层绑定第三方库。
 - **不升 `contract_version`**：新增非抽象方法属兼容扩展；`NullMetrics` 与测试替身零改动。
-- `PrometheusMetrics.register_collector()`：`self._registry.register(collector)` 后返回 `True`；重复注册由 `prometheus_client` 抛 `ValueError`，不吞。
+- `PrometheusMetrics.register_collector()`：`self._registry.register(collector)` 后返回 `True`。注册表开启 `auto_describe` 时会在注册期检测同名冲突并抛 `ValueError`；默认注册表不开启，因此**实现方应提供 `describe()`**（本任务 `MsgMetricsCollector` 提供），让冲突在启动期暴露而不是抓取期。
 
 ### 6.2 msg 侧使用
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
-from bms_core.core.exceptions import BizError
+from bms_core.core.exceptions import BizError, ParamError
 from pytest import mark, raises
 
 from bms_msg.api.data import messages as messages_module
@@ -267,3 +267,63 @@ async def test_track_data_plane_swallows_metric_failures(monkeypatch: Any) -> No
         return SimpleNamespace(data=None)
 
     assert await _bare() is not None
+
+
+@mark.kiwi_id(2460)
+def test_rpc_outcome_and_payload_branches() -> None:
+    """RPC 结果映射闭集与 payload 解码分支（含非法 base64）。"""
+    from bms_msg.api.rpc import routes as rpc_routes
+
+    outcome = rpc_routes._rpc_outcome  # pyright: ignore[reportPrivateUsage]
+    assert outcome(350004) == "deadline_exceeded"
+    assert outcome(350005) == "rate_limited"
+    assert outcome(350023) == "method_not_found"
+    assert outcome(350001) == "business_error"
+
+    decode = rpc_routes._decode_payload  # pyright: ignore[reportPrivateUsage]
+    assert decode("") == b""
+    with raises(ParamError):
+        decode("not-base64!!")
+
+
+@mark.kiwi_id(2460)
+async def test_rpc_invoke_writes_caller_and_trace_headers(monkeypatch: Any) -> None:
+    """RPC 端点把调用方与链路标识回写进响应头（HTTP 头优先）。"""
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from bms_msg.api.rpc import routes as rpc_routes
+    from bms_msg.schemas.rpc import RpcRequest
+
+    async def _fake_invoke(**kwargs: object) -> object:
+        return SimpleNamespace(payload=b"", headers=ConcurrentStableDict())
+
+    def _fake_idempotency(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(rpc_routes, "invoke_rpc", _fake_invoke)
+    monkeypatch.setattr(rpc_routes, "idempotency_context", _fake_idempotency)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/rpc/demo/echo",
+            "query_string": b"",
+            "headers": [(b"x-caller-service", b"from-header"), (b"x-trace-id", b"t-header")],
+        }
+    )
+    response = Response()
+    await rpc_routes.invoke(
+        service="demo",
+        method="echo",
+        req=RpcRequest(payload="", caller="from-body", trace_id="t-body"),
+        request=request,
+        response=response,
+        tenant=SimpleNamespace(code="t1"),
+        registry=SimpleNamespace(),
+        limiter=SimpleNamespace(),
+        store=SimpleNamespace(),
+    )
+    assert response.headers["x-caller-service"] == "from-header"
+    assert response.headers["x-trace-id"] == "t-header"
