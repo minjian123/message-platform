@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 主题授权</title>
+<link rel="stylesheet" href="../../../../../../../../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+.hint{color:#909399;font-size:12px}
+.admin-page__filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.acl-principal-cell{display:flex;flex-direction:column;gap:1px}
+.acl-principal-cell__missing{color:#e6a23c;font-size:11px}
+.acl-principal-cell__key{color:#909399;font-family:Consolas,Monaco,monospace;font-size:11px}
+</style></head><body>
+<h1>实现渲染快照 · 主题授权</h1>
+<div class="frame"><section data-v-2ec76853="" class="admin-page" data-test="page-acls">
+  <div data-v-2ec76853="" class="admin-page__head">
+    <div data-v-2ec76853="">
+      <h1 data-v-2ec76853="">主题授权</h1>
+      <p data-v-2ec76853="" class="admin-page__hint"> 页面、菜单与按钮挂 <code data-v-2ec76853="">msg:manage</code>；过滤条件写入路由查询参数，支持深链与刷新保持 </p>
+    </div>
+    <div data-v-2ec76853="" class="admin-page__actions"><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="acl-grant">
+        <!--v-if--><span class="">授予授权</span>
+      </button></div>
+  </div>
+  <!--v-if-->
+  <section data-v-2f1cb3c3="" data-v-2ec76853="" class="readonly-list" data-test="readonly-list" data-state="ready">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">主题授权</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-2ec76853="" class="admin-page__filters">
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 150px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-9516-18"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 160px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-9516-19"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 130px;" data-test="acl-principal-type">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-0" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-20">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>主体类型</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div>
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 160px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-principal-key" type="text" autocomplete="off" tabindex="0" placeholder="主体标识" id="el-id-9516-21"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 120px;" data-test="acl-action">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-4" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-22">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>动作</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 120px;" data-test="acl-status">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-10" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-23">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>状态</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="acl-query">
+        <!--v-if--><span class="">查询</span>
+      </button><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button" data-test="acl-reset">
+        <!--v-if--><span class="">重置</span>
+      </button>
+    </div>
+    <div data-v-2f1cb3c3="" data-test="readonly-content">
+      <div data-v-2ec76853="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-transition el-table--small el-table el-table--layout-fixed is-scrolling-right" data-prefix="el" data-test="acl-table">
+        <div class="el-table__inner-wrapper">
+          <div class="hidden-columns">
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+            <div data-v-2ec76853=""></div>
+          </div>
+          <div class="el-table__header-wrapper">
+            <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 1220px;">
+              <colgroup>
+                <col name="el-table_1_column_1" width="110">
+                <col name="el-table_1_column_2" width="150">
+                <col name="el-table_1_column_3" width="100">
+                <col name="el-table_1_column_4" width="210">
+                <col name="el-table_1_column_5" width="100">
+                <col name="el-table_1_column_6" width="90">
+                <col name="el-table_1_column_7" width="100">
+                <col name="el-table_1_column_8" width="170">
+                <col name="el-table_1_column_9" width="190">
+              </colgroup>
+              <thead class="">
+                <tr class="">
+                  <th class="el-table_1_column_1 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">命名空间
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_2 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主题
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_3 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主体类型
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_4 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主体标识
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_5 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">动作
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_6 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">效果
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_7 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">状态
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_8 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">更新时间
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_1_column_9 el-table-fixed-column--right is-first-column is-leaf el-table__cell" colspan="1" rowspan="1" scope="col" style="right: 0px;">
+                    <div class="cell">操作
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="el-table__body-wrapper">
+            <div class="el-scrollbar">
+              <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+                <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                  <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 1220px;">
+                    <colgroup>
+                      <col name="el-table_1_column_1" width="110">
+                      <col name="el-table_1_column_2" width="150">
+                      <col name="el-table_1_column_3" width="100">
+                      <col name="el-table_1_column_4" width="210">
+                      <col name="el-table_1_column_5" width="100">
+                      <col name="el-table_1_column_6" width="90">
+                      <col name="el-table_1_column_7" width="100">
+                      <col name="el-table_1_column_8" width="170">
+                      <col name="el-table_1_column_9" width="190">
+                    </colgroup>
+                    <!--v-if-->
+                    <tbody tabindex="-1">
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_1_column_1 el-table__cell">
+                          <div class="cell">
+                            <!---->msg
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_2 el-table__cell">
+                          <div class="cell">
+                            <!---->order.created
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_3 el-table__cell">
+                          <div class="cell">
+                            <!---->用户
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_4 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <div data-v-2ec76853="" class="acl-principal-cell"><span data-v-2ec76853="" data-test="acl-principal-name">张三</span><span data-v-2ec76853="" class="acl-principal-cell__key">7001</span></div>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_5 el-table__cell">
+                          <div class="cell">
+                            <!---->发布
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_6 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-effect-tag"><span class="el-tag el-tag--success el-tag--small el-tag--light"><span class="el-tag__content">允许</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_7 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-status-tag"><span class="el-tag el-tag--success el-tag--small el-tag--light"><span class="el-tag__content">已启用</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_8 el-table__cell">
+                          <div class="cell">
+                            <!---->2026-11-09T10:20:31Z
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" style="right: 0px;" class="el-table_1_column_9 el-table-fixed-column--right is-first-column el-table__cell">
+                          <div class="cell">
+                            <!----><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary is-link" data-test="acl-update">
+                              <!--v-if--><span class="">更新</span>
+                            </button><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--danger is-link" data-test="acl-revoke">
+                              <!--v-if--><span class="">收回</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_1_column_1 el-table__cell">
+                          <div class="cell">
+                            <!---->msg
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_2 el-table__cell">
+                          <div class="cell">
+                            <!---->order.created
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_3 el-table__cell">
+                          <div class="cell">
+                            <!---->角色
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_4 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <div data-v-2ec76853="" class="acl-principal-cell"><span data-v-2ec76853="" data-test="acl-principal-name">订单同步角色</span><span data-v-2ec76853="" class="acl-principal-cell__key">11</span></div>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_5 el-table__cell">
+                          <div class="cell">
+                            <!---->订阅
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_6 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-effect-tag"><span class="el-tag el-tag--danger el-tag--small el-tag--light"><span class="el-tag__content">拒绝</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_7 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-status-tag"><span class="el-tag el-tag--success el-tag--small el-tag--light"><span class="el-tag__content">已启用</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_8 el-table__cell">
+                          <div class="cell">
+                            <!---->2026-11-09T09:58:02Z
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" style="right: 0px;" class="el-table_1_column_9 el-table-fixed-column--right is-first-column el-table__cell">
+                          <div class="cell">
+                            <!----><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary is-link" data-test="acl-update">
+                              <!--v-if--><span class="">更新</span>
+                            </button><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--danger is-link" data-test="acl-revoke">
+                              <!--v-if--><span class="">收回</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_1_column_1 el-table__cell">
+                          <div class="cell">
+                            <!---->msg
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_2 el-table__cell">
+                          <div class="cell">
+                            <!---->order.paid
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_3 el-table__cell">
+                          <div class="cell">
+                            <!---->用户
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_4 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <div data-v-2ec76853="" class="acl-principal-cell"><span data-v-2ec76853="" data-test="acl-principal-name">李四</span><span data-v-2ec76853="" class="acl-principal-cell__key">7002</span></div>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_5 el-table__cell">
+                          <div class="cell">
+                            <!---->描述
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_6 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-effect-tag"><span class="el-tag el-tag--success el-tag--small el-tag--light"><span class="el-tag__content">允许</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_7 el-table__cell">
+                          <div class="cell">
+                            <!---->
+                            <transition-stub data-v-2ec76853="" name="el-zoom-in-center" appear="true" persisted="false" css="true" data-test="acl-status-tag"><span class="el-tag el-tag--info el-tag--small el-tag--light"><span class="el-tag__content">已停用</span>
+                              <!--v-if--></span>
+                            </transition-stub>
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_1_column_8 el-table__cell">
+                          <div class="cell">
+                            <!---->2026-11-08T18:04:55Z
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" style="right: 0px;" class="el-table_1_column_9 el-table-fixed-column--right is-first-column el-table__cell">
+                          <div class="cell">
+                            <!----><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary is-link" data-test="acl-regrant">
+                              <!--v-if--><span class="">重新授予</span>
+                            </button>
+                            <!--v-if-->
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <!--v-if-->
+                  </table>
+                  <!--v-if-->
+                  <!--v-if-->
+                </div>
+              </div>
+              <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+                <!--v-if-->
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+                </div>
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+                </div>
+              </transition-stub>
+            </div>
+          </div>
+          <!--v-if-->
+          <div class="el-table__border-left-patch"></div>
+        </div>
+        <div class="el-table__column-resize-proxy" style="display: none;"></div>
+      </div>
+    </div>
+    <div data-v-2f1cb3c3="" class="el-pagination" data-test="readonly-pagination"><span class="el-pagination__total is-first" disabled="false">Total 3</span><button type="button" class="btn-prev" disabled="" aria-label="Go to previous page" aria-disabled="true"><i class="el-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+            <path fill="currentColor" d="M609.408 149.376 277.76 489.6a32 32 0 0 0 0 44.672l331.648 340.352a29.12 29.12 0 0 0 41.728 0 30.59 30.59 0 0 0 0-42.752L339.264 511.936l311.872-319.872a30.59 30.59 0 0 0 0-42.688 29.12 29.12 0 0 0-41.728 0"></path>
+          </svg></i></button>
+      <ul class="el-pager">
+        <li class="is-active number" aria-current="true" aria-label="page 1" tabindex="0"> 1 </li>
+        <!--v-if-->
+        <!--v-if-->
+        <!--v-if-->
+      </ul><button type="button" class="btn-next is-last" disabled="" aria-label="Go to next page" aria-disabled="true"><i class="el-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+            <path fill="currentColor" d="M340.864 149.312a30.59 30.59 0 0 0 0 42.752L652.736 512 340.864 831.872a30.59 30.59 0 0 0 0 42.752 29.12 29.12 0 0 0 41.728 0L714.24 534.336a32 32 0 0 0 0-44.672L382.592 149.376a29.12 29.12 0 0 0-41.728 0z"></path>
+          </svg></i></button>
+    </div>
+  </section>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="授予主题授权" aria-describedby="el-id-9516-15" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2005; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="收回授权" aria-describedby="el-id-9516-17" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+</section><div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;"><div role="dialog" aria-modal="true" aria-label="授予主题授权" aria-describedby="el-id-9516-15" class="el-overlay-dialog"></div></div><div class="el-overlay el-modal-dialog" style="z-index: 2005; display: none;"><div role="dialog" aria-modal="true" aria-label="收回授权" aria-describedby="el-id-9516-17" class="el-overlay-dialog"></div></div></div>
+</body></html>

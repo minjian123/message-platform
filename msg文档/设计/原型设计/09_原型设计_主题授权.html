@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 主题授权（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <link rel="stylesheet" href="资源/原型样式.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="proto-bar">
+        <span class="pb-crumb"><a href="01_原型设计_总览.html">← 原型总览</a></span>
+        <span class="pb-name">主题授权（页面 09）</span>
+        <span class="pb-crumb proto-bar-right">msg 消息平台 · 06-7 主题授权管理界面</span>
+      </div>
+
+      <div class="proto-demo">
+        <span class="pd-label">原型演示</span>
+        <el-radio-group v-model="scene" size="small">
+          <el-radio-button value="list">列表</el-radio-button>
+          <el-radio-button value="grant">单条授予</el-radio-button>
+          <el-radio-button value="batch">批量规则</el-radio-button>
+          <el-radio-button value="revoke">收回确认</el-radio-button>
+          <el-radio-button value="degraded">名称降级</el-radio-button>
+          <el-radio-button value="loading">加载态</el-radio-button>
+          <el-radio-button value="empty">空态</el-radio-button>
+          <el-radio-button value="error">错误态</el-radio-button>
+          <el-radio-button value="denied">无权限</el-radio-button>
+        </el-radio-group>
+        <span>状态切换条仅原型使用，不属于产品界面</span>
+      </div>
+
+      <div class="app-shell">
+        <el-menu :default-active="'acl'" mode="horizontal" :ellipsis="false" class="app-menu" @select="onNav">
+          <el-menu-item index="overview">概览</el-menu-item>
+          <el-menu-item index="topics">主题</el-menu-item>
+          <el-menu-item index="groups">消费组</el-menu-item>
+          <el-menu-item index="partitions">分区</el-menu-item>
+          <el-menu-item index="messages">消息查询</el-menu-item>
+          <el-menu-item index="delayed">延迟</el-menu-item>
+          <el-menu-item index="dlq">死信与重放</el-menu-item>
+          <el-menu-item index="acl">主题授权</el-menu-item>
+          <el-menu-item index="usage" disabled>租户用量（06-8 预留）</el-menu-item>
+        </el-menu>
+
+        <div class="app-body">
+          <!-- 列表 -->
+          <div v-if="scene === 'list'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">
+                  取数 <code>GET /api/v1/msg/admin/acls</code>；页面、菜单与按钮挂 <code>msg:manage</code>；
+                  过滤条件写入路由查询参数，支持深链与刷新保持
+                </p>
+              </div>
+              <div class="page-actions">
+                <el-button type="primary" data-test="acl-grant" @click="scene = 'grant'">授予授权</el-button>
+              </div>
+            </div>
+
+            <el-form :inline="true" @submit.prevent>
+              <el-form-item label="命名空间">
+                <el-input v-model="query.namespace" placeholder="如 msg / order" clearable style="width: 150px"></el-input>
+              </el-form-item>
+              <el-form-item label="主题">
+                <el-input v-model="query.topic" placeholder="主题名" clearable style="width: 160px"></el-input>
+              </el-form-item>
+              <el-form-item label="主体类型">
+                <el-select v-model="query.principalType" clearable style="width: 120px">
+                  <el-option label="用户" value="user"></el-option>
+                  <el-option label="角色" value="role"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="主体标识">
+                <el-input v-model="query.principalKey" placeholder="主体主键" clearable style="width: 150px"></el-input>
+              </el-form-item>
+              <el-form-item label="动作">
+                <el-select v-model="query.action" clearable style="width: 120px">
+                  <el-option label="发布" value="publish"></el-option>
+                  <el-option label="订阅" value="subscribe"></el-option>
+                  <el-option label="描述" value="describe"></el-option>
+                  <el-option label="管理" value="manage"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item label="状态">
+                <el-select v-model="query.status" clearable style="width: 120px">
+                  <el-option label="已启用" value="enabled"></el-option>
+                  <el-option label="已停用" value="disabled"></el-option>
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="applyFilter">查询</el-button>
+                <el-button @click="resetFilter">重置</el-button>
+              </el-form-item>
+            </el-form>
+
+            <el-table :data="rows" border stripe style="width: 100%">
+              <el-table-column prop="namespace" label="命名空间" width="110"></el-table-column>
+              <el-table-column prop="topic" label="主题" min-width="150"></el-table-column>
+              <el-table-column label="主体类型" width="100">
+                <template #default="{ row }">{{ row.principalType === 'user' ? '用户' : '角色' }}</template>
+              </el-table-column>
+              <el-table-column label="主体" min-width="210">
+                <template #default="{ row }">
+                  <div class="principal-cell">
+                    <span v-if="row.principalName" class="principal-name">{{ row.principalName }}</span>
+                    <span v-else class="principal-missing">名称暂不可用</span>
+                    <span class="principal-key">{{ row.principalKey }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" width="100">
+                <template #default="{ row }">{{ actionText(row.action) }}</template>
+              </el-table-column>
+              <el-table-column label="效果" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="row.effect === 'allow' ? 'success' : 'danger'" size="small">
+                    {{ row.effect === 'allow' ? '允许' : '拒绝' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'enabled' ? 'success' : 'info'" size="small">
+                    {{ row.status === 'enabled' ? '已启用' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="updatedAt" label="更新时间" width="170"></el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="{ row }">
+                  <el-button v-if="row.status === 'enabled'" link type="primary" @click="openUpdate(row)">更新</el-button>
+                  <el-button v-else link type="primary" @click="openRegrant(row)">重新授予</el-button>
+                  <el-button v-if="row.status === 'enabled'" link type="danger" @click="openRevoke(row)">收回</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <div class="pager-row">
+              <el-pagination background layout="total, prev, pager, next" :total="rows.length" :page-size="query.size" :current-page="query.page" @current-change="onPage"></el-pagination>
+            </div>
+            <p class="hint" style="margin-top: 12px">
+              主体名称不写入 msg 库；列表按主体标识批量解析名称（用户、角色各一次），无 <code>user:query</code> /
+              <code>role:query</code> 时降级显示标识。
+            </p>
+          </div>
+
+          <!-- 单条授予 / 批量 / 降级：列表 + 抽屉 -->
+          <div v-else-if="scene === 'grant' || scene === 'batch' || scene === 'degraded'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">
+                  抽屉内规则行编辑器：一行即单条、多行即批量；命名空间可搜索、主题选择后自动带出命名空间；
+                  提交 <code>PUT /api/v1/msg/admin/acls</code>，整批成功 / 失败
+                </p>
+              </div>
+            </div>
+
+            <el-table :data="scene === 'degraded' ? degradedRows : rows" border stripe style="width: 100%">
+              <el-table-column prop="namespace" label="命名空间" width="110"></el-table-column>
+              <el-table-column prop="topic" label="主题" min-width="150"></el-table-column>
+              <el-table-column label="主体类型" width="100">
+                <template #default="{ row }">{{ row.principalType === 'user' ? '用户' : '角色' }}</template>
+              </el-table-column>
+              <el-table-column label="主体" min-width="210">
+                <template #default="{ row }">
+                  <div class="principal-cell">
+                    <span v-if="row.principalName" class="principal-name">{{ row.principalName }}</span>
+                    <span v-else class="principal-missing">名称暂不可用</span>
+                    <span class="principal-key">{{ row.principalKey }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" width="100">
+                <template #default="{ row }">{{ actionText(row.action) }}</template>
+              </el-table-column>
+              <el-table-column label="效果" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="row.effect === 'allow' ? 'success' : 'danger'" size="small">
+                    {{ row.effect === 'allow' ? '允许' : '拒绝' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'enabled' ? 'success' : 'info'" size="small">
+                    {{ row.status === 'enabled' ? '已启用' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog
+              :model-value="true"
+              :title="scene === 'batch' ? '授予主题授权（批量）' : '授予主题授权'"
+              width="900px"
+              :close-on-click-modal="false"
+            >
+              <el-alert
+                v-if="scene === 'degraded'"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="平台用户 / 角色查询不可用，已切换手填主体标识"
+                description="无 user:query / role:query 权限或接口失败时，不阻断授权；列表显示主体标识并提示「名称暂不可用」。"
+              ></el-alert>
+
+              <el-table :data="draftRows" border size="small" style="margin-top: 12px">
+                <el-table-column label="命名空间" width="150">
+                  <template #default="{ row }">
+                    <el-select v-model="row.namespace" filterable allow-create default-first-option placeholder="搜索或输入" size="small">
+                      <el-option label="msg" value="msg"></el-option>
+                      <el-option label="order" value="order"></el-option>
+                      <el-option label="bms" value="bms"></el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="主题" min-width="180">
+                  <template #default="{ row }">
+                    <el-select v-model="row.topic" filterable placeholder="搜索主题" size="small">
+                      <el-option label="order.created" value="order.created"></el-option>
+                      <el-option label="order.paid" value="order.paid"></el-option>
+                      <el-option label="invoice.issued" value="invoice.issued"></el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="主体类型" width="110">
+                  <template #default="{ row }">
+                    <el-select v-model="row.principalType" size="small">
+                      <el-option label="用户" value="user"></el-option>
+                      <el-option label="角色" value="role"></el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="主体" min-width="180">
+                  <template #default="{ row }">
+                    <el-select v-if="scene !== 'degraded'" v-model="row.principalKey" filterable remote placeholder="搜索用户 / 角色" size="small">
+                      <el-option v-if="row.principalKey" :label="row.principalName || row.principalKey" :value="row.principalKey"></el-option>
+                      <el-option label="张三（zhangsan）" value="7001"></el-option>
+                      <el-option label="订单同步角色" value="11"></el-option>
+                    </el-select>
+                    <el-input v-else v-model="row.principalKey" placeholder="手填主体标识（数字）" size="small"></el-input>
+                  </template>
+                </el-table-column>
+                <el-table-column label="动作" width="110">
+                  <template #default="{ row }">
+                    <el-select v-model="row.action" size="small">
+                      <el-option label="发布" value="publish"></el-option>
+                      <el-option label="订阅" value="subscribe"></el-option>
+                      <el-option label="描述" value="describe"></el-option>
+                      <el-option label="管理" value="manage"></el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="效果" width="100">
+                  <template #default="{ row }">
+                    <el-select v-model="row.effect" size="small">
+                      <el-option label="允许" value="allow"></el-option>
+                      <el-option label="拒绝" value="deny"></el-option>
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="校验" min-width="150">
+                  <template #default="{ row }">
+                    <span v-if="row.error" class="row-error">{{ row.error }}</span>
+                    <span v-else class="hint">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="" width="70">
+                  <template #default="{ $index }">
+                    <el-button v-if="draftRows.length > 1" link type="danger" @click="removeRow($index)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div class="drawer-actions">
+                <el-button size="small" @click="addRow">添加规则</el-button>
+                <span class="hint">同一批内六字段不得重复；整批校验、整批成功 / 失败。</span>
+              </div>
+
+              <p v-if="scene === 'batch'" class="row-error" style="margin: 8px 0 0">
+                第 3 行缺少主题：请补全命名空间 / 主题 / 主体 / 动作 / 效果
+              </p>
+
+              <template #footer>
+                <el-button @click="scene = 'list'">取消</el-button>
+                <el-button type="primary" @click="submitDraft">保存</el-button>
+              </template>
+            </el-dialog>
+          </div>
+
+          <!-- 收回确认 -->
+          <div v-else-if="scene === 'revoke'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">收回为软停用；已停用规则不显示收回按钮，后端幂等兜底</p>
+              </div>
+            </div>
+            <el-table :data="rows" border stripe style="width: 100%">
+              <el-table-column prop="namespace" label="命名空间" width="110"></el-table-column>
+              <el-table-column prop="topic" label="主题" min-width="150"></el-table-column>
+              <el-table-column label="主体" min-width="210">
+                <template #default="{ row }">
+                  <div class="principal-cell">
+                    <span v-if="row.principalName" class="principal-name">{{ row.principalName }}</span>
+                    <span class="principal-key">{{ row.principalKey }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" width="100">
+                <template #default="{ row }">{{ actionText(row.action) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="120">
+                <template #default="{ row }">
+                  <el-button v-if="row.status === 'enabled'" link type="danger" @click="openRevoke(row)">收回</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog :model-value="true" title="收回授权" width="520px" :close-on-click-modal="false">
+              <el-alert type="error" :closable="false" show-icon title="该主体将立即失去该主题该动作的授权"></el-alert>
+              <el-table :data="revokeImpact" border size="small" style="margin-top: 12px">
+                <el-table-column prop="label" label="影响项" min-width="140"></el-table-column>
+                <el-table-column prop="value" label="内容" min-width="180" align="right"></el-table-column>
+              </el-table>
+              <template #footer>
+                <el-button @click="scene = 'list'">取消</el-button>
+                <el-button type="danger" @click="scene = 'list'">确认收回</el-button>
+              </template>
+            </el-dialog>
+          </div>
+
+          <!-- 加载态 -->
+          <div v-else-if="scene === 'loading'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">加载态：筛选栏保留可用，表格显示骨架，禁止重复提交查询</p>
+              </div>
+            </div>
+            <el-form :inline="true" @submit.prevent>
+              <el-form-item label="命名空间"><el-input placeholder="如 msg / order" style="width: 150px"></el-input></el-form-item>
+              <el-form-item label="动作"><el-select placeholder="动作" style="width: 120px"></el-select></el-form-item>
+              <el-form-item><el-button type="primary">查询</el-button></el-form-item>
+            </el-form>
+            <el-skeleton :rows="6" animated></el-skeleton>
+          </div>
+
+          <!-- 空态 -->
+          <div v-else-if="scene === 'empty'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">按筛选条件无匹配规则时显示空态，不显示 0 值的假行</p>
+              </div>
+            </div>
+            <el-empty description="暂无主题授权规则">
+              <el-button @click="resetFilter">重置筛选</el-button>
+            </el-empty>
+          </div>
+
+          <!-- 错误态 -->
+          <div v-else-if="scene === 'error'">
+            <div class="page-head">
+              <div>
+                <h2 class="page-title">主题授权</h2>
+                <p class="page-sub">错误码按后端映射展示；350027 在本页明确「无目标主题的管理权限」</p>
+              </div>
+            </div>
+            <el-result icon="error" title="查询失败" sub-title="350027 · 无目标主题的管理权限">
+              <template #extra>
+                <p class="hint" style="margin: 0 0 8px">
+                  <code>350001</code> 主题不存在 / <code>350010</code> 命名空间未登记 /
+                  <code>350027</code> 无目标主题的管理权限 / <code>10001</code> 参数非法
+                </p>
+                <el-button type="primary" @click="scene = 'list'">重试</el-button>
+              </template>
+            </el-result>
+          </div>
+
+          <!-- 无权限 -->
+          <div v-else>
+            <el-result icon="warning" title="无 msg:manage 管理权限" sub-title="菜单项、查询与授予入口均不渲染">
+              <template #extra>
+                <p class="hint" style="margin: 0">无权限时不做置灰处理</p>
+              </template>
+            </el-result>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/vue.global.prod.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/element-plus.min.js"></script>
+    <script src="../../../bms文档/设计/原型设计/资源/vendor/zh-cn.js"></script>
+    <script>
+      const { createApp, ref, reactive, computed } = Vue
+      const { ElMessage } = ElementPlus
+
+      createApp({
+        setup() {
+          /** 支持 ?scene=<状态> 深链定位，便于评审与批量截图核对。 */
+          const SCENES = ['list', 'grant', 'batch', 'revoke', 'degraded', 'loading', 'empty', 'error', 'denied']
+          const wanted = new URLSearchParams(window.location.search).get('scene')
+          const scene = ref(SCENES.indexOf(wanted) >= 0 ? wanted : 'list')
+          const query = reactive({
+            namespace: '',
+            topic: '',
+            principalType: '',
+            principalKey: '',
+            action: '',
+            status: '',
+            page: 1,
+            size: 10,
+          })
+
+          const rows = ref([
+            {
+              namespace: 'msg',
+              topic: 'order.created',
+              principalType: 'user',
+              principalKey: '7001',
+              principalName: '张三',
+              action: 'publish',
+              effect: 'allow',
+              status: 'enabled',
+              updatedAt: '2026-11-09 10:20:31',
+            },
+            {
+              namespace: 'msg',
+              topic: 'order.created',
+              principalType: 'role',
+              principalKey: '11',
+              principalName: '订单同步角色',
+              action: 'subscribe',
+              effect: 'deny',
+              status: 'enabled',
+              updatedAt: '2026-11-09 09:58:02',
+            },
+            {
+              namespace: 'msg',
+              topic: 'order.paid',
+              principalType: 'user',
+              principalKey: '7002',
+              principalName: '李四',
+              action: 'describe',
+              effect: 'allow',
+              status: 'disabled',
+              updatedAt: '2026-11-08 18:04:55',
+            },
+          ])
+
+          const degradedRows = ref(
+            rows.value.map((row) => ({ ...row, principalName: '' })),
+          )
+
+          const draftRows = ref([])
+          const revokeTarget = ref(null)
+          const revokeImpact = computed(() => {
+            const row = revokeTarget.value
+            if (!row) {
+              return []
+            }
+            return [
+              { label: '命名空间', value: row.namespace },
+              { label: '主题', value: row.topic },
+              { label: '主体', value: `${row.principalName || '名称暂不可用'}（${row.principalKey}）` },
+              { label: '动作', value: actionText(row.action) },
+            ]
+          })
+
+          /** 后端返回结构化枚举，原型按动作值转中文；正式实现走模块 i18n。 */
+          function actionText(value) {
+            return { publish: '发布', subscribe: '订阅', describe: '描述', manage: '管理' }[value] || value
+          }
+
+          function baseDraft() {
+            return {
+              namespace: 'msg',
+              topic: '',
+              principalType: 'user',
+              principalKey: '',
+              principalName: '',
+              action: 'publish',
+              effect: 'allow',
+              error: '',
+            }
+          }
+
+          function openUpdate(row) {
+            scene.value = 'grant'
+            draftRows.value = [
+              {
+                ...row,
+                principalName: row.principalName,
+                error: '',
+              },
+            ]
+            ElMessage.info('更新模式：命名空间 / 主题 / 主体 / 动作锁定，仅可改效果（原型演示）')
+          }
+
+          function openRegrant(row) {
+            scene.value = 'grant'
+            draftRows.value = [
+              {
+                ...row,
+                principalName: row.principalName,
+                error: '',
+              },
+            ]
+            ElMessage.info('提交后该规则恢复启用（原型演示）')
+          }
+
+          function openRevoke(row) {
+            revokeTarget.value = row
+            scene.value = 'revoke'
+          }
+
+          function addRow() {
+            draftRows.value.push(baseDraft())
+          }
+
+          function removeRow(index) {
+            draftRows.value.splice(index, 1)
+          }
+
+          function submitDraft() {
+            const missing = draftRows.value.some(
+              (row) => !row.namespace || !row.topic || !row.principalKey || !row.action || !row.effect,
+            )
+            if (missing) {
+              ElMessage.error('请补全命名空间 / 主题 / 主体 / 动作 / 效果')
+              return
+            }
+            ElMessage.success('授权已保存（原型演示）')
+            scene.value = 'list'
+          }
+
+          function applyFilter() {
+            query.page = 1
+            ElMessage.success('查询完成（原型演示）')
+          }
+
+          function resetFilter() {
+            query.namespace = ''
+            query.topic = ''
+            query.principalType = ''
+            query.principalKey = ''
+            query.action = ''
+            query.status = ''
+            query.page = 1
+          }
+
+          function onPage(value) {
+            query.page = value
+          }
+
+          const navMap = {
+            overview: '03_原型设计_平台概览.html',
+            topics: '04_原型设计_主题管理.html',
+            groups: '05_原型设计_消费组与积压.html',
+            partitions: '04_原型设计_主题管理.html#detail',
+            messages: '06_原型设计_消息查询.html',
+            delayed: '08_原型设计_延迟消息.html',
+            dlq: '07_原型设计_死信与重放.html',
+            acl: '09_原型设计_主题授权.html',
+          }
+
+          function onNav(index) {
+            const href = navMap[index]
+            if (href) window.location.href = href
+          }
+
+          // 进入授予 / 批量 / 降级场景时准备草稿行，便于直接截图。
+          if (scene.value === 'grant') {
+            draftRows.value = [
+              {
+                ...baseDraft(),
+                topic: 'order.created',
+                principalKey: '7001',
+                principalName: '张三',
+              },
+            ]
+          } else if (scene.value === 'batch') {
+            draftRows.value = [
+              { ...baseDraft(), topic: 'order.created', principalKey: '7001', principalName: '张三', action: 'publish' },
+              { ...baseDraft(), topic: 'order.created', principalKey: '11', principalName: '订单同步角色', principalType: 'role', action: 'subscribe', effect: 'deny' },
+              { ...baseDraft(), topic: '', principalKey: '7002', principalName: '李四', action: 'describe', error: '缺少主题' },
+            ]
+          } else if (scene.value === 'degraded') {
+            draftRows.value = [
+              { ...baseDraft(), topic: 'order.created', principalKey: '7001', principalName: '' },
+            ]
+          } else if (scene.value === 'revoke') {
+            revokeTarget.value = rows.value[0]
+          }
+
+          return {
+            scene,
+            query,
+            rows,
+            degradedRows,
+            draftRows,
+            revokeTarget,
+            revokeImpact,
+            actionText,
+            openUpdate,
+            openRegrant,
+            openRevoke,
+            addRow,
+            removeRow,
+            submitDraft,
+            applyFilter,
+            resetFilter,
+            onPage,
+            onNav,
+          }
+        },
+      })
+        .use(ElementPlus, { locale: ElementPlusLocaleZhCn })
+        .mount('#app')
+    </script>
+
+    <style>
+      .principal-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .principal-name {
+        color: var(--bms-color-text-primary);
+      }
+      .principal-missing {
+        color: var(--bms-color-warning);
+        font-size: 12px;
+      }
+      .principal-key {
+        color: var(--bms-color-text-secondary);
+        font-family: Consolas, Monaco, monospace;
+        font-size: 11px;
+      }
+      .row-error {
+        color: var(--bms-color-danger);
+        font-size: 12px;
+      }
+      .drawer-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--bms-space-2);
+        margin-top: var(--bms-space-2);
+      }
+    </style>
+  </body>
+</html>

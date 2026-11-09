@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 主题授权 · 错误态</title>
+<link rel="stylesheet" href="../../../../../../../../../../bms文档/设计/原型设计/资源/vendor/element-plus.css" />
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+.hint{color:#909399;font-size:12px}
+.admin-page__filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.acl-principal-cell{display:flex;flex-direction:column;gap:1px}
+.acl-principal-cell__missing{color:#e6a23c;font-size:11px}
+.acl-principal-cell__key{color:#909399;font-family:Consolas,Monaco,monospace;font-size:11px}
+</style></head><body>
+<h1>实现渲染快照 · 主题授权 · 错误态</h1>
+<div class="frame"><section data-v-2ec76853="" class="admin-page" data-test="page-acls">
+  <div data-v-2ec76853="" class="admin-page__head">
+    <div data-v-2ec76853="">
+      <h1 data-v-2ec76853="">主题授权</h1>
+      <p data-v-2ec76853="" class="admin-page__hint"> 页面、菜单与按钮挂 <code data-v-2ec76853="">msg:manage</code>；过滤条件写入路由查询参数，支持深链与刷新保持 </p>
+    </div>
+    <div data-v-2ec76853="" class="admin-page__actions"><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="acl-grant">
+        <!--v-if--><span class="">授予授权</span>
+      </button></div>
+  </div>
+  <!--v-if-->
+  <section data-v-2f1cb3c3="" data-v-2ec76853="" class="readonly-list" data-test="readonly-list" data-state="error">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">主题授权</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-2ec76853="" class="admin-page__filters">
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 150px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-9516-319"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 160px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-9516-320"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 130px;" data-test="acl-principal-type">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-301" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-321">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>主体类型</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div>
+      <div data-v-2ec76853="" class="el-input el-input--suffix" style="width: 160px;">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="acl-principal-key" type="text" autocomplete="off" tabindex="0" placeholder="主体标识" id="el-id-9516-322"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 120px;" data-test="acl-action">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-305" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-323">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>动作</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div>
+      <div data-v-2ec76853="" class="el-select" style="width: 120px;" data-test="acl-status">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-9516-311" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-9516-324">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>状态</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
+      </div><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="acl-query">
+        <!--v-if--><span class="">查询</span>
+      </button><button data-v-2ec76853="" aria-disabled="false" type="button" class="el-button" data-test="acl-reset">
+        <!--v-if--><span class="">重置</span>
+      </button>
+    </div>
+    <transition-stub data-v-2f1cb3c3="" name="el-alert-fade" appear="false" persisted="true" css="true" data-test="readonly-error">
+      <div class="el-alert el-alert--error is-light" role="alert"><i class="el-icon el-alert__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+            <path fill="currentColor" d="M512 64a448 448 0 1 1 0 896 448 448 0 0 1 0-896m0 393.664L407.936 353.6a38.4 38.4 0 1 0-54.336 54.336L457.664 512 353.6 616.064a38.4 38.4 0 1 0 54.336 54.336L512 566.336 616.064 670.4a38.4 38.4 0 1 0 54.336-54.336L566.336 512 670.4 407.936a38.4 38.4 0 1 0-54.336-54.336z"></path>
+          </svg></i>
+        <div class="el-alert__content"><span class="el-alert__title">无目标主题的授权（该操作被拒绝）</span>
+          <!--v-if-->
+          <!--v-if-->
+        </div>
+      </div>
+    </transition-stub>
+  </section>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2068; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="授予主题授权" aria-describedby="el-id-9516-316" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2069; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="收回授权" aria-describedby="el-id-9516-318" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+</section><div class="el-overlay el-modal-dialog" style="z-index: 2068; display: none;"><div role="dialog" aria-modal="true" aria-label="授予主题授权" aria-describedby="el-id-9516-316" class="el-overlay-dialog"></div></div><div class="el-overlay el-modal-dialog" style="z-index: 2069; display: none;"><div role="dialog" aria-modal="true" aria-label="收回授权" aria-describedby="el-id-9516-318" class="el-overlay-dialog"></div></div></div>
+</body></html>
