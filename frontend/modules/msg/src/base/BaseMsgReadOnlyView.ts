@@ -19,9 +19,9 @@ export type ReadOnlyFilters = Record<string, string | number | undefined>
 /** 一次查询的入参（筛选条件 + 分页）。 */
 export type ReadOnlyQueryParams = Record<string, string | number | undefined>
 
-/** 本轮涉及的后端错误码（06-1-1 `_QUERY_ERRORS` + 契约层 / 基座通用码）。 */
+/** 本轮涉及的后端错误码（06-1-1 `_QUERY_ERRORS` + 契约层 / 基座通用码；06-6-2 补 `350016`）。 */
 export const QUERY_ERROR_CODES: readonly number[] = [
-  350001, 350009, 350010, 350011, 350012, 350013, 350027, 10001, 30001,
+  350001, 350009, 350010, 350011, 350012, 350013, 350016, 350027, 10001, 30001,
 ]
 
 /** 未命中错误码时的兜底文案键。 */

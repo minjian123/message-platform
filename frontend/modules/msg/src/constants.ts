@@ -16,6 +16,9 @@ export const MSG_MENU_GROUP = '消息平台'
 /** 删主题清理进度轮询间隔（毫秒；`deleting` 状态详情页用）。 */
 export const CLEANUP_POLL_INTERVAL_MS = 3_000
 
+/** 重放任务进度轮询间隔（毫秒；任务详情非终态时用，转终态 / 请求失败即停）。 */
+export const REPLAY_POLL_INTERVAL_MS = 5_000
+
 /** 配额管理页的作用域（租户级 / 命名空间级）。 */
 export const QUOTA_SCOPES: readonly { key: string; labelKey: string }[] = [
   { key: '', labelKey: 'msg.admin.quotas.scopeTenant' },

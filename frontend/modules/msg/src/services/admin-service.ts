@@ -449,3 +449,137 @@ export const loadDeadLetters: ReadOnlyLoader<DlqItem> = async (params: ReadOnlyQ
   const page = await fetchDeadLetters(params as DlqQuery)
   return { items: page.items, total: page.total }
 }
+
+/** 重放任务列表响应。 */
+export type ReplayTaskPage = Schema['ReplayTaskPage']
+/** 重放任务行 / 详情。 */
+export type ReplayTaskItem = Schema['ReplayTaskItem']
+/** 受影响消费组影响视图。 */
+export type AffectedGroup = Schema['AffectedGroupItem']
+/** 建重放任务请求体。 */
+export type ReplayCreateBody = Schema['ReplayRequest']
+/** 重放任务列表查询参数。 */
+export type ReplayQuery = NonNullable<Ops['list_replay_api_v1_msg_admin_replay_get']['parameters']['query']>
+
+/** 重放任务列表（创建时间倒序；`total` 为 ACL 过滤前计数）。 */
+export async function fetchReplayTasks(params: ReplayQuery = {}): Promise<ReplayTaskPage> {
+  const envelope = await request<Schema['ApiResponse_ReplayTaskPage_']>('/admin/replay', params)
+  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+}
+
+/**
+ * 重放任务详情（终态且无快照时后端顺带落一次快照）。
+ *
+ * @param taskId 任务主键（雪花，JSON 字符串）。
+ */
+export async function fetchReplayTask(taskId: string): Promise<ReplayTaskItem | null> {
+  const envelope = await request<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}`)
+  return envelope.data ?? null
+}
+
+/**
+ * 建重放任务（`confirm` 恒 true：批量重放属高危写操作，只由确认回调触发）。
+ *
+ * @param body 条件与速率。
+ */
+export async function createReplayTask(body: Omit<ReplayCreateBody, 'confirm'>): Promise<ReplayTaskItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>('/admin/replay', (path) =>
+    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, { ...body, confirm: true }),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 暂停任务（批边界生效）。
+ *
+ * @param taskId 任务主键。
+ */
+export async function pauseReplayTask(taskId: string): Promise<ReplayTaskItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/pause`, (path) =>
+    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 恢复任务（仅接受已暂停）。
+ *
+ * @param taskId 任务主键。
+ */
+export async function resumeReplayTask(taskId: string): Promise<ReplayTaskItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/resume`, (path) =>
+    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 取消任务（已写入记录不回滚）。
+ *
+ * @param taskId 任务主键。
+ */
+export async function cancelReplayTask(taskId: string): Promise<ReplayTaskItem> {
+  const envelope = await requestWrite<Schema['ApiResponse_ReplayTaskItem_']>(`/admin/replay/${taskId}/cancel`, (path) =>
+    scope().post<Schema['ApiResponse_ReplayTaskItem_']>(path, {}),
+  )
+  return required(envelope.data)
+}
+
+/** 重放任务列表投影取数器。 */
+export const loadReplayTasks: ReadOnlyLoader<ReplayTaskItem> = async (params: ReadOnlyQueryParams) => {
+  const page = await fetchReplayTasks(params as ReplayQuery)
+  return { items: page.items, total: page.total }
+}
+
+/** 预估总量的入参（缺省字段不参与过滤；`partition` 只支持单分区）。 */
+export interface ReplayEstimateParams {
+  /** 命名空间。 */
+  namespace: string
+  /** 主题名。 */
+  topic: string
+  /** 分区号（多分区时不传，改为「以创建时计数为准」）。 */
+  partition?: number
+  /** 起始 offset（含）。 */
+  offset_from?: number
+  /** 结束 offset（不含）。 */
+  offset_to?: number
+  /** 分区键精确值。 */
+  key?: string
+  /** 起始发布时间（含，UTC）。 */
+  time_from?: string
+  /** 结束发布时间（不含，UTC）。 */
+  time_to?: string
+}
+
+/**
+ * 预估重放总量（复用消息检索的 `total`，只取 1 条）。
+ *
+ * 估算口径与创建时的精确计数可能不同：只用于确认前给量级，失败一律降级（返回 `null`）。
+ *
+ * @param params 与创建条件同名的检索参数。
+ * @returns 预估条数；取不到返回 `null`。
+ */
+export async function estimateReplayTotal(params: ReplayEstimateParams): Promise<number | null> {
+  try {
+    const page = await fetchMessages({ ...params, page: 1, size: 1 } as MessageQuery)
+    return page?.total ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 取主题下订阅组名（确认弹窗的目标消费组预览）。
+ *
+ * @param namespace 命名空间。
+ * @param topic 主题名。
+ * @returns 组名列表；取不到返回 `null`（与「确实没有订阅组」区分开）。
+ */
+export async function fetchTopicGroups(namespace: string, topic: string): Promise<readonly string[] | null> {
+  try {
+    const page = await fetchGroups({ namespace, topic, page: 1, size: 100 })
+    return page.items.map((item) => item.group)
+  } catch {
+    return null
+  }
+}

@@ -3,13 +3,13 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { scopeGet } = vi.hoisted(() => ({ scopeGet: vi.fn() }))
+const { scopeGet, scopePost } = vi.hoisted(() => ({ scopeGet: vi.fn(), scopePost: vi.fn() }))
 
 vi.mock('../src/runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/runtime')>()
   return {
     ...actual,
-    requiredHostApi: () => ({ product: () => ({ get: scopeGet }) }),
+    requiredHostApi: () => ({ product: () => ({ get: scopeGet, post: scopePost }) }),
   }
 })
 
@@ -32,7 +32,18 @@ import {
   loadGroups,
   loadMessages,
   loadPartitions,
+  loadReplayTasks,
   loadTopics,
+  archiveDeadLetter,
+  cancelReplayTask,
+  fetchDeadLetter,
+  createReplayTask,
+  estimateReplayTotal,
+  fetchReplayTask,
+  fetchReplayTasks,
+  fetchTopicGroups,
+  pauseReplayTask,
+  resumeReplayTask,
   toParams,
 } from '../src/services/admin-service'
 import { fetchQuotas } from '../src/services/quota-service'
@@ -53,6 +64,7 @@ const OVERVIEW = {
 describe('admin-service（Kiwi 2464）', () => {
   beforeEach(() => {
     scopeGet.mockReset()
+    scopePost.mockReset()
   })
 
   it('产品键与命名空间同源，且路径不带 /api 前缀、不自拼租户参数', async () => {
@@ -178,5 +190,82 @@ describe('admin-service（Kiwi 2464）', () => {
       items: [{ partition: 0 }, { partition: 1 }],
       total: 2,
     })
+  })
+
+  it('重放任务：列表 / 详情 / 投影取数器与空数据兜底', async () => {
+    const task = { task_id: '9001', status: 'running' }
+    respond({ items: [task], total: 1, page: 1, size: 20 })
+    await expect(fetchReplayTasks({ status: 'running' })).resolves.toEqual({
+      items: [task],
+      total: 1,
+      page: 1,
+      size: 20,
+    })
+    expect(scopeGet).toHaveBeenCalledWith('/admin/replay', { status: 'running' })
+    await expect(loadReplayTasks({ page: 2, size: 10 })).resolves.toEqual({ items: [task], total: 1 })
+
+    respond(task)
+    await expect(fetchReplayTask('9001')).resolves.toEqual(task)
+    expect(scopeGet).toHaveBeenCalledWith('/admin/replay/9001', {})
+
+    respond(null)
+    await expect(fetchReplayTasks()).resolves.toEqual({ items: [], page: 1, size: 20, total: 0 })
+    await expect(fetchReplayTask('9001')).resolves.toBeNull()
+    await expect(loadReplayTasks({})).resolves.toEqual({ items: [], total: 0 })
+  })
+
+  it('重放写操作：创建固定并入 confirm，三个状态端点路径与空请求体', async () => {
+    const task = { task_id: '9001', status: 'running' }
+    scopePost.mockResolvedValue({ code: 0, message: 'ok', data: task })
+    const body = { namespace: 'msg', topic: 'order.created', rate_per_second: 100 }
+    await expect(createReplayTask(body)).resolves.toEqual(task)
+    expect(scopePost).toHaveBeenCalledWith('/admin/replay', { ...body, confirm: true })
+
+    await expect(pauseReplayTask('9001')).resolves.toEqual(task)
+    expect(scopePost).toHaveBeenCalledWith('/admin/replay/9001/pause', {})
+    await expect(resumeReplayTask('9001')).resolves.toEqual(task)
+    expect(scopePost).toHaveBeenCalledWith('/admin/replay/9001/resume', {})
+    await expect(cancelReplayTask('9001')).resolves.toEqual(task)
+    expect(scopePost).toHaveBeenCalledWith('/admin/replay/9001/cancel', {})
+
+    scopePost.mockResolvedValue({ code: 350017, message: 'bad state', data: null })
+    await expect(pauseReplayTask('9001')).rejects.toBeInstanceOf(MsgQueryError)
+    scopePost.mockResolvedValue({ code: 0, message: 'ok', data: null })
+    await expect(cancelReplayTask('9001')).rejects.toBeInstanceOf(MsgQueryError)
+  })
+
+  it('预估总量：取消息检索 total，多分区不适用时由页面决定；失败降级为 null', async () => {
+    respond({ items: [], page: 1, size: 1, total: 12480 })
+    await expect(estimateReplayTotal({ namespace: 'msg', topic: 't' })).resolves.toBe(12480)
+    expect(scopeGet).toHaveBeenCalledWith('/admin/messages', { namespace: 'msg', topic: 't', page: 1, size: 1 })
+
+    respond(null)
+    await expect(estimateReplayTotal({ namespace: 'msg', topic: 't' })).resolves.toBeNull()
+
+    scopeGet.mockRejectedValueOnce({ code: 350001 })
+    await expect(estimateReplayTotal({ namespace: 'msg', topic: 't' })).resolves.toBeNull()
+  })
+
+  it('目标消费组：取组名列表；失败返回 null 与「无组」区分', async () => {
+    respond({ items: [{ group: 'a' }, { group: 'b' }], total: 2 })
+    await expect(fetchTopicGroups('msg', 't')).resolves.toEqual(['a', 'b'])
+    expect(scopeGet).toHaveBeenCalledWith('/admin/groups', { namespace: 'msg', topic: 't', page: 1, size: 100 })
+
+    scopeGet.mockRejectedValueOnce({ code: 350027 })
+    await expect(fetchTopicGroups('msg', 't')).resolves.toBeNull()
+  })
+
+  it('死信归档：有无原因两种请求体', async () => {
+    const result = { id: '1', status: 'archived', replay_task_id: null }
+    scopePost.mockResolvedValue({ code: 0, message: 'ok', data: result })
+    await expect(archiveDeadLetter('1')).resolves.toEqual(result)
+    expect(scopePost).toHaveBeenCalledWith('/admin/dlq/1/archive', { confirm: true })
+    await expect(archiveDeadLetter('1', '重复')).resolves.toEqual(result)
+    expect(scopePost).toHaveBeenLastCalledWith('/admin/dlq/1/archive', { confirm: true, reason: '重复' })
+  })
+
+  it('死信详情：data 为空回落 null', async () => {
+    respond(null)
+    await expect(fetchDeadLetter('1')).resolves.toBeNull()
   })
 })

@@ -50,8 +50,8 @@ describe('BaseMsgReadOnlyView（Kiwi 2464）', () => {
     expect(view.filters).toEqual({})
   })
 
-  it('错误码 → 文案键：九个登记码、未登记码与缺失码回落兜底', () => {
-    expect(QUERY_ERROR_CODES).toHaveLength(9)
+  it('错误码 → 文案键：十个登记码（06-6-2 补 350016）、未登记码与缺失码回落兜底', () => {
+    expect(QUERY_ERROR_CODES).toHaveLength(10)
     for (const code of QUERY_ERROR_CODES) {
       expect(errorKeyOf(code)).toBe(`error.${String(code)}`)
     }
