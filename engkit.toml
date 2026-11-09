@@ -105,6 +105,10 @@ label = "基座：check_backend_base（继承链 / 清单 / 直继承 / 形态 /
 cmd = ["{python}", "-m", "engkit", "base", "backend-base"]
 
 [[preflight.steps]]
+label = "基座：check_frontend_base（前端继承链 / 清单 / 体系根）"
+cmd = ["{python}", "-m", "engkit", "base", "frontend-base"]
+
+[[preflight.steps]]
 label = "文档：engkit links（链接与锚点）"
 cmd = ["{python}", "-m", "engkit", "links"]
 
@@ -189,6 +193,15 @@ framework_object_root = "BaseFrameworkObject"
 datasources = ["platform", "tenant"]
 default_chain = "platform:tenant"
 error_code_segment = "35"
+
+[rules.frontend_base]
+# 产品仓形态：前端清单 / 契约自持，父类经 bms 基座前端源码面解析，链须接到平台体系根。
+profile = "product"
+manifest = "msg文档/前端基类清单.md"
+chain_doc = "msg文档/设计/基类体系/前端基类实现契约.md"
+source_dirs = ["frontend/modules/msg/src"]
+base_source_dirs = ["../bms/frontend/packages/core/src"]
+root_bases_marker = "体系根清单"
 
 # ---- 基座护栏：裸无序集合（07D 收口接入；形态定义与 bms 同源，扫描根本仓自持）----
 [rules.bare_collections]

@@ -181,6 +181,9 @@ importers:
       '@bms/ui_ep':
         specifier: file:../../../../bms/frontend/packages/ui_ep
         version: file:../../bms/frontend/packages/ui_ep(@floating-ui/dom@1.8.0)(@tiptap/pm@3.33.0)(vue@3.5.45(typescript@6.0.3))
+      '@msg/api-types':
+        specifier: file:../../packages/api-types
+        version: link:../../packages/api-types
       element-plus:
         specifier: ^2.14.5
         version: 2.14.8(vue@3.5.45(typescript@6.0.3))

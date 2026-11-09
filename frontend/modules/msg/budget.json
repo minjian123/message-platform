@@ -1,9 +1,21 @@
 {
   "distDir": "dist",
-  "entryGzipKb": 24,
-  "largestGzipKb": 12,
-  "maxEntryFiles": 12,
-  "minAsyncChunks": 1,
-  "pageChunkHints": ["QuotaPanel"],
-  "note": "模块产物单独计量：入口块＝从 remoteEntry.js 出发的引用闭包（种子追静态+动态引用，其余只追静态引用）；QuotaPanel 经动态 import() 引用，不进闭包。首轮构建实测 2026-11-08：入口闭包约 18.8 KB gzip，取整阈值 24 / 12 / 12；异步块 1 个。"
+  "entryGzipKb": 16,
+  "largestGzipKb": 8,
+  "maxEntryFiles": 8,
+  "minAsyncChunks": 22,
+  "pageChunkHints": [
+    "QuotaPanel",
+    "OverviewCard",
+    "OverviewPage",
+    "TopicsPage",
+    "TopicDetailPage",
+    "GroupsPage",
+    "GroupDetailPage",
+    "PartitionsPage",
+    "MessagesPage",
+    "DelayedPage",
+    "DlqPage"
+  ],
+  "note": "模块产物单独计量：入口块＝从 remoteEntry.js 出发的引用闭包（种子追静态+动态引用，其余只追静态引用）；页面 / 卡片经动态 import() 引用，不进闭包。2026-11-09 06-1-2 实测（九路由 + 工作台卡片 + 产品基类投影）：入口闭包 6 个文件、合计 13.3 KB gzip、最大单块 6.2 KB；入口外异步 JS 块 22 个、CSS 块另计。阈值按实测取整并留约 20% 余量（16 / 8 / 8 / 22）；pageChunkHints 扩到全部页面与卡片，防止后续分包退化。增量全部来自页面独立异步块，入口闭包较首轮 18.8 KB 未膨胀；新增基类 / 投影 / 共用件同样落在入口外共享块。"
 }

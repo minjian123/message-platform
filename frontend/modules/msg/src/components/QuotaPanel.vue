@@ -8,7 +8,7 @@ import { ElAlert, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { useModuleSlotField } from '@bms/ui_ep'
 import { computed, onMounted, ref } from 'vue'
 
-import type { QuotaItem } from '../domain'
+import type { msg } from '@msg/api-types'
 import { message } from '../i18n/messages'
 import { fetchQuotas } from '../services/quota-service'
 
@@ -25,7 +25,8 @@ const tenantId = computed(() => recordId.value ?? '')
 const loading = ref(false)
 /** 是否不可用（无请求能力 / 请求失败）。 */
 const unavailable = ref(false)
-/** 配额行。 */
+/** 配额行（契约类型取自生成物）。 */
+type QuotaItem = msg.components['schemas']['QuotaItem']
 const items = ref<QuotaItem[]>([])
 
 const STATE_TAG: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
@@ -101,7 +102,7 @@ async function load(): Promise<void> {
   unavailable.value = false
   try {
     const view = await fetchQuotas()
-    items.value = view.items
+    items.value = view.items ?? []
   } catch {
     unavailable.value = true
     items.value = []

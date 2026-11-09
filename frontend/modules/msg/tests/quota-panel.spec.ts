@@ -76,6 +76,16 @@ describe('QuotaPanel（Kiwi 2454）', () => {
     expect(wrapper.text()).toContain('暂不可用')
   })
 
+  it('宿主未注入记录主键、响应未带 items：空行与空占位', async () => {
+    fetchMock.mockResolvedValue({} as never)
+    const wrapper = mountPanel({ formKey: 'tenant' })
+    await Promise.resolve()
+    await Promise.resolve()
+    const panel = wrapper.find('[data-test="msg-quota-panel"]')
+    expect(panel.attributes('data-tenant')).toBe('')
+    expect(wrapper.find('[data-test="msg-quota-table"]').exists()).toBe(true)
+  })
+
   it('只读：不注册提交器（宿主保存不包含本页签）', async () => {
     const registerSubmitter = vi.fn()
     fetchMock.mockResolvedValue({ items: ITEMS })

@@ -19,6 +19,7 @@
     "typecheck": "vue-tsc -b"
   },
   "dependencies": {
+    "@msg/api-types": "file:../../packages/api-types",
     "@bms/core": "file:../../../../bms/frontend/packages/core",
     "@bms/ui_ep": "file:../../../../bms/frontend/packages/ui_ep",
     "element-plus": "^2.14.5",

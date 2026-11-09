@@ -13,9 +13,11 @@ describe('msg 模块定义（Kiwi 2454）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('只登记租户记录页「消息配额」只读页签与文案包', async () => {
+  it('登记九条管理模块路由、一张概览卡片与租户记录页「消息配额」只读页签、文案包', async () => {
     const registration = await msgModule.setup({} as never)
-    expect(registration.routes ?? []).toEqual([])
+    expect(registration.routes ?? []).toHaveLength(9)
+    expect((registration.routes ?? []).filter((route) => route.meta?.menu !== false)).toHaveLength(7)
+    expect((registration.cards ?? []) as unknown[]).toHaveLength(1)
     const regions = registration.regions ?? []
     expect(regions).toHaveLength(1)
     expect(regions[0]?.key).toBe('msg:tenant-quota')
