@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 消费组与积压（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <style>
+      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
+      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
+      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-nav span{opacity:.5}
+      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
+      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-page{display:none}.proto-page.is-active{display:block}
+      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
+      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+      .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}
+      .state.ok{background:#f0f9eb;color:#67c23a}.state.warn{background:#fdf6ec;color:#e6a23c}
+      .pager{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px}
+    </style>
+  </head>
+  <body>
+    <header class="proto-header"><span>原型设计 · 消费组与积压（页面 04）</span></header>
+    <main class="proto-main">
+      <h1>消费组与积压</h1>
+      <p>msg 消息平台 · 06-1-2 只读视图 · 组列表 / 详情（成员、分配、分区积压、最后提交时间）</p>
+      <nav class="proto-nav">
+        <a href="03_原型设计_平台概览.html">概览</a>
+        <a href="04_原型设计_主题管理.html">主题</a>
+        <a class="is-active" href="05_原型设计_消费组与积压.html">消费组</a>
+        <a href="04_原型设计_主题管理.html#detail">分区</a>
+        <a href="06_原型设计_消息查询.html">消息查询</a>
+        <a href="08_原型设计_延迟消息.html">延迟</a>
+        <a href="07_原型设计_死信与重放.html">死信与重放</a>
+        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
+      </nav>
+      <div class="proto-states">
+        <button class="is-active" data-page="list">列表</button>
+        <button data-page="detail">详情 / 深链</button>
+        <button data-page="loading">加载态</button>
+        <button data-page="empty">空态</button>
+        <button data-page="error">错误态</button>
+        <button data-page="denied">无权限</button>
+      </div>
+
+      <section class="proto-page is-active" id="page-list">
+        <div class="proto-frame">
+          <div class="row-actions">
+            <label class="hint">主题 <select><option>全部</option><option>order.created</option></select></label>
+            <label class="hint">消费组 <input placeholder="组名关键字" /></label>
+            <button class="proto-button proto-button--primary">查询</button>
+            <button class="proto-button">重置</button>
+            <span class="hint" style="margin-left:auto">位点重置属写操作，归 06-2（后续任务）</span>
+          </div>
+          <table class="proto-table">
+            <thead><tr><th>消费组</th><th>主题</th><th>成员数</th><th>积压</th><th>最后提交时间</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td>order-sync</td><td>order.created</td><td>3</td><td>3,412</td><td>2026-11-09 10:12:03</td><td><span class="state warn">积压偏高</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+              <tr><td>invoice-audit</td><td>invoice.issued</td><td>2</td><td>0</td><td>2026-11-09 10:12:08</td><td><span class="state ok">正常</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+              <tr><td>notify-push</td><td>order.paid</td><td>1</td><td>128</td><td>2026-11-09 10:11:57</td><td><span class="state ok">正常</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+            </tbody>
+          </table>
+          <div class="pager"><span class="hint">共 3 条 · 第 1 / 1 页</span><button class="proto-button">上一页</button><button class="proto-button">下一页</button></div>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-detail">
+        <div class="proto-frame">
+          <div class="row-actions"><button class="proto-button" data-goto="list">← 返回列表</button><span class="hint">深链：<code>/msg/groups/order-sync</code>（<code>meta.menu: false</code>）</span></div>
+          <h2>order-sync · order.created</h2>
+          <p class="hint">成员与分配</p>
+          <table class="proto-table">
+            <thead><tr><th>成员</th><th>分配分区</th><th>最后心跳</th></tr></thead>
+            <tbody><tr><td>cw-1</td><td>0, 2</td><td>2026-11-09 10:12:08</td></tr><tr><td>cw-2</td><td>1, 3</td><td>2026-11-09 10:12:07</td></tr></tbody>
+          </table>
+          <p class="hint" style="margin-top:14px">分区积压与最后提交时间</p>
+          <table class="proto-table">
+            <thead><tr><th>分区</th><th>LEO</th><th>已提交位点</th><th>积压</th><th>最后提交时间</th></tr></thead>
+            <tbody><tr><td>0</td><td>21,405</td><td>21,380</td><td>25</td><td>10:12:03</td></tr><tr><td>1</td><td>21,398</td><td>18,011</td><td>3,387</td><td>09:58:41</td></tr></tbody>
+          </table>
+          <p class="hint" style="margin-top:12px">数据复用既有 <code>/admin/groups</code> 与 <code>/admin/partitions</code> 契约，字段与后端同源，不在前端重算。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：列表骨架 + 筛选锁定，避免并发查询。</p></div></section>
+      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：无消费组时显示「暂无消费组」与重置筛选；不把空列表画成 0 行。</p></div></section>
+      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350013</code> 组不存在 / <code>350027</code> 无主题描述授权 / 通用 <code>10001</code>，按错误码键映射文案。</p></div></section>
+      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code>：菜单、查询与详情入口不渲染。</p></div></section>
+    </main>
+    <script>
+      document.querySelectorAll('.proto-states button').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
+          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
+          tab.classList.add('is-active')
+          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
+        })
+      })
+      document.querySelectorAll('[data-goto]').forEach((button) => {
+        button.addEventListener('click', () => document.querySelector(`.proto-states button[data-page="${button.dataset.goto}"]`).click())
+      })
+    </script>
+  </body>
+</html>

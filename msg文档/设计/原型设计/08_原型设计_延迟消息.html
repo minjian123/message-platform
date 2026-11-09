@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 延迟消息（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <style>
+      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
+      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
+      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-nav span{opacity:.5}
+      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
+      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-page{display:none}.proto-page.is-active{display:block}
+      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
+      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+      .levels{display:grid;grid-template-columns:repeat(9,1fr);gap:6px;margin:12px 0}
+      .level{border:1px solid var(--bms-color-border);border-radius:4px;padding:8px 4px;text-align:center;font-size:12px}
+      .level strong{display:block;margin-top:4px}
+      .banner{border:1px solid var(--bms-color-border);border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:12px}
+      .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}
+      .state.ok{background:#f0f9eb;color:#67c23a}.state.warn{background:#fdf6ec;color:#e6a23c}.state.bad{background:#fef0f0;color:#f56c6c}
+    </style>
+  </head>
+  <body>
+    <header class="proto-header"><span>原型设计 · 延迟消息（页面 08）</span></header>
+    <main class="proto-main">
+      <h1>延迟消息</h1>
+      <p>msg 消息平台 · 06-1-2 只读视图 · 待投列表、档位分布与堆积提示（不做改期 / 取消）</p>
+      <nav class="proto-nav">
+        <a href="03_原型设计_平台概览.html">概览</a><a href="04_原型设计_主题管理.html">主题</a>
+        <a href="05_原型设计_消费组与积压.html">消费组</a><a href="04_原型设计_主题管理.html#detail">分区</a>
+        <a href="06_原型设计_消息查询.html">消息查询</a>
+        <a class="is-active" href="08_原型设计_延迟消息.html">延迟</a>
+        <a href="07_原型设计_死信与重放.html">死信与重放</a>
+        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
+      </nav>
+      <div class="proto-states">
+        <button class="is-active" data-page="normal">正常（normal）</button>
+        <button data-page="stale">堆积（stale）</button>
+        <button data-page="quota">近上限</button>
+        <button data-page="loading">加载态</button><button data-page="empty">空态</button>
+        <button data-page="error">错误态</button><button data-page="denied">无权限</button>
+      </div>
+
+      <section class="proto-page is-active" id="page-normal">
+        <div class="proto-frame">
+          <div class="banner"><span class="state ok">提示：延迟区运行正常</span> <span class="hint">文案取模块 i18n 的 <code>hint.normal</code>；后端返回结构化枚举，不返回中文文案。</span></div>
+          <div class="row-actions">
+            <label class="hint">命名空间 <select><option>msg</option></select></label>
+            <label class="hint">主题 <select><option>全部</option><option>order.created</option></select></label>
+            <label class="hint">分区 <select><option>全部</option></select></label>
+            <button class="proto-button proto-button--primary">查询</button><button class="proto-button">重置</button>
+            <span class="hint" style="margin-left:auto">只读：不提供改期 / 取消入口</span>
+          </div>
+          <h2>档位分布（九档，与待投列表同源）</h2>
+          <div class="levels">
+            <div class="level">1s<strong>0</strong></div><div class="level">5s<strong>2</strong></div><div class="level">10s<strong>0</strong></div>
+            <div class="level">30s<strong>5</strong></div><div class="level">1m<strong>0</strong></div><div class="level">5m<strong>1</strong></div>
+            <div class="level">10m<strong>0</strong></div><div class="level">30m<strong>0</strong></div><div class="level">1h<strong>0</strong></div>
+          </div>
+          <p class="hint">未出现的档位也输出 <code>count=0</code>，顺序按 <code>DELAY_LEVEL_MS</code> 声明序；汇总端点为 <code>GET /api/v1/msg/admin/delayed/summary</code>。</p>
+          <h2 style="margin-top:16px">待投列表</h2>
+          <table class="proto-table">
+            <thead><tr><th>log_id</th><th>主题</th><th>分区</th><th>档位</th><th>到期时间</th><th>剩余时间</th><th>trace_id</th></tr></thead>
+            <tbody>
+              <tr><td>01J8ZK…</td><td>order.created</td><td>0</td><td>30s</td><td>2026-11-09 02:12:30</td><td>00:00:18</td><td>4bf92f…</td></tr>
+              <tr><td>01J8ZJ…</td><td>order.paid</td><td>1</td><td>5m</td><td>2026-11-09 02:16:58</td><td>00:04:46</td><td>91c0a3…</td></tr>
+            </tbody>
+          </table>
+          <p class="hint" style="margin-top:12px">待投列表复用 <code>/admin/delayed</code> 既有契约；汇总与列表取同一份租户快照，不在请求内全量扫描。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-stale">
+        <div class="proto-frame"><div class="banner"><span class="state bad">提示：存在已到期未转投的消息</span> <span class="hint"><code>hint.stale</code> · <code>stale_count=7</code>，按「已到期未转投」计数，TTL 不进汇总端点。</span></div><p class="hint">堆积提示只回答「在等什么、还要等多久、是否堆积」，不提供改期 / 取消。</p></div>
+      </section>
+      <section class="proto-page" id="page-quota">
+        <div class="proto-frame"><div class="banner"><span class="state warn">提示：延迟区用量接近上限</span> <span class="hint"><code>hint.near_quota</code> · <code>quota_used_ratio=0.92</code>，夹到 [0, 1]。</span></div></div>
+      </section>
+      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：档位分布与待投列表各自骨架，汇总端点独立演进、不阻塞列表分页。</p></div></section>
+      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：九档均为 0、待投列表显示「暂无待投消息」；不把 0 画成假数据。</p></div></section>
+      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射；汇总失败不阻断列表。</p></div></section>
+      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code>：菜单、筛选与档位分布均不渲染。</p></div></section>
+    </main>
+    <script>
+      document.querySelectorAll('.proto-states button').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
+          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
+          tab.classList.add('is-active')
+          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
+        })
+      })
+    </script>
+  </body>
+</html>

@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 06 · 死信与重放</title>
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+th,td{border:1px solid #ebeef5;padding:6px 8px;text-align:left}
+th{background:#f5f7fa}
+button,.el-button{border:1px solid #dcdfe6;background:#fff;border-radius:4px;padding:5px 10px;margin:2px}
+input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8px;margin:2px}
+.el-alert{border:1px solid #e1f3d8;background:#f0f9eb;padding:10px;margin:8px 0;border-radius:4px}
+.el-card,.bms-metric-card{border:1px solid #ebeef5;border-radius:4px;padding:12px;display:inline-block;min-width:150px;margin:4px}
+.el-pagination{margin-top:10px;font-size:12px;color:#909399}
+.hint{color:#909399;font-size:12px}
+</style></head><body>
+<h1>实现渲染快照 · 06 · 死信与重放</h1>
+<div class="frame"><section data-v-99d786b7="" class="admin-page" data-test="page-dlq">
+  <h1 data-v-99d786b7="">死信与重放</h1>
+  <section data-v-2f1cb3c3="" data-v-99d786b7="" class="readonly-list" data-test="readonly-list" data-state="ready">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">死信（只读）</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-2f1cb3c3="" data-test="readonly-content">
+      <div data-v-99d786b7="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="dlq-dead-table">
+        <div class="el-table__inner-wrapper">
+          <div class="hidden-columns">
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+          </div>
+          <div class="el-table__header-wrapper">
+            <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 840px;">
+              <colgroup>
+                <col name="el-table_7_column_40" width="160">
+                <col name="el-table_7_column_41" width="140">
+                <col name="el-table_7_column_42" width="90">
+                <col name="el-table_7_column_43" width="120">
+                <col name="el-table_7_column_44" width="90">
+                <col name="el-table_7_column_45" width="100">
+                <col name="el-table_7_column_46" width="140">
+              </colgroup>
+              <thead class="">
+                <tr class="">
+                  <th class="el-table_7_column_40 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">log_id
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_41 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主题
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_42 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">offset
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_43 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">状态
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_44 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">条数
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_45 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">状态
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_7_column_46 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">trace_id
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="el-table__body-wrapper">
+            <div class="el-scrollbar">
+              <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+                <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                  <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 840px;">
+                    <colgroup>
+                      <col name="el-table_7_column_40" width="160">
+                      <col name="el-table_7_column_41" width="140">
+                      <col name="el-table_7_column_42" width="90">
+                      <col name="el-table_7_column_43" width="120">
+                      <col name="el-table_7_column_44" width="90">
+                      <col name="el-table_7_column_45" width="100">
+                      <col name="el-table_7_column_46" width="140">
+                    </colgroup>
+                    <!--v-if-->
+                    <tbody tabindex="-1"></tbody>
+                    <!--v-if-->
+                  </table>
+                  <div style="height: 100%;" class="el-table__empty-block"><span class="el-table__empty-text">暂无数据</span></div>
+                  <!--v-if-->
+                </div>
+              </div>
+              <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+                <!--v-if-->
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+                </div>
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+                </div>
+              </transition-stub>
+            </div>
+          </div>
+          <!--v-if-->
+          <div class="el-table__border-left-patch"></div>
+        </div>
+        <div class="el-table__column-resize-proxy" style="display: none;"></div>
+      </div>
+    </div>
+    <!--v-if-->
+  </section>
+  <section data-v-2f1cb3c3="" data-v-99d786b7="" class="readonly-list" data-test="readonly-list" data-state="ready">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">重放任务（只读）</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-2f1cb3c3="" data-test="readonly-content">
+      <div data-v-99d786b7="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="dlq-replay-table">
+        <div class="el-table__inner-wrapper">
+          <div class="hidden-columns">
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+            <div data-v-99d786b7=""></div>
+          </div>
+          <div class="el-table__header-wrapper">
+            <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 720px;">
+              <colgroup>
+                <col name="el-table_8_column_47" width="140">
+                <col name="el-table_8_column_48" width="140">
+                <col name="el-table_8_column_49" width="140">
+                <col name="el-table_8_column_50" width="100">
+                <col name="el-table_8_column_51" width="100">
+                <col name="el-table_8_column_52" width="100">
+              </colgroup>
+              <thead class="">
+                <tr class="">
+                  <th class="el-table_8_column_47 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">死信与重放
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_8_column_48 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主题
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_8_column_49 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">堆积提示
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_8_column_50 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">入口吞吐
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_8_column_51 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">条数
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_8_column_52 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">状态
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="el-table__body-wrapper">
+            <div class="el-scrollbar">
+              <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+                <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                  <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 720px;">
+                    <colgroup>
+                      <col name="el-table_8_column_47" width="140">
+                      <col name="el-table_8_column_48" width="140">
+                      <col name="el-table_8_column_49" width="140">
+                      <col name="el-table_8_column_50" width="100">
+                      <col name="el-table_8_column_51" width="100">
+                      <col name="el-table_8_column_52" width="100">
+                    </colgroup>
+                    <!--v-if-->
+                    <tbody tabindex="-1"></tbody>
+                    <!--v-if-->
+                  </table>
+                  <div style="height: 100%;" class="el-table__empty-block"><span class="el-table__empty-text">暂无数据</span></div>
+                  <!--v-if-->
+                </div>
+              </div>
+              <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+                <!--v-if-->
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+                </div>
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+                </div>
+              </transition-stub>
+            </div>
+          </div>
+          <!--v-if-->
+          <div class="el-table__border-left-patch"></div>
+        </div>
+        <div class="el-table__column-resize-proxy" style="display: none;"></div>
+      </div>
+    </div>
+    <!--v-if-->
+  </section>
+  <div data-v-99d786b7="" class="admin-page__later" data-test="dlq-later">
+    <p data-v-99d786b7="">只读列表数据源由 06-5 / 06-6 提供，本任务只搭入口</p>
+    <p data-v-99d786b7="">处置交互归 06-5，本页不提供 · 重放任务控制归 06-6，本页不提供</p>
+    <p data-v-99d786b7="">写操作归 06-2，本页不提供</p>
+  </div>
+</section></div>
+</body></html>

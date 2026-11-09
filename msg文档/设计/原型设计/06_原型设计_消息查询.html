@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 消息查询（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <style>
+      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
+      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
+      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-nav span{opacity:.5}
+      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
+      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-page{display:none}.proto-page.is-active{display:block}
+      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
+      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+      .mono{font-family:var(--font-mono,monospace);font-size:12px}
+      .pager{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px}
+    </style>
+  </head>
+  <body>
+    <header class="proto-header"><span>原型设计 · 消息查询（页面 05）</span></header>
+    <main class="proto-main">
+      <h1>消息查询</h1>
+      <p>msg 消息平台 · 06-1-2 只读视图 · 按 offset / key / 时间 / <code>log_id</code> 检索，只展示头与摘要</p>
+      <nav class="proto-nav">
+        <a href="03_原型设计_平台概览.html">概览</a><a href="04_原型设计_主题管理.html">主题</a>
+        <a href="05_原型设计_消费组与积压.html">消费组</a><a href="04_原型设计_主题管理.html#detail">分区</a>
+        <a class="is-active" href="06_原型设计_消息查询.html">消息查询</a>
+        <a href="08_原型设计_延迟消息.html">延迟</a><a href="07_原型设计_死信与重放.html">死信与重放</a>
+        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
+      </nav>
+      <div class="proto-states">
+        <button class="is-active" data-page="list">结果列表</button>
+        <button data-page="detail">消息详情</button>
+        <button data-page="loading">加载态</button><button data-page="empty">空态</button>
+        <button data-page="error">错误态</button><button data-page="denied">无权限</button>
+      </div>
+
+      <section class="proto-page is-active" id="page-list">
+        <div class="proto-frame">
+          <div class="row-actions">
+            <label class="hint">命名空间 <select><option>msg</option></select></label>
+            <label class="hint">主题 <select><option>order.created</option></select></label>
+            <label class="hint">分区 <select><option>全部</option><option>0</option></select></label>
+            <label class="hint">offset <input size="7" placeholder="起" /> - <input size="7" placeholder="止" /></label>
+            <label class="hint">key <input size="10" placeholder="精确匹配" /></label>
+            <label class="hint">时间 <input size="14" placeholder="起 ISO 8601" /> - <input size="14" placeholder="止" /></label>
+            <label class="hint"><code>log_id</code> <input size="14" placeholder="精确值" /></label>
+            <button class="proto-button proto-button--primary">查询</button><button class="proto-button">重置</button>
+          </div>
+          <table class="proto-table">
+            <thead><tr><th>log_id</th><th>分区</th><th>offset</th><th>发布时间（UTC）</th><th>载荷长度</th><th>SHA-256 摘要</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">01J8ZK...</td><td>0</td><td>21,404</td><td>2026-11-09 02:11:58</td><td>512 B</td><td class="mono">9f2c…a81d</td><td><button class="proto-button" data-goto="detail">查看头</button></td></tr>
+              <tr><td class="mono">01J8ZJ...</td><td>0</td><td>21,403</td><td>2026-11-09 02:11:57</td><td>348 B</td><td class="mono">3b7e…10c4</td><td><button class="proto-button" data-goto="detail">查看头</button></td></tr>
+            </tbody>
+          </table>
+          <div class="pager"><span class="hint">共 2 条 · 第 1 / 1 页 · 跨类条件相与</span><button class="proto-button">上一页</button><button class="proto-button">下一页</button></div>
+          <p class="hint" style="margin-top:12px"><strong>不展示消息正文</strong>：响应结构只有 <code>payload_len</code> 与 <code>payload_sha256</code>，上层在类型上拿不到 <code>payload</code>；摘要取落盘字节的 SHA-256。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-detail">
+        <div class="proto-frame">
+          <div class="row-actions"><button class="proto-button" data-goto="list">← 返回列表</button><span class="hint">深链：<code>/msg/messages/01J8ZK...</code>（<code>meta.menu: false</code>）</span></div>
+          <h2>消息头</h2>
+          <table class="proto-table">
+            <tbody>
+              <tr><th>log_id</th><td class="mono">01J8ZK...</td></tr>
+              <tr><th>message_id</th><td class="mono">m-7c1e...</td></tr>
+              <tr><th>分区 / offset</th><td>0 / 21,404</td></tr>
+              <tr><th>发布时间</th><td>2026-11-09 02:11:58 UTC</td></tr>
+              <tr><th>trace_id</th><td class="mono">4bf92f3577b34da6a3ce929d0e0e4736</td></tr>
+              <tr><th>自定义头</th><td class="mono">content-type=application/json; source=order-svc</td></tr>
+              <tr><th>载荷长度 / 摘要</th><td class="mono">512 B / 9f2c…a81d</td></tr>
+            </tbody>
+          </table>
+          <p class="hint" style="margin-top:12px">头与摘要之外不提供「查看正文」入口；<code>log_id</code> 冷记录未命中返回空页，不扫描全量日志。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：结果表骨架；组合条件较多时禁用重复提交。</p></div></section>
+      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：保留筛选条件并显示「未找到匹配消息」，提示放宽 offset / 时间区间；保留清理导致区间为空属正常状态，不报错。</p></div></section>
+      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350001</code> / <code>350009</code> / <code>350010</code> / <code>10001</code>，按错误码键映射文案；保留已填筛选条件。</p></div></section>
+      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code> 或主题 describe 授权：菜单与查询表单不渲染。</p></div></section>
+    </main>
+    <script>
+      document.querySelectorAll('.proto-states button').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
+          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
+          tab.classList.add('is-active')
+          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
+        })
+      })
+      document.querySelectorAll('[data-goto]').forEach((button) => {
+        button.addEventListener('click', () => document.querySelector(`.proto-states button[data-page="${button.dataset.goto}"]`).click())
+      })
+    </script>
+  </body>
+</html>

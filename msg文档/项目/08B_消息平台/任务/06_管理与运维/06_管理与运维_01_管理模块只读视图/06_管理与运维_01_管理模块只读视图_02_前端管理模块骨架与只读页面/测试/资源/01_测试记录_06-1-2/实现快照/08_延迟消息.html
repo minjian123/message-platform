@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 08 · 延迟消息</title>
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+th,td{border:1px solid #ebeef5;padding:6px 8px;text-align:left}
+th{background:#f5f7fa}
+button,.el-button{border:1px solid #dcdfe6;background:#fff;border-radius:4px;padding:5px 10px;margin:2px}
+input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8px;margin:2px}
+.el-alert{border:1px solid #e1f3d8;background:#f0f9eb;padding:10px;margin:8px 0;border-radius:4px}
+.el-card,.bms-metric-card{border:1px solid #ebeef5;border-radius:4px;padding:12px;display:inline-block;min-width:150px;margin:4px}
+.el-pagination{margin-top:10px;font-size:12px;color:#909399}
+.hint{color:#909399;font-size:12px}
+</style></head><body>
+<h1>实现渲染快照 · 08 · 延迟消息</h1>
+<div class="frame"><section data-v-f9ea3dc7="" class="admin-page" data-test="page-delayed">
+  <h1 data-v-f9ea3dc7="">延迟消息</h1>
+  <p data-v-f9ea3dc7="" class="admin-page__hint" data-test="delayed-readonly">只读：不提供改期与取消</p>
+  <section data-v-f9ea3dc7="" data-test="delayed-summary">
+    <div data-v-f9ea3dc7="" class="el-descriptions el-descriptions--small">
+      <!--v-if-->
+      <div class="el-descriptions__body">
+        <table class="el-descriptions__table is-bordered">
+          <tbody>
+            <tr>
+              <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">待投总数</td>
+              <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">17</td>
+              <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">已到期未转投</td>
+              <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">2</td>
+              <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">配额用量</td>
+              <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">0.86</td>
+            </tr>
+            <tr>
+              <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">堆积提示</td>
+              <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="5"><span data-v-f9ea3dc7="" data-test="delayed-hint">延迟区用量接近上限</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <h2 data-v-f9ea3dc7="">档位分布（九档）</h2>
+    <div data-v-f9ea3dc7="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--enable-row-transition el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="delayed-levels-table">
+      <div class="el-table__inner-wrapper">
+        <div class="hidden-columns">
+          <div data-v-f9ea3dc7=""></div>
+          <div data-v-f9ea3dc7=""></div>
+          <div data-v-f9ea3dc7=""></div>
+        </div>
+        <div class="el-table__header-wrapper">
+          <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 340px;">
+            <colgroup>
+              <col name="el-table_9_column_53" width="100">
+              <col name="el-table_9_column_54" width="100">
+              <col name="el-table_9_column_55" width="140">
+            </colgroup>
+            <thead class="">
+              <tr class="">
+                <th class="el-table_9_column_53 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <div class="cell">档位
+                    <!---->
+                    <!---->
+                  </div>
+                </th>
+                <th class="el-table_9_column_54 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <div class="cell">条数
+                    <!---->
+                    <!---->
+                  </div>
+                </th>
+                <th class="el-table_9_column_55 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <div class="cell">最小剩余时间
+                    <!---->
+                    <!---->
+                  </div>
+                </th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <div class="el-table__body-wrapper">
+          <div class="el-scrollbar">
+            <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+              <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 340px;">
+                  <colgroup>
+                    <col name="el-table_9_column_53" width="100">
+                    <col name="el-table_9_column_54" width="100">
+                    <col name="el-table_9_column_55" width="140">
+                  </colgroup>
+                  <!--v-if-->
+                  <tbody tabindex="-1">
+                    <tr class="el-table__row">
+                      <td colspan="1" rowspan="1" class="el-table_9_column_53 el-table__cell">
+                        <div class="cell">
+                          <!---->1s
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_54 el-table__cell">
+                        <div class="cell">
+                          <!---->3
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_55 el-table__cell">
+                        <div class="cell">
+                          <!---->200
+                        </div>
+                      </td>
+                    </tr>
+                    <tr class="el-table__row">
+                      <td colspan="1" rowspan="1" class="el-table_9_column_53 el-table__cell">
+                        <div class="cell">
+                          <!---->5m
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_54 el-table__cell">
+                        <div class="cell">
+                          <!---->12
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_55 el-table__cell">
+                        <div class="cell">
+                          <!---->280000
+                        </div>
+                      </td>
+                    </tr>
+                    <tr class="el-table__row">
+                      <td colspan="1" rowspan="1" class="el-table_9_column_53 el-table__cell">
+                        <div class="cell">
+                          <!---->60m
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_54 el-table__cell">
+                        <div class="cell">
+                          <!---->0
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_9_column_55 el-table__cell">
+                        <div class="cell">
+                          <!---->0
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                  <!--v-if-->
+                </table>
+                <!--v-if-->
+                <!--v-if-->
+              </div>
+            </div>
+            <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+              <!--v-if-->
+            </transition-stub>
+            <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+              <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+              </div>
+            </transition-stub>
+            <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+              <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+              </div>
+            </transition-stub>
+          </div>
+        </div>
+        <!--v-if-->
+        <div class="el-table__border-left-patch"></div>
+      </div>
+      <div class="el-table__column-resize-proxy" style="display: none;"></div>
+    </div>
+  </section>
+  <section data-v-2f1cb3c3="" data-v-f9ea3dc7="" class="readonly-list" data-test="readonly-list" data-state="ready">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">延迟消息</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-f9ea3dc7="" class="admin-page__filters">
+      <div data-v-f9ea3dc7="" class="el-input">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="delayed-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-393-16"><!-- suffix slot -->
+          <!--v-if-->
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div><button data-v-f9ea3dc7="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="delayed-query">
+        <!--v-if--><span class="">查询</span>
+      </button><button data-v-f9ea3dc7="" aria-disabled="false" type="button" class="el-button" data-test="delayed-reset">
+        <!--v-if--><span class="">重置</span>
+      </button>
+    </div>
+    <div data-v-2f1cb3c3="" data-test="readonly-content">
+      <div data-v-f9ea3dc7="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--enable-row-transition el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="delayed-table">
+        <div class="el-table__inner-wrapper">
+          <div class="hidden-columns">
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+            <div data-v-f9ea3dc7=""></div>
+          </div>
+          <div class="el-table__header-wrapper">
+            <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 910px;">
+              <colgroup>
+                <col name="el-table_10_column_56" width="180">
+                <col name="el-table_10_column_57" width="140">
+                <col name="el-table_10_column_58" width="80">
+                <col name="el-table_10_column_59" width="90">
+                <col name="el-table_10_column_60" width="180">
+                <col name="el-table_10_column_61" width="120">
+                <col name="el-table_10_column_62" width="120">
+              </colgroup>
+              <thead class="">
+                <tr class="">
+                  <th class="el-table_10_column_56 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">log_id
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_57 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">主题
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_58 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">分区
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_59 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">档位
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_60 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">到期时间
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_61 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">剩余时间
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_10_column_62 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">trace_id
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="el-table__body-wrapper">
+            <div class="el-scrollbar">
+              <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+                <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                  <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 910px;">
+                    <colgroup>
+                      <col name="el-table_10_column_56" width="180">
+                      <col name="el-table_10_column_57" width="140">
+                      <col name="el-table_10_column_58" width="80">
+                      <col name="el-table_10_column_59" width="90">
+                      <col name="el-table_10_column_60" width="180">
+                      <col name="el-table_10_column_61" width="120">
+                      <col name="el-table_10_column_62" width="120">
+                    </colgroup>
+                    <!--v-if-->
+                    <tbody tabindex="-1">
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_10_column_56 el-table__cell">
+                          <div class="cell">
+                            <!---->01J8Y7FGHIJ
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_57 el-table__cell">
+                          <div class="cell">
+                            <!---->order.created
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_58 el-table__cell">
+                          <div class="cell">
+                            <!---->0
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_59 el-table__cell">
+                          <div class="cell">
+                            <!---->5m
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_60 el-table__cell">
+                          <div class="cell">
+                            <!---->2026-11-09T10:05:00Z
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_61 el-table__cell">
+                          <div class="cell">
+                            <!---->280000
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_10_column_62 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <!--v-if-->
+                  </table>
+                  <!--v-if-->
+                  <!--v-if-->
+                </div>
+              </div>
+              <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+                <!--v-if-->
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+                </div>
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+                </div>
+              </transition-stub>
+            </div>
+          </div>
+          <!--v-if-->
+          <div class="el-table__border-left-patch"></div>
+        </div>
+        <div class="el-table__column-resize-proxy" style="display: none;"></div>
+      </div>
+    </div>
+    <div data-v-2f1cb3c3="" class="el-pagination" data-test="readonly-pagination"><span class="el-pagination__total is-first" disabled="false">Total 1</span><button type="button" class="btn-prev" disabled="" aria-label="Go to previous page" aria-disabled="true"><i class="el-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+            <path fill="currentColor" d="M609.408 149.376 277.76 489.6a32 32 0 0 0 0 44.672l331.648 340.352a29.12 29.12 0 0 0 41.728 0 30.59 30.59 0 0 0 0-42.752L339.264 511.936l311.872-319.872a30.59 30.59 0 0 0 0-42.688 29.12 29.12 0 0 0-41.728 0"></path>
+          </svg></i></button>
+      <ul class="el-pager">
+        <li class="is-active number" aria-current="true" aria-label="page 1" tabindex="0"> 1 </li>
+        <!--v-if-->
+        <!--v-if-->
+        <!--v-if-->
+      </ul><button type="button" class="btn-next is-last" disabled="" aria-label="Go to next page" aria-disabled="true"><i class="el-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+            <path fill="currentColor" d="M340.864 149.312a30.59 30.59 0 0 0 0 42.752L652.736 512 340.864 831.872a30.59 30.59 0 0 0 0 42.752 29.12 29.12 0 0 0 41.728 0L714.24 534.336a32 32 0 0 0 0-44.672L382.592 149.376a29.12 29.12 0 0 0-41.728 0z"></path>
+          </svg></i></button>
+    </div>
+  </section>
+</section></div>
+</body></html>

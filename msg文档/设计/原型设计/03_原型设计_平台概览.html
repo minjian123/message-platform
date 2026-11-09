@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 平台概览（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <style>
+      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
+      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
+      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-nav span{opacity:.5}
+      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
+      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-page{display:none}.proto-page.is-active{display:block}
+      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
+      .proto-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+      .proto-card{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:#fff}
+      .proto-card small{color:var(--bms-color-text-secondary)}
+      .proto-card strong{display:block;font-size:22px;margin-top:8px}
+      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+      .row-actions{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:12px 0}
+    </style>
+  </head>
+  <body>
+    <header class="proto-header"><span>原型设计 · 平台概览（页面 02）</span></header>
+    <main class="proto-main">
+      <h1>平台概览</h1>
+      <p>msg 消息平台 · 06-1-2 管理模块只读视图 · 菜单分组「消息平台」</p>
+      <nav class="proto-nav">
+        <a class="is-active" href="03_原型设计_平台概览.html">概览</a>
+        <a href="04_原型设计_主题管理.html">主题</a>
+        <a href="05_原型设计_消费组与积压.html">消费组</a>
+        <a href="04_原型设计_主题管理.html#detail">分区</a>
+        <a href="06_原型设计_消息查询.html">消息查询</a>
+        <a href="08_原型设计_延迟消息.html">延迟</a>
+        <a href="07_原型设计_死信与重放.html">死信与重放</a>
+        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
+      </nav>
+      <div class="proto-states">
+        <button class="is-active" data-page="normal">正常</button>
+        <button data-page="loading">加载态</button>
+        <button data-page="empty">空态 / 冷启动</button>
+        <button data-page="error">错误态</button>
+        <button data-page="denied">无权限</button>
+      </div>
+
+      <section class="proto-page is-active" id="page-normal">
+        <div class="proto-frame">
+          <div class="row-actions">
+            <span class="hint">数据取 <code>GET /api/v1/msg/admin/overview</code>；卡片与页面共用同一取数层，挂载取一次 + 30s 轮询</span>
+            <button class="proto-button" id="grafana">查看 Grafana</button>
+          </div>
+          <div class="proto-cards">
+            <div class="proto-card"><small>入口吞吐</small><strong id="metric-throughput">1,280 /s</strong><small>采样周期均值</small></div>
+            <div class="proto-card"><small>当前积压</small><strong id="metric-lag">3,412</strong><small>当前租户汇总</small></div>
+            <div class="proto-card"><small>死信数</small><strong id="metric-dlq">17</strong><small>待处置</small></div>
+            <div class="proto-card"><small>磁盘使用率</small><strong id="metric-disk">63%</strong><small>多卷取最大值</small></div>
+          </div>
+          <p class="hint" style="margin-top:14px">工作台概览卡片缩略：同样四值，尺寸与刷新策略按 bms 工作台卡片约定；卡片与页面不各建一套取数层。</p>
+          <p class="hint">趋势图不自绘，「查看 Grafana」跳转 06-3-2 交付的看板（UID <code>msg-overview</code>）；地址集中放模块常量，缺配置时按钮不渲染。</p>
+          <p class="hint">排障定位：所有取数响应带 <code>trace_id</code>，列表页可复制。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-loading">
+        <div class="proto-frame"><p class="hint">加载中：四张数字卡显示骨架块，不显示旧值；轮询刷新不清空已有数值。</p><div class="proto-cards"><div class="proto-card"><small>入口吞吐</small><strong>—</strong></div><div class="proto-card"><small>当前积压</small><strong>—</strong></div><div class="proto-card"><small>死信数</small><strong>—</strong></div><div class="proto-card"><small>磁盘使用率</small><strong>—</strong></div></div></div>
+      </section>
+
+      <section class="proto-page" id="page-empty">
+        <div class="proto-frame"><p class="hint">冷启动占位：<code>snapshot_available=false</code> 时四值返回 0，显示「指标采集中」（模块 i18n，不硬编码中文），不伪造数值、不报错。</p><div class="proto-cards"><div class="proto-card"><small>入口吞吐</small><strong>指标采集中</strong></div><div class="proto-card"><small>当前积压</small><strong>指标采集中</strong></div><div class="proto-card"><small>死信数</small><strong>指标采集中</strong></div><div class="proto-card"><small>磁盘使用率</small><strong>指标采集中</strong></div></div></div>
+      </section>
+
+      <section class="proto-page" id="page-error">
+        <div class="proto-frame"><p class="hint">错误态：请求失败按错误码映射文案（<code>error.350001</code> 等），提供手动刷新；不阻断宿主布局。</p><p><span class="state hard">查询失败</span> <span class="hint">响应码 350001 · 主题不存在</span></p><button class="proto-button">重新加载</button></div>
+      </section>
+
+      <section class="proto-page" id="page-denied">
+        <div class="proto-frame"><p class="hint">无 <code>msg:query</code> 权限：菜单项与「查看 Grafana」按钮均不渲染（不是置灰），宿主菜单分组内不出现消息平台入口。</p></div>
+      </section>
+      <p class="hint" style="margin-top:16px">口径：只读视图，无写操作；不做趋势图自绘；进度类字段按计划表回写，原型仅为界面验收基准。</p>
+    </main>
+    <script>
+      document.querySelectorAll('.proto-states button').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
+          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
+          tab.classList.add('is-active')
+          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
+        })
+      })
+      document.getElementById('grafana').addEventListener('click', () => {
+        window.alert('跳转 Grafana 看板 msg-overview（地址由模块常量提供，缺配置时按钮不渲染）')
+      })
+    </script>
+  </body>
+</html>

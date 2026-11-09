@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 04b · 消费组详情</title>
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+th,td{border:1px solid #ebeef5;padding:6px 8px;text-align:left}
+th{background:#f5f7fa}
+button,.el-button{border:1px solid #dcdfe6;background:#fff;border-radius:4px;padding:5px 10px;margin:2px}
+input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8px;margin:2px}
+.el-alert{border:1px solid #e1f3d8;background:#f0f9eb;padding:10px;margin:8px 0;border-radius:4px}
+.el-card,.bms-metric-card{border:1px solid #ebeef5;border-radius:4px;padding:12px;display:inline-block;min-width:150px;margin:4px}
+.el-pagination{margin-top:10px;font-size:12px;color:#909399}
+.hint{color:#909399;font-size:12px}
+</style></head><body>
+<h1>实现渲染快照 · 04b · 消费组详情</h1>
+<div class="frame"><section data-v-77e668c1="" class="admin-page" data-test="page-group-detail">
+  <h1 data-v-77e668c1="">order-sync</h1>
+  <div data-v-77e668c1="" class="el-descriptions el-descriptions--small" data-test="group-detail-meta">
+    <!--v-if-->
+    <div class="el-descriptions__body">
+      <table class="el-descriptions__table is-bordered">
+        <tbody>
+          <tr>
+            <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">命名空间</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0"></td>
+            <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">主题</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0"></td>
+            <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">状态</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0"></td>
+          </tr>
+          <tr>
+            <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">世代</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0"></td>
+            <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">分区数</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="3"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <h2 data-v-77e668c1="">成员与分配</h2>
+  <div data-v-77e668c1="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="group-members-table">
+    <div class="el-table__inner-wrapper">
+      <div class="hidden-columns">
+        <div data-v-77e668c1=""></div>
+        <div data-v-77e668c1=""></div>
+        <div data-v-77e668c1=""></div>
+      </div>
+      <div class="el-table__header-wrapper">
+        <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 520px;">
+          <colgroup>
+            <col name="el-table_4_column_22" width="160">
+            <col name="el-table_4_column_23" width="180">
+            <col name="el-table_4_column_24" width="180">
+          </colgroup>
+          <thead class="">
+            <tr class="">
+              <th class="el-table_4_column_22 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <div class="cell">成员
+                  <!---->
+                  <!---->
+                </div>
+              </th>
+              <th class="el-table_4_column_23 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <div class="cell">分配分区
+                  <!---->
+                  <!---->
+                </div>
+              </th>
+              <th class="el-table_4_column_24 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <div class="cell">最后心跳
+                  <!---->
+                  <!---->
+                </div>
+              </th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+      <div class="el-table__body-wrapper">
+        <div class="el-scrollbar">
+          <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+            <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+              <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 520px;">
+                <colgroup>
+                  <col name="el-table_4_column_22" width="160">
+                  <col name="el-table_4_column_23" width="180">
+                  <col name="el-table_4_column_24" width="180">
+                </colgroup>
+                <!--v-if-->
+                <tbody tabindex="-1"></tbody>
+                <!--v-if-->
+              </table>
+              <div style="height: 100%;" class="el-table__empty-block"><span class="el-table__empty-text">No Data</span></div>
+              <!--v-if-->
+            </div>
+          </div>
+          <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub>
+          <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+            <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+              <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+            </div>
+          </transition-stub>
+          <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+            <div class="el-scrollbar__bar is-vertical" style="display: none;">
+              <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+            </div>
+          </transition-stub>
+        </div>
+      </div>
+      <!--v-if-->
+      <div class="el-table__border-left-patch"></div>
+    </div>
+    <div class="el-table__column-resize-proxy" style="display: none;"></div>
+  </div>
+  <section data-v-2f1cb3c3="" data-v-77e668c1="" class="readonly-list" data-test="readonly-list" data-state="empty">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">消费组详情</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions"><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-back">
+          <!--v-if--><span class="">返回</span>
+        </button><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button></div>
+    </header>
+    <div data-v-2f1cb3c3="" class="el-empty" data-test="readonly-empty">
+      <div class="el-empty__image"><svg viewBox="0 0 79 86" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+          <defs>
+            <linearGradient id="linearGradient-1-el-id-393-4" x1="38.8503086%" y1="0%" x2="61.1496914%" y2="100%">
+              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+              <stop stop-color="var(--el-empty-fill-color-4)" offset="100%"></stop>
+            </linearGradient>
+            <linearGradient id="linearGradient-2-el-id-393-4" x1="0%" y1="9.5%" x2="100%" y2="90.5%">
+              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+              <stop stop-color="var(--el-empty-fill-color-6)" offset="100%"></stop>
+            </linearGradient>
+            <rect id="path-3-el-id-393-4" x="0" y="0" width="17" height="36"></rect>
+          </defs>
+          <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+            <g transform="translate(-1268.000000, -535.000000)">
+              <g transform="translate(1268.000000, 535.000000)">
+                <path d="M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z" fill="var(--el-empty-fill-color-3)"></path>
+                <polygon fill="var(--el-empty-fill-color-7)" transform="translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) " points="13 58 53 58 42 45 2 45"></polygon>
+                <g transform="translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)">
+                  <polygon fill="var(--el-empty-fill-color-7)" transform="translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) " points="2.84078316e-14 3 18 3 23 7 5 7"></polygon>
+                  <polygon fill="var(--el-empty-fill-color-5)" points="-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"></polygon>
+                  <rect fill="url(#linearGradient-1-el-id-393-4)" transform="translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) " x="38" y="7" width="17" height="36"></rect>
+                  <polygon fill="var(--el-empty-fill-color-2)" transform="translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) " points="24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"></polygon>
+                </g>
+                <rect fill="url(#linearGradient-2-el-id-393-4)" x="13" y="45" width="40" height="36"></rect>
+                <g transform="translate(53.000000, 45.000000)">
+                  <use fill="var(--el-empty-fill-color-8)" transform="translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) " xlink:href="#path-3-el-id-393-4"></use>
+                  <polygon fill="var(--el-empty-fill-color-9)" mask="url(#mask-4-el-id-393-4)" transform="translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) " points="7 0 24 0 20 18 7 16.5"></polygon>
+                </g>
+                <polygon fill="var(--el-empty-fill-color-2)" transform="translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) " points="62 45 79 45 70 58 53 58"></polygon>
+              </g>
+            </g>
+          </g>
+        </svg></div>
+      <div class="el-empty__description">
+        <p>暂无数据</p>
+      </div>
+      <!--v-if-->
+    </div>
+  </section>
+</section></div>
+</body></html>

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<title>实现渲染快照 · 04c · 分区查询</title>
+<style>
+body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:0;padding:24px;background:#f7f8fa;color:#303133}
+h1{font-size:20px;margin:0 0 16px}
+.frame{background:#fff;border:1px solid #dcdfe6;border-radius:6px;padding:18px}
+h2{font-size:15px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+th,td{border:1px solid #ebeef5;padding:6px 8px;text-align:left}
+th{background:#f5f7fa}
+button,.el-button{border:1px solid #dcdfe6;background:#fff;border-radius:4px;padding:5px 10px;margin:2px}
+input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8px;margin:2px}
+.el-alert{border:1px solid #e1f3d8;background:#f0f9eb;padding:10px;margin:8px 0;border-radius:4px}
+.el-card,.bms-metric-card{border:1px solid #ebeef5;border-radius:4px;padding:12px;display:inline-block;min-width:150px;margin:4px}
+.el-pagination{margin-top:10px;font-size:12px;color:#909399}
+.hint{color:#909399;font-size:12px}
+</style></head><body>
+<h1>实现渲染快照 · 04c · 分区查询</h1>
+<div class="frame"><section data-v-2d8317ec="" class="admin-page" data-test="page-partitions">
+  <h1 data-v-2d8317ec="">分区</h1>
+  <p data-v-2d8317ec="" class="admin-page__hint" data-test="partitions-choose-hint">先选择命名空间与主题，再查看分区明细</p>
+  <section data-v-2f1cb3c3="" data-v-2d8317ec="" class="readonly-list" data-test="readonly-list" data-state="ready">
+    <header data-v-2f1cb3c3="" class="readonly-list__head">
+      <h2 data-v-2f1cb3c3="">分区</h2>
+      <div data-v-2f1cb3c3="" class="readonly-list__actions">
+        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+          <!--v-if--><span class="">重新加载</span>
+        </button>
+      </div>
+    </header>
+    <div data-v-2d8317ec="" class="admin-page__filters">
+      <div data-v-2d8317ec="" class="el-input">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="partitions-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-393-5"><!-- suffix slot -->
+          <!--v-if-->
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-2d8317ec="" class="el-input">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="partitions-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-393-6"><!-- suffix slot -->
+          <!--v-if-->
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div><button data-v-2d8317ec="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="partitions-query">
+        <!--v-if--><span class="">查询</span>
+      </button><button data-v-2d8317ec="" aria-disabled="false" type="button" class="el-button" data-test="partitions-reset">
+        <!--v-if--><span class="">重置</span>
+      </button>
+    </div>
+    <div data-v-2f1cb3c3="" data-test="readonly-content">
+      <div data-v-2d8317ec="" class="el-table--fit el-table--border el-table--scrollable-x el-table--enable-row-hover el-table--enable-row-transition el-table--small el-table el-table--layout-fixed" data-prefix="el" data-test="partitions-table">
+        <div class="el-table__inner-wrapper">
+          <div class="hidden-columns">
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+            <div data-v-2d8317ec=""></div>
+          </div>
+          <div class="el-table__header-wrapper">
+            <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 770px;">
+              <colgroup>
+                <col name="el-table_5_column_25" width="80">
+                <col name="el-table_5_column_26" width="110">
+                <col name="el-table_5_column_27" width="90">
+                <col name="el-table_5_column_28" width="90">
+                <col name="el-table_5_column_29" width="90">
+                <col name="el-table_5_column_30" width="110">
+                <col name="el-table_5_column_31" width="90">
+                <col name="el-table_5_column_32" width="110">
+              </colgroup>
+              <thead class="">
+                <tr class="">
+                  <th class="el-table_5_column_25 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">分区
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_26 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">Leader
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_27 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">LEO
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_28 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">HW
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_29 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">ISR
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_30 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">已提交位点
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_31 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">msg.admin.partitions.lag
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                  <th class="el-table_5_column_32 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                    <div class="cell">Owner
+                      <!---->
+                      <!---->
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="el-table__body-wrapper">
+            <div class="el-scrollbar">
+              <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
+                <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
+                  <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 770px;">
+                    <colgroup>
+                      <col name="el-table_5_column_25" width="80">
+                      <col name="el-table_5_column_26" width="110">
+                      <col name="el-table_5_column_27" width="90">
+                      <col name="el-table_5_column_28" width="90">
+                      <col name="el-table_5_column_29" width="90">
+                      <col name="el-table_5_column_30" width="110">
+                      <col name="el-table_5_column_31" width="90">
+                      <col name="el-table_5_column_32" width="110">
+                    </colgroup>
+                    <!--v-if-->
+                    <tbody tabindex="-1">
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_5_column_25 el-table__cell">
+                          <div class="cell">
+                            <!---->0
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_26 el-table__cell">
+                          <div class="cell">
+                            <!---->msg-0
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_27 el-table__cell">
+                          <div class="cell">
+                            <!---->18004
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_28 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_29 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_30 el-table__cell">
+                          <div class="cell">
+                            <!---->17990
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_31 el-table__cell">
+                          <div class="cell">
+                            <!---->14
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_32 el-table__cell">
+                          <div class="cell">
+                            <!---->c-1
+                          </div>
+                        </td>
+                      </tr>
+                      <tr class="el-table__row">
+                        <td colspan="1" rowspan="1" class="el-table_5_column_25 el-table__cell">
+                          <div class="cell">
+                            <!---->1
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_26 el-table__cell">
+                          <div class="cell">
+                            <!---->msg-0
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_27 el-table__cell">
+                          <div class="cell">
+                            <!---->17900
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_28 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_29 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_30 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_31 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                        <td colspan="1" rowspan="1" class="el-table_5_column_32 el-table__cell">
+                          <div class="cell">
+                            <!---->—
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <!--v-if-->
+                  </table>
+                  <!--v-if-->
+                  <!--v-if-->
+                </div>
+              </div>
+              <transition-stub name="el-scrollbar-mask-fade" appear="false" persisted="false" css="true">
+                <!--v-if-->
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-horizontal" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateX(0%);"></div>
+                </div>
+              </transition-stub>
+              <transition-stub name="el-scrollbar-fade" appear="false" persisted="true" css="true">
+                <div class="el-scrollbar__bar is-vertical" style="display: none;">
+                  <div class="el-scrollbar__thumb" style="transform: translateY(0%);"></div>
+                </div>
+              </transition-stub>
+            </div>
+          </div>
+          <!--v-if-->
+          <div class="el-table__border-left-patch"></div>
+        </div>
+        <div class="el-table__column-resize-proxy" style="display: none;"></div>
+      </div>
+    </div>
+    <!--v-if-->
+  </section>
+</section></div>
+</body></html>

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型设计 · 主题管理（msg 消息平台）</title>
+    <link rel="stylesheet" href="../../../bms文档/设计/原型设计/资源/原型样式.css" />
+    <style>
+      .proto-nav{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 18px}
+      .proto-nav a,.proto-nav span{padding:6px 12px;border:1px solid var(--bms-color-border);border-radius:4px;font-size:13px;text-decoration:none;color:var(--bms-color-text)}
+      .proto-nav a.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-nav span{opacity:.5}
+      .proto-states{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
+      .proto-states button{padding:5px 12px;border:1px solid var(--bms-color-border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+      .proto-states button.is-active{border-color:var(--bms-color-primary);color:var(--bms-color-primary)}
+      .proto-page{display:none}.proto-page.is-active{display:block}
+      .proto-frame{border:1px solid var(--bms-color-border);border-radius:6px;padding:16px;background:var(--bms-color-bg)}
+      .row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      .hint{color:var(--bms-color-text-secondary);font-size:12px;line-height:1.7}
+      .state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#f4f4f5;color:#909399}
+      .pager{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px}
+    </style>
+  </head>
+  <body>
+    <header class="proto-header"><span>原型设计 · 主题管理（页面 03）</span></header>
+    <main class="proto-main">
+      <h1>主题管理</h1>
+      <p>msg 消息平台 · 06-1-2 只读视图 · 主题列表 / 详情（分区 LEO 与占位字段）</p>
+      <nav class="proto-nav">
+        <a href="03_原型设计_平台概览.html">概览</a>
+        <a class="is-active" href="04_原型设计_主题管理.html">主题</a>
+        <a href="05_原型设计_消费组与积压.html">消费组</a>
+        <a href="#detail">分区</a>
+        <a href="06_原型设计_消息查询.html">消息查询</a>
+        <a href="08_原型设计_延迟消息.html">延迟</a>
+        <a href="07_原型设计_死信与重放.html">死信与重放</a>
+        <span>主题授权（06-7 预留）</span><span>租户用量（06-8 预留）</span>
+      </nav>
+      <div class="proto-states">
+        <button class="is-active" data-page="list">列表</button>
+        <button data-page="detail" id="detail">详情 / 深链</button>
+        <button data-page="loading">加载态</button>
+        <button data-page="empty">空态</button>
+        <button data-page="error">错误态</button>
+        <button data-page="denied">无权限</button>
+      </div>
+
+      <section class="proto-page is-active" id="page-list">
+        <div class="proto-frame">
+          <div class="row-actions">
+            <label class="hint">命名空间 <select><option>msg</option><option>order</option></select></label>
+            <label class="hint">主题 <input placeholder="名称关键字" /></label>
+            <button class="proto-button proto-button--primary">查询</button>
+            <button class="proto-button">重置</button>
+            <span class="hint" style="margin-left:auto">新建主题属写操作，归 06-2（后续任务，本页不提供入口）</span>
+          </div>
+          <table class="proto-table">
+            <thead><tr><th>主题</th><th>分区数</th><th>消息量</th><th>保留期</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td>order.created</td><td>6</td><td>128,430</td><td>7 天</td><td><span class="state">正常</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+              <tr><td>order.paid</td><td>3</td><td>42,118</td><td>7 天</td><td><span class="state">正常</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+              <tr><td>invoice.issued</td><td>2</td><td>8,904</td><td>30 天</td><td><span class="state">正常</span></td><td><button class="proto-button" data-goto="detail">查看详情</button></td></tr>
+            </tbody>
+          </table>
+          <div class="pager"><span class="hint">共 3 条 · 第 1 / 1 页</span><button class="proto-button">上一页</button><button class="proto-button">下一页</button></div>
+          <p class="hint" style="margin-top:12px">列表统一分页、筛选、空态、错误态与加载态；租户上下文由宿主注入，页面不自行拼装租户参数。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-detail">
+        <div class="proto-frame">
+          <div class="row-actions"><button class="proto-button" data-goto="list">← 返回列表</button><span class="hint">深链：<code>/msg/topics/msg/order.created</code>（详情页 <code>meta.menu: false</code>，不进菜单但路由可达）</span></div>
+          <h2>order.created · 分区明细</h2>
+          <p class="hint">字段与 <code>GET /api/v1/msg/admin/partitions</code> 同源；<code>hw</code> / <code>isr</code> 为可空占位，02-4 / 02-5 交付前显示「—」，不伪造数值。</p>
+          <table class="proto-table">
+            <thead><tr><th>分区</th><th>Leader</th><th>LEO</th><th>HW</th><th>ISR</th><th>已提交位点</th><th>积压</th><th>Owner</th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td>msg-0</td><td>21,405</td><td>—</td><td>—</td><td>21,380</td><td>25</td><td>cw-1</td></tr>
+              <tr><td>1</td><td>msg-0</td><td>21,398</td><td>—</td><td>—</td><td>21,391</td><td>7</td><td>cw-2</td></tr>
+              <tr><td>2</td><td>msg-0</td><td>21,410</td><td>—</td><td>—</td><td>21,410</td><td>0</td><td>cw-1</td></tr>
+            </tbody>
+          </table>
+          <p class="hint" style="margin-top:12px">分区查询页需先选主题（分区端点必填 <code>namespace</code> + <code>topic</code>），无全平台分区列表端点。</p>
+        </div>
+      </section>
+
+      <section class="proto-page" id="page-loading"><div class="proto-frame"><p class="hint">加载态：表格行显示骨架块，筛选控件保留可用，禁止重复提交查询。</p></div></section>
+      <section class="proto-page" id="page-empty"><div class="proto-frame"><p class="hint">空态：按筛选条件无匹配主题时显示「暂无数据」与「重置筛选」，不显示 0 值的假行。</p></div></section>
+      <section class="proto-page" id="page-error"><div class="proto-frame"><p class="hint">错误态：<code>350001</code> 主题不存在 / <code>350009</code> 分区越界 / <code>10001</code> 参数非法，文案按错误码键映射；提供重试。</p></div></section>
+      <section class="proto-page" id="page-denied"><div class="proto-frame"><p class="hint">无 <code>msg:query</code>：菜单项、查询按钮与详情入口均不渲染。</p></div></section>
+    </main>
+    <script>
+      document.querySelectorAll('.proto-states button').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.proto-states button').forEach((item) => item.classList.remove('is-active'))
+          document.querySelectorAll('.proto-page').forEach((page) => page.classList.remove('is-active'))
+          tab.classList.add('is-active')
+          document.getElementById(`page-${tab.dataset.page}`).classList.add('is-active')
+        })
+      })
+      document.querySelectorAll('[data-goto]').forEach((button) => {
+        button.addEventListener('click', () => document.querySelector(`.proto-states button[data-page="${button.dataset.goto}"]`).click())
+      })
+    </script>
+  </body>
+</html>
