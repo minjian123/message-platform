@@ -182,6 +182,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
             "msg_topic_acl",
             "msg_topic_acl_scope",
             "msg_topic_cleanup",
+            "msg_dead_letter",
         ):
             await connection.run_sync(Base.metadata.tables[table].create)
     try:

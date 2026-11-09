@@ -42,6 +42,7 @@ from bms_msg.broker.deadletter import (
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
+from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
@@ -381,6 +382,8 @@ class DeliveryService:
                 raise MsgMessageNotFoundError(f"位点已被保留期清理：{committed} < {start}")
             return await self._collect(
                 request=request,
+                tenant=tenant,
+                topic=topic,
                 key=key,
                 topic_id=topic_id,
                 partition_no=partition_no,
@@ -471,6 +474,8 @@ class DeliveryService:
             return await self._dead_letter(
                 key=key,
                 message=batch[0],
+                tenant=tenant,
+                topic=topic,
                 attempts=existing.attempts,
                 reason=DeadLetterReason(request.reason),
                 detail=ConcurrentStableDict(request.detail.items()),
@@ -480,6 +485,8 @@ class DeliveryService:
         self,
         *,
         request: ConsumeRequest,
+        tenant: CurrentTenant,
+        topic: TopicSnapshot,
         key: PartitionKey,
         topic_id: int,
         partition_no: int,
@@ -554,7 +561,9 @@ class DeliveryService:
                     # 字节额度不足：停批。与「队头未确认」是两种停法——这里不改变顺序判定。
                     stopped = True
                     break
-                delivery = await self._deliver(key=key, message=message, acks=request.acks, existing=existing)
+                delivery = await self._deliver(
+                    key=key, message=message, acks=request.acks, existing=existing, tenant=tenant, topic=topic
+                )
                 if delivery is None:
                     # 本次刚转死信：与「已死信」同处置，继续看下一条。
                     continue
@@ -575,7 +584,14 @@ class DeliveryService:
         return delivered
 
     async def _deliver(
-        self, *, key: PartitionKey, message: StoredMessage, acks: int, existing: InflightDelivery | None
+        self,
+        *,
+        key: PartitionKey,
+        message: StoredMessage,
+        acks: int,
+        existing: InflightDelivery | None,
+        tenant: CurrentTenant,
+        topic: TopicSnapshot,
     ) -> Delivery | None:
         """决定一条消息本次是否投出、投出时的投递次数。
 
@@ -584,6 +600,8 @@ class DeliveryService:
             message: 存储中的消息。
             acks: 投递档位（1 = 至少一次；0 = 不等确认）。
             existing: 该 offset 的在途记录（未投过或已确认即 `None`；未过期的在途已由调用方停等拦下）。
+            tenant: 当前租户（转入死信时落库用）。
+            topic: 主题快照（转入死信时落命名空间 / 主题名）。
 
         Returns:
             Delivery | None: 需投出时的投递；`None` 仅表示本次刚转死信（调用方应继续看下一条）。
@@ -593,7 +611,7 @@ class DeliveryService:
             return Delivery(message=message, delivery_count=1)
         attempts = 1 if existing is None else existing.attempts + 1
         if attempts > MAX_DELIVERY_ATTEMPTS:
-            await self._dead_letter(key=key, message=message)
+            await self._dead_letter(key=key, message=message, tenant=tenant, topic=topic)
             return None
         self._state.track(
             key,
@@ -612,6 +630,8 @@ class DeliveryService:
         *,
         key: PartitionKey,
         message: StoredMessage,
+        tenant: CurrentTenant,
+        topic: TopicSnapshot,
         attempts: int | None = None,
         reason: DeadLetterReason = DEAD_LETTER_EXHAUSTED,
         detail: ConcurrentStableDict[str, str] | None = None,
@@ -621,6 +641,8 @@ class DeliveryService:
         Args:
             key: 投递状态键。
             message: 被放弃的消息。
+            tenant: 当前租户（持久化必填）。
+            topic: 主题快照（命名空间 / 主题名快照）。
             attempts: 累计投递次数（缺省按重投上限填；消费端上报时给实际次数）。
             reason: 转入原因（broker 判定为重投超限，消费端上报见 `DeadLetterReason`）。
             detail: 失败详情（消费端上报时原样保存）。
@@ -639,6 +661,11 @@ class DeliveryService:
                 failed_at=self._now(),
                 reason=reason,
                 detail=detail if detail is not None else ConcurrentStableDict(),
+                tenant_id=int(tenant.tenant_id),
+                namespace=topic.namespace,
+                topic=topic.name,
+                log_id=message.log_id,
+                trace_id=message.trace_id,
             )
         )
         self._state.forget(key, message.offset)

@@ -38,6 +38,9 @@ __all__ = [
     "ACL_UPDATE_ACTION",
     "ACTION_CLASSES",
     "DELAY_DISCARD_ACTION",
+    "DLQ_ARCHIVE_ACTION",
+    "DLQ_IGNORE_ACTION",
+    "DLQ_REPLAY_ACTION",
     "MESSAGE_DELETE_ACTION",
     "MESSAGE_REF_TYPE",
     "MODULE",
@@ -103,6 +106,15 @@ OFFSET_PURGE_ACTION = "msg:offset.purge"
 DELAY_DISCARD_ACTION = "msg:delay.discard"
 """延迟转投异常处置（记录级，强审计 + `record_ref`）。"""
 
+DLQ_REPLAY_ACTION = "msg:dlq.replay"
+"""死信重放（记录级，强审计 + `record_ref = msg.message/log_id`；06-5）。"""
+
+DLQ_IGNORE_ACTION = "msg:dlq.ignore"
+"""死信忽略（记录级，强审计 + `record_ref`；06-5）。"""
+
+DLQ_ARCHIVE_ACTION = "msg:dlq.archive"
+"""死信归档（记录级，强审计 + `record_ref`；06-5）。"""
+
 MESSAGE_DELETE_ACTION = "msg:message.delete"
 """删消息（记录级契约；实际触发归 06-2）。"""
 
@@ -137,6 +149,9 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         DELAY_DISCARD_ACTION: AuditClass(
             AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="延迟转投异常处置"
         ),
+        DLQ_REPLAY_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信重放"),
+        DLQ_IGNORE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信忽略"),
+        DLQ_ARCHIVE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信归档"),
         MESSAGE_DELETE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="删消息"),
         ACCESS_DENIED_ACTION: AuditClass(ACCESS_AUDIT_CLASS, strong=False, label="访问异常"),
     }

@@ -403,6 +403,30 @@ message_key = "msg.error.topic_state_invalid"
 severity = "warning"
 description = "主题状态不允许该操作（disabled / deleting 下的写操作）；deleting 应等清理完成，disabled 应先启用"
 
+[[errcodes]]
+code = 350029
+domain = "msg"
+http_status = 404
+message_key = "msg.error.dead_letter_not_found"
+severity = "warning"
+description = "死信不存在（不属于当前租户，或已被主题删除 / 租户清理物理删除）"
+
+[[errcodes]]
+code = 350030
+domain = "msg"
+http_status = 409
+message_key = "msg.error.dead_letter_invalid_state"
+severity = "warning"
+description = "死信状态不允许该操作（非法迁移 / 重复处置）；replaying / archived 不可再处置"
+
+[[errcodes]]
+code = 350031
+domain = "msg"
+http_status = 409
+message_key = "msg.error.dead_letter_not_replayable"
+severity = "warning"
+description = "原消息不可重放（超出保留期或记录不存在）；不建空任务，避免误标已解决"
+
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。

@@ -569,6 +569,87 @@
         "title": "ApiResponse[DeleteImpact]",
         "type": "object"
       },
+      "ApiResponse_DlqDetail_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DlqDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DlqDetail]",
+        "type": "object"
+      },
+      "ApiResponse_DlqDisposeResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DlqDisposeResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DlqDisposeResult]",
+        "type": "object"
+      },
+      "ApiResponse_DlqList_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DlqList"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DlqList]",
+        "type": "object"
+      },
       "ApiResponse_GroupDetail_": {
         "additionalProperties": false,
         "properties": {
@@ -1582,6 +1663,424 @@
           "dlq_total"
         ],
         "title": "DeleteImpact",
+        "type": "object"
+      },
+      "DlqArchiveRequest": {
+        "additionalProperties": false,
+        "description": "归档请求（原因可选）。",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "description": "显式确认（高危写操作；必须为 true）",
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "归档原因（可选）",
+            "title": "Reason"
+          }
+        },
+        "title": "DlqArchiveRequest",
+        "type": "object"
+      },
+      "DlqDetail": {
+        "additionalProperties": false,
+        "description": "死信详情（摘要 + 失败上下文）。",
+        "properties": {
+          "attempts": {
+            "description": "累计投递次数",
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "落库时间（UTC）",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "失败上下文（字段名 → 说明；消费端上报时原样保存）",
+            "title": "Detail",
+            "type": "object"
+          },
+          "disposed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "处置时间（UTC）",
+            "title": "Disposed At"
+          },
+          "disposition_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "处置原因",
+            "title": "Disposition Reason"
+          },
+          "failed_at": {
+            "description": "失败时间（UTC）",
+            "format": "date-time",
+            "title": "Failed At",
+            "type": "string"
+          },
+          "id": {
+            "description": "死信 ID（雪花，JSON 输出为字符串）",
+            "title": "Id",
+            "type": "string"
+          },
+          "log_id": {
+            "description": "原记录 ID",
+            "title": "Log Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "原消息 ID",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset": {
+            "description": "原 offset（分区内序号）",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition_no": {
+            "description": "分区号",
+            "title": "Partition No",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "转入原因（delivery_exhausted / schema_invalid / processing_failed）",
+            "title": "Reason",
+            "type": "string"
+          },
+          "replay_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "重放任务 ID（仅 replaying 有值）",
+            "title": "Replay Task Id"
+          },
+          "status": {
+            "description": "状态（pending / replaying / resolved / ignored / archived）",
+            "title": "Status",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识",
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "id",
+          "namespace",
+          "topic",
+          "partition_no",
+          "offset",
+          "log_id",
+          "message_id",
+          "reason",
+          "attempts",
+          "status",
+          "failed_at",
+          "created_at"
+        ],
+        "title": "DlqDetail",
+        "type": "object"
+      },
+      "DlqDisposeResult": {
+        "additionalProperties": false,
+        "description": "处置响应（状态与重放任务 ID）。",
+        "properties": {
+          "id": {
+            "description": "死信 ID",
+            "title": "Id",
+            "type": "string"
+          },
+          "replay_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "重放任务 ID（仅重放返回）",
+            "title": "Replay Task Id"
+          },
+          "status": {
+            "description": "处置后的状态",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "DlqDisposeResult",
+        "type": "object"
+      },
+      "DlqIgnoreRequest": {
+        "additionalProperties": false,
+        "description": "忽略请求（原因必填、去空白后 1~256）。",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "description": "显式确认（高危写操作；必须为 true）",
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "忽略原因（必填）",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "DlqIgnoreRequest",
+        "type": "object"
+      },
+      "DlqItem": {
+        "additionalProperties": false,
+        "description": "死信摘要（列表行）。",
+        "properties": {
+          "attempts": {
+            "description": "累计投递次数",
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "落库时间（UTC）",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "disposed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "处置时间（UTC）",
+            "title": "Disposed At"
+          },
+          "disposition_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "处置原因",
+            "title": "Disposition Reason"
+          },
+          "failed_at": {
+            "description": "失败时间（UTC）",
+            "format": "date-time",
+            "title": "Failed At",
+            "type": "string"
+          },
+          "id": {
+            "description": "死信 ID（雪花，JSON 输出为字符串）",
+            "title": "Id",
+            "type": "string"
+          },
+          "log_id": {
+            "description": "原记录 ID",
+            "title": "Log Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "原消息 ID",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offset": {
+            "description": "原 offset（分区内序号）",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "partition_no": {
+            "description": "分区号",
+            "title": "Partition No",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "转入原因（delivery_exhausted / schema_invalid / processing_failed）",
+            "title": "Reason",
+            "type": "string"
+          },
+          "replay_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "重放任务 ID（仅 replaying 有值）",
+            "title": "Replay Task Id"
+          },
+          "status": {
+            "description": "状态（pending / replaying / resolved / ignored / archived）",
+            "title": "Status",
+            "type": "string"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识",
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "id",
+          "namespace",
+          "topic",
+          "partition_no",
+          "offset",
+          "log_id",
+          "message_id",
+          "reason",
+          "attempts",
+          "status",
+          "failed_at",
+          "created_at"
+        ],
+        "title": "DlqItem",
+        "type": "object"
+      },
+      "DlqList": {
+        "additionalProperties": false,
+        "description": "死信分页响应。",
+        "properties": {
+          "items": {
+            "description": "当页死信",
+            "items": {
+              "$ref": "#/components/schemas/DlqItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "过滤后总数",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "DlqList",
+        "type": "object"
+      },
+      "DlqReplayRequest": {
+        "additionalProperties": false,
+        "description": "重放请求（`confirm` 必填 true；速率缺省 100 条/秒）。",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "description": "显式确认（高危写操作；必须为 true）",
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "rate_per_second": {
+            "default": 100,
+            "description": "重放限速（条/秒，1~1000）",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rate Per Second",
+            "type": "integer"
+          }
+        },
+        "title": "DlqReplayRequest",
         "type": "object"
       },
       "GroupDetail": {
@@ -4719,6 +5218,700 @@
           "msg-admin-delayed-summary"
         ],
         "x-error-codes": [
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/dlq": {
+      "get": {
+        "description": "死信列表（默认排除已归档）。\n\n需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。",
+        "operationId": "list_dead_letters_api_v1_msg_admin_dlq_get",
+        "parameters": [
+          {
+            "description": "状态过滤；缺省排除 archived",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "状态过滤；缺省排除 archived",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "转入原因过滤",
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "转入原因过滤",
+              "title": "Reason"
+            }
+          },
+          {
+            "description": "主题名过滤",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "主题名过滤",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "分区号过滤",
+            "in": "query",
+            "name": "partition",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分区号过滤",
+              "title": "Partition"
+            }
+          },
+          {
+            "description": "失败时间下限（含，UTC）",
+            "in": "query",
+            "name": "failed_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "失败时间下限（含，UTC）",
+              "title": "Failed From"
+            }
+          },
+          {
+            "description": "失败时间上限（不含，UTC）",
+            "in": "query",
+            "name": "failed_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "失败时间上限（不含，UTC）",
+              "title": "Failed To"
+            }
+          },
+          {
+            "description": "log_id / message_id 模糊匹配",
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "log_id / message_id 模糊匹配",
+              "title": "Keyword"
+            }
+          },
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DlqList_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Dead Letters",
+        "tags": [
+          "msg-admin-dlq"
+        ],
+        "x-error-codes": [
+          350029,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/dlq/{dlq_id}": {
+      "get": {
+        "description": "死信详情（含失败上下文）。\n\n需要 msg:query 权限；不存在或跨租户返回 350029；无主题 describe 授权返回 350027。",
+        "operationId": "get_dead_letter_api_v1_msg_admin_dlq__dlq_id__get",
+        "parameters": [
+          {
+            "description": "死信 ID（雪花）",
+            "in": "path",
+            "name": "dlq_id",
+            "required": true,
+            "schema": {
+              "description": "死信 ID（雪花）",
+              "title": "Dlq Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DlqDetail_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Get Dead Letter",
+        "tags": [
+          "msg-admin-dlq"
+        ],
+        "x-error-codes": [
+          350029,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/dlq/{dlq_id}/archive": {
+      "post": {
+        "description": "归档死信（从活跃列表隐藏，原始消息保留）。\n\n需要 msg:manage 权限；`replaying` / `archived` 返回 350030。",
+        "operationId": "archive_dead_letter_api_v1_msg_admin_dlq__dlq_id__archive_post",
+        "parameters": [
+          {
+            "description": "死信 ID（雪花）",
+            "in": "path",
+            "name": "dlq_id",
+            "required": true,
+            "schema": {
+              "description": "死信 ID（雪花）",
+              "title": "Dlq Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DlqArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DlqDisposeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Archive Dead Letter",
+        "tags": [
+          "msg-admin-dlq"
+        ],
+        "x-error-codes": [
+          350029,
+          350030,
+          350031,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/dlq/{dlq_id}/ignore": {
+      "post": {
+        "description": "忽略死信（原因必填）。\n\n需要 msg:manage 权限；状态非 pending 350030；原因空白 / 超长 10001。",
+        "operationId": "ignore_dead_letter_api_v1_msg_admin_dlq__dlq_id__ignore_post",
+        "parameters": [
+          {
+            "description": "死信 ID（雪花）",
+            "in": "path",
+            "name": "dlq_id",
+            "required": true,
+            "schema": {
+              "description": "死信 ID（雪花）",
+              "title": "Dlq Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DlqIgnoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DlqDisposeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Ignore Dead Letter",
+        "tags": [
+          "msg-admin-dlq"
+        ],
+        "x-error-codes": [
+          350029,
+          350030,
+          350031,
+          350001,
+          350009,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/api/v1/msg/admin/dlq/{dlq_id}/replay": {
+      "post": {
+        "description": "重放死信（按原分区 / offset 建单条重放任务）。\n\n需要 msg:manage 权限；状态非 pending 350030；原记录不存在 350031。",
+        "operationId": "replay_dead_letter_api_v1_msg_admin_dlq__dlq_id__replay_post",
+        "parameters": [
+          {
+            "description": "死信 ID（雪花）",
+            "in": "path",
+            "name": "dlq_id",
+            "required": true,
+            "schema": {
+              "description": "死信 ID（雪花）",
+              "title": "Dlq Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DlqReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DlqDisposeResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Replay Dead Letter",
+        "tags": [
+          "msg-admin-dlq"
+        ],
+        "x-error-codes": [
+          350029,
+          350030,
+          350031,
           350001,
           350009,
           350010,

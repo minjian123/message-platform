@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import ElementPlus, { ElDialog, ElInputNumber } from 'element-plus'
+import ElementPlus from 'element-plus'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 

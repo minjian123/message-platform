@@ -9,16 +9,25 @@
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
+from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
+from bms_core.db.session import DbSession
+from bms_core.db.unit_of_work import UnitOfWork
+
+from bms_msg.models.dead_letter import DEFAULT_DLQ_STATUS, MsgDeadLetter
+from bms_msg.repositories.dead_letter import DeadLetterRepository
 
 __all__ = [
     "DEAD_LETTER_EXHAUSTED",
+    "DatabaseDeadLetterQueue",
     "DeadLetter",
     "DeadLetterQueue",
     "DeadLetterReason",
@@ -73,6 +82,24 @@ class DeadLetter(BaseValueObject):
 
     detail: ConcurrentStableDict[str, str] = field(default_factory=lambda: ConcurrentStableDict[str, str]())
     """失败详情（字段名 → 说明；消费端上报时原样保存，broker 判定时为空）。"""
+
+    tenant_id: int | None = None
+    """租户主键（持久化必填；旧调用点未传时为 None，由持久化实现拒绝）。"""
+
+    namespace: str | None = None
+    """命名空间（持久化必填；取自主题归属）。"""
+
+    topic: str | None = None
+    """主题名快照（持久化必填；旧调用点未传时回落主题主键字符串）。"""
+
+    log_id: str | None = None
+    """原记录 ID（记录级定位 / 审计 `record_ref`）。"""
+
+    trace_id: str | None = None
+    """链路标识（取自消息头；可空）。"""
+
+    status: str = DEFAULT_DLQ_STATUS
+    """处置状态（持久化实现返回真实状态；内存实现缺省待处置）。"""
 
 
 class DeadLetterQueue(BaseFrameworkObject, ABC):
@@ -179,3 +206,155 @@ class InMemoryDeadLetterQueue(DeadLetterQueue):
         self._letters = ConcurrentStableList(kept)
         self._keys = ConcurrentStableSet((letter.topic_id, letter.partition_no, letter.offset) for letter in kept)
         return removed
+
+
+_LOGGER = get_logger("bms_msg.dead_letter")
+
+UowFactory = Callable[[], AbstractAsyncContextManager[UnitOfWork]]
+"""平台库工作单元工厂（队列自开短事务；用例可注入内存库会话）。"""
+
+
+class DatabaseDeadLetterQueue(DeadLetterQueue):
+    """持久化死信队列（`msg_dead_letter`）：端口签名不变，重启不丢。
+
+    口径（详细设计 06-5-1 §5）：
+
+    - `add` / `purge_topics` 自持平台库短事务，写库成功后才更新内存索引；
+    - `contains` 只查内存索引（启动加载 + 写时同步），投递路径不打库；
+    - `list_all` 查库全量并把三元组回填索引，供指标 / 管理面使用；
+    - 同一三元组重复转入由唯一约束 + 内存索引双重幂等。
+    """
+
+    def __init__(self, *, uow_factory: UowFactory) -> None:
+        """初始化（空索引；启动后由 `load()` 恢复）。
+
+        Args:
+            uow_factory: 平台库工作单元工厂。
+        """
+        self._uow_factory = uow_factory
+        self._keys: ConcurrentStableSet[DeadLetterKey] = ConcurrentStableSet()
+
+    async def load(self) -> None:
+        """从表恢复全部定位三元组（含 `archived`）。
+
+        Raises:
+            Exception: 表不可读 / 库不可达时上抛（死信判定属投递正确性，空索引会重复投递）。
+        """
+        async with self._uow_factory() as uow:
+            repository = DeadLetterRepository(cast("DbSession", uow.session))
+            keys = await repository.list_keys()
+        self._keys = ConcurrentStableSet(keys)
+        _LOGGER.info("msg_dead_letter_index_loaded", count=len(self._keys))
+
+    async def add(self, letter: DeadLetter) -> None:
+        """转入一条死信（同三元组幂等）。
+
+        Args:
+            letter: 死信记录。
+
+        Raises:
+            ValueError: 缺少租户主键（持久化必填）。
+        """
+        key: DeadLetterKey = (letter.topic_id, letter.partition_no, letter.offset)
+        if key in self._keys:
+            return
+        if letter.tenant_id is None:
+            raise ValueError("死信持久化缺少 tenant_id")
+        row = MsgDeadLetter(
+            tenant_id=int(letter.tenant_id),
+            namespace=letter.namespace or "",
+            topic_id=letter.topic_id,
+            topic=letter.topic or str(letter.topic_id),
+            partition_no=letter.partition_no,
+            msg_offset=letter.offset,
+            message_id=letter.message_id,
+            log_id=letter.log_id or "",
+            trace_id=letter.trace_id,
+            reason=str(letter.reason),
+            attempts=letter.attempts,
+            detail=letter.detail,
+            status=letter.status,
+            failed_at=letter.failed_at,
+        )
+        async with self._uow_factory() as uow, uow.begin():
+            session = cast("DbSession", uow.session)
+            repository = DeadLetterRepository(session)
+            exists = await repository.exists_key(
+                topic_id=letter.topic_id, partition_no=letter.partition_no, offset=letter.offset
+            )
+            if exists:
+                return
+            session.add(row)
+        self._keys.add(key)
+
+    async def list_all(self) -> ConcurrentStableList[DeadLetter]:
+        """列出全部死信（按 `failed_at`、`id` 升序）。
+
+        Returns:
+            ConcurrentStableList[DeadLetter]: 死信列表（含状态与处置字段）。
+        """
+        async with self._uow_factory() as uow:
+            repository = DeadLetterRepository(cast("DbSession", uow.session))
+            rows = await repository.list_all()
+        for row in rows:
+            self._keys.add((int(row.topic_id), int(row.partition_no), int(row.msg_offset)))
+        return ConcurrentStableList(_to_letter(row) for row in rows)
+
+    async def contains(self, *, topic_id: int, partition_no: int, offset: int) -> bool:
+        """判定某条消息是否已死信（内存索引）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 分区内序号。
+
+        Returns:
+            bool: 已死信返回 True。
+        """
+        return (topic_id, partition_no, offset) in self._keys
+
+    async def purge_topics(self, *, topic_ids: Iterable[int]) -> int:
+        """按主题物理删除死信（幂等）。
+
+        Args:
+            topic_ids: 主题主键集合。
+
+        Returns:
+            int: 删除行数。
+        """
+        targets = ConcurrentStableSet([int(item) for item in topic_ids])
+        if not targets:
+            return 0
+        async with self._uow_factory() as uow, uow.begin():
+            repository = DeadLetterRepository(cast("DbSession", uow.session))
+            removed = await repository.purge_topics(topic_ids=targets)
+        if removed:
+            self._keys = ConcurrentStableSet(key for key in self._keys if key[0] not in targets)
+        return removed
+
+
+def _to_letter(row: MsgDeadLetter) -> DeadLetter:
+    """行 → 端口值对象。
+
+    Args:
+        row: 死信行。
+
+    Returns:
+        DeadLetter: 端口值对象。
+    """
+    return DeadLetter(
+        message_id=row.message_id,
+        topic_id=int(row.topic_id),
+        partition_no=int(row.partition_no),
+        offset=int(row.msg_offset),
+        attempts=int(row.attempts),
+        failed_at=row.failed_at,
+        reason=DeadLetterReason(row.reason),
+        detail=ConcurrentStableDict(row.detail),
+        tenant_id=int(row.tenant_id),
+        namespace=row.namespace,
+        topic=row.topic,
+        log_id=row.log_id,
+        trace_id=row.trace_id,
+        status=row.status,
+    )

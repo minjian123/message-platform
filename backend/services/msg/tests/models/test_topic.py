@@ -38,6 +38,7 @@ def test_model_modules_cover_all_model_files() -> None:
         "bms_msg.models.tenant_lifecycle",
         "bms_msg.models.topic_acl",
         "bms_msg.models.topic_cleanup",
+        "bms_msg.models.dead_letter",
     )
     assert {MsgTopic.__tablename__, MsgPartition.__tablename__} <= set(Base.metadata.tables)
 

@@ -11,7 +11,7 @@ import pytest
 from bms_core.core.paths import resolve_backend_root
 from bms_core.core.plugin import default_plugin_registry
 
-from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.deadletter import DatabaseDeadLetterQueue
 from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
@@ -71,7 +71,7 @@ def test_migration_sections_point_to_existing_version_dir() -> None:
 @pytest.mark.kiwi_id(2410)
 @pytest.mark.kiwi_id(2412)
 def test_factory_surface_lists_are_declared() -> None:
-    """工厂三张清单可用：服务行一条、表归属八表（01-1 / 01-6 / 05-2 / 05-3 / 06-2）、业务路由两条聚合（03-1）。"""
+    """工厂三张清单可用：服务行一条、表归属九表（01-1 / 01-6 / 05-2 / 05-3 / 06-2 / 06-5）、路由两条聚合。"""
     factory = ApplicationFactory()
 
     assert [record.module_key for record in factory.service_records()] == ["msg"]
@@ -84,6 +84,7 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_topic_acl",
         "msg_topic_acl_scope",
         "msg_topic_cleanup",
+        "msg_dead_letter",
     ]
     assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
@@ -103,6 +104,7 @@ def test_table_registry_register_is_idempotent() -> None:
         "msg_topic_acl",
         "msg_topic_acl_scope",
         "msg_topic_cleanup",
+        "msg_dead_letter",
     )
 
 
@@ -143,7 +145,7 @@ def test_application_assembles_data_plane_state() -> None:
         assert isinstance(app.state.partition_directory, PartitionDirectory)
         # 02-3 起位点换成文件实现（单文件双槽 + 内存为准 + 后台刷盘），端口与注入点不变。
         assert isinstance(app.state.offset_store, FileOffsetStore)
-        assert isinstance(app.state.dead_letter_queue, InMemoryDeadLetterQueue)
+        assert isinstance(app.state.dead_letter_queue, DatabaseDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)
         assert isinstance(app.state.group_store, InMemoryGroupStore)
         # 02-7 起延迟区换成文件实现（`.delay` 独立序号段），端口与注入点不变。

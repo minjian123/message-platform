@@ -44,6 +44,9 @@ __all__ = [
     "ErrorCategory",
     "MsgAclDeniedError",
     "MsgConnectionLimitExceededError",
+    "MsgDeadLetterInvalidStateError",
+    "MsgDeadLetterNotFoundError",
+    "MsgDeadLetterNotReplayableError",
     "MsgDelayQuotaExceededError",
     "MsgDeliveryExhaustedError",
     "MsgError",
@@ -205,6 +208,23 @@ class MsgErrorCode(IntEnum):
     与相邻码分工：`350001` 是「不存在或未启用」（读路径口径，用户应去建主题）；`350008` 是「同名已存在」；
     本码是「主题还在，但当前状态不接受这个操作」——`deleting` 时应等清理完成，`disabled` 时应先启用。
     管理面写操作（扩分区 / 改保留期 / 重放）用它，删主题不走本码（重复删除是幂等受理）。
+    """
+
+    DEAD_LETTER_NOT_FOUND = 350029
+    """死信不存在（不属于当前租户，或已被主题删除 / 租户清理物理删除）：404。"""
+
+    DEAD_LETTER_INVALID_STATE = 350030
+    """死信状态不允许该操作（非法迁移 / 重复处置）：409。
+
+    与 `350029` 分工：那个是「行不在了」，本码是「行还在，但当前状态不接受这个动作」——
+    `replaying` / `archived` 不可再处置，归档只接受 `pending` / `ignored` / `resolved`。
+    """
+
+    DEAD_LETTER_NOT_REPLAYABLE = 350031
+    """原消息不可重放（超出保留期或记录不存在）：409。
+
+    重放前按 `topic_id / partition_no / offset` 校验原记录；不存在时**不建空任务**，
+    避免把「消息已丢」误标成「已解决」。
     """
 
 
@@ -445,6 +465,27 @@ class MsgAclDeniedError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.ACL_DENIED
     http_status_: ClassVar[int] = 403
+
+
+class MsgDeadLetterNotFoundError(MsgError):
+    """死信不存在（350029 / 404）：不属于当前租户，或已被清理。"""
+
+    code_: ClassVar[int] = MsgErrorCode.DEAD_LETTER_NOT_FOUND
+    http_status_: ClassVar[int] = 404
+
+
+class MsgDeadLetterInvalidStateError(MsgError):
+    """死信状态不允许该操作（350030 / 409）：非法迁移 / 重复处置。"""
+
+    code_: ClassVar[int] = MsgErrorCode.DEAD_LETTER_INVALID_STATE
+    http_status_: ClassVar[int] = 409
+
+
+class MsgDeadLetterNotReplayableError(MsgError):
+    """原消息不可重放（350031 / 409）：超出保留期或记录不存在。"""
+
+    code_: ClassVar[int] = MsgErrorCode.DEAD_LETTER_NOT_REPLAYABLE
+    http_status_: ClassVar[int] = 409
 
 
 class MsgRpcInProgressError(MsgError):

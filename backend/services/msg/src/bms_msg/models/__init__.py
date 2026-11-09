@@ -8,6 +8,19 @@
 > 不是 `msg`——配 `package_prefix = "msg"` 会解析出 `msg.models` 而取到空清单（2026-11-04 修正）。
 """
 
+from bms_msg.models.dead_letter import (
+    DEFAULT_DISPOSITION_REASON_MAX_LENGTH,
+    DEFAULT_DLQ_STATUS,
+    DLQ_ACTIVE_STATUSES,
+    DLQ_ARCHIVABLE_STATUSES,
+    DLQ_STATUS_ARCHIVED,
+    DLQ_STATUS_IGNORED,
+    DLQ_STATUS_PENDING,
+    DLQ_STATUS_REPLAYING,
+    DLQ_STATUS_RESOLVED,
+    DLQ_STATUSES,
+    MsgDeadLetter,
+)
 from bms_msg.models.partition import MsgPartition
 from bms_msg.models.quota import MsgQuota
 from bms_msg.models.replay import (
@@ -91,7 +104,17 @@ __all__ = [
     "CLEANUP_STATUSES",
     "CLEANUP_STEPS",
     "DEFAULT_CLEANUP_POLICY",
+    "DEFAULT_DISPOSITION_REASON_MAX_LENGTH",
+    "DEFAULT_DLQ_STATUS",
     "DEFAULT_STATUS",
+    "DLQ_ACTIVE_STATUSES",
+    "DLQ_ARCHIVABLE_STATUSES",
+    "DLQ_STATUSES",
+    "DLQ_STATUS_ARCHIVED",
+    "DLQ_STATUS_IGNORED",
+    "DLQ_STATUS_PENDING",
+    "DLQ_STATUS_REPLAYING",
+    "DLQ_STATUS_RESOLVED",
     "LIFECYCLE_ACTIONS",
     "MODEL_MODULES",
     "STATUS_ACTIVE",
@@ -111,6 +134,7 @@ __all__ = [
     "TASK_PENDING",
     "TASK_RUNNING",
     "TASK_TERMINAL_STATUSES",
+    "MsgDeadLetter",
     "MsgPartition",
     "MsgQuota",
     "MsgReplayTask",
@@ -129,5 +153,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.tenant_lifecycle",
     "bms_msg.models.topic_acl",
     "bms_msg.models.topic_cleanup",
+    "bms_msg.models.dead_letter",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

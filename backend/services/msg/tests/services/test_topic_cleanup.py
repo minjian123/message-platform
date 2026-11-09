@@ -9,7 +9,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -248,6 +248,20 @@ def _build(
         interval_seconds=interval_seconds,
     )
     return service, offsets, delay_store, dead, throttle
+
+
+async def _wait_idle(service: TopicCleanupService, *, timeout: float = 5.0) -> None:
+    """等待在本主题清理任务全部结束（覆盖率采集 / 并行下固定 sleep 不够）。
+
+    Args:
+        service: 清理服务。
+        timeout: 最长等待秒数。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while service._running_topics:
+        assert loop.time() < deadline, "清理任务未在 5s 内结束"
+        await asyncio.sleep(0.02)
 
 
 async def _seed_topic(db_session: AsyncSession, *, name: str = "audit.cleanup", partitions: int = 2) -> int:
@@ -539,7 +553,7 @@ async def test_kick_runs_immediately_and_stop_cancels(db_session: AsyncSession, 
     first = service._running_topics.get(topic_id)
     service.kick(topic_id)
     assert service._running_topics.get(topic_id) is first
-    await asyncio.sleep(0.05)
+    await _wait_idle(service)
 
     session = cast("DbSession", db_session)
     ledger = await TopicCleanupRepository(session).get_by_topic(topic_id)
@@ -677,9 +691,12 @@ async def test_stop_cancels_inflight_topic_task(db_session: AsyncSession, tmp_pa
     topic_id = await _seed_topic(db_session)
     await db_session.rollback()
     service.kick(topic_id)
-    await asyncio.sleep(0.01)
     assert len(service._running_topics) == 1
+    inflight = list(service._running_topics.values())
     await service.stop()
+    for task in inflight:
+        with suppress(asyncio.CancelledError):
+            await task
     assert len(service._running_topics) == 0
 
 

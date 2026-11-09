@@ -27,6 +27,7 @@ from bms_msg.broker.watermark import StorageWatermark
 from bms_msg.core.config import METRICS_SAMPLE_INTERVAL_SECONDS
 from bms_msg.metrics.lag import MetricsSnapshotStore, topic_key
 from bms_msg.metrics.traffic import get_traffic_metrics
+from bms_msg.models.dead_letter import DLQ_ACTIVE_STATUSES
 from bms_msg.models.replay import MsgReplayTask
 from bms_msg.repositories.topic import TopicRepository
 
@@ -209,6 +210,8 @@ class MetricsSampler(BaseFrameworkObject):
                 return result
             topics = TopicRepository(session)
             for letter in letters:
+                if letter.status not in DLQ_ACTIVE_STATUSES:
+                    continue
                 topic = await topics.get_by_id_unscoped(letter.topic_id)
                 if topic is None:
                     continue

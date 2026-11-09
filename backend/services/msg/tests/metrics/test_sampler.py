@@ -45,13 +45,15 @@ class _Topic:
 class _Letter:
     """死信替身。"""
 
-    def __init__(self, topic_id: int) -> None:
+    def __init__(self, topic_id: int, status: str = "pending") -> None:
         """初始化。
 
         Args:
             topic_id: 主题主键。
+            status: 处置状态。
         """
         self.topic_id = topic_id
+        self.status = status
 
 
 class _Groups:
@@ -307,6 +309,7 @@ def _build(
     *,
     groups_fail: bool = False,
     letters: int = 2,
+    letter_statuses: ConcurrentStableList[str] | None = None,
     dlq_fail: bool = False,
     uow_fail: bool = False,
     watermark_fail: bool = False,
@@ -317,7 +320,8 @@ def _build(
 
     Args:
         groups_fail: 组存储是否抛错。
-        letters: 死信条数。
+        letters: 死信条数（均为 `pending`）。
+        letter_statuses: 额外死信的状态序列（用于状态口径用例）。
         dlq_fail: 死信队列是否抛错。
         uow_fail: 工作单元是否抛错。
         watermark_fail: 存储水位是否抛错。
@@ -332,6 +336,8 @@ def _build(
     dead_letters: ConcurrentStableList[_Letter] = ConcurrentStableList()
     for _ in range(letters):
         dead_letters.add(_Letter(100))
+    for status in letter_statuses or ConcurrentStableList[str]():
+        dead_letters.add(_Letter(100, status))
     topic = None if topic_none else _Topic(1, "orders")
 
     def _uow_factory() -> _UowContext:
@@ -367,6 +373,17 @@ async def test_sample_once_writes_lag_dlq_replay() -> None:
     assert snapshot.replay_failed == 1
     assert snapshot.replay_replayed == 12
     assert watermark.refreshed == 1
+
+
+@mark.kiwi_id(2467)
+async def test_dlq_metric_counts_only_active_statuses() -> None:
+    """死信存量只统计 `pending + replaying`（终态不计入）。"""
+    statuses = ConcurrentStableList(["pending", "replaying", "resolved", "ignored", "archived"])
+    sampler, snapshots, _ = _build(letters=0, letter_statuses=statuses)
+    await sampler.sample_once()
+
+    key = topic_key(tenant="code-1", topic="orders")
+    assert snapshots.snapshot.dlq[key] == 2
 
 
 @mark.kiwi_id(2460)

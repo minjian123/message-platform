@@ -149,6 +149,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/msg/admin/dlq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Dead Letters
+         * @description 死信列表（默认排除已归档）。
+         *
+         *     需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。
+         */
+        get: operations["list_dead_letters_api_v1_msg_admin_dlq_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/dlq/{dlq_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dead Letter
+         * @description 死信详情（含失败上下文）。
+         *
+         *     需要 msg:query 权限；不存在或跨租户返回 350029；无主题 describe 授权返回 350027。
+         */
+        get: operations["get_dead_letter_api_v1_msg_admin_dlq__dlq_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/dlq/{dlq_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Dead Letter
+         * @description 归档死信（从活跃列表隐藏，原始消息保留）。
+         *
+         *     需要 msg:manage 权限；`replaying` / `archived` 返回 350030。
+         */
+        post: operations["archive_dead_letter_api_v1_msg_admin_dlq__dlq_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/dlq/{dlq_id}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ignore Dead Letter
+         * @description 忽略死信（原因必填）。
+         *
+         *     需要 msg:manage 权限；状态非 pending 350030；原因空白 / 超长 10001。
+         */
+        post: operations["ignore_dead_letter_api_v1_msg_admin_dlq__dlq_id__ignore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/dlq/{dlq_id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Dead Letter
+         * @description 重放死信（按原分区 / offset 建单条重放任务）。
+         *
+         *     需要 msg:manage 权限；状态非 pending 350030；原记录不存在 350031。
+         */
+        post: operations["replay_dead_letter_api_v1_msg_admin_dlq__dlq_id__replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/msg/admin/groups": {
         parameters: {
             query?: never;
@@ -1489,6 +1599,48 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[DlqDetail] */
+        ApiResponse_DlqDetail_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["DlqDetail"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[DlqDisposeResult] */
+        ApiResponse_DlqDisposeResult_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["DlqDisposeResult"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[DlqList] */
+        ApiResponse_DlqList_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["DlqList"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[GroupDetail] */
         ApiResponse_GroupDetail_: {
             /**
@@ -2130,6 +2282,288 @@ export interface components {
              * @description 分区数
              */
             partition_count: number;
+        };
+        /**
+         * DlqArchiveRequest
+         * @description 归档请求（原因可选）。
+         */
+        DlqArchiveRequest: {
+            /**
+             * Confirm
+             * @description 显式确认（高危写操作；必须为 true）
+             * @default false
+             */
+            confirm: boolean;
+            /**
+             * Reason
+             * @description 归档原因（可选）
+             */
+            reason?: string | null;
+        };
+        /**
+         * DlqDetail
+         * @description 死信详情（摘要 + 失败上下文）。
+         */
+        DlqDetail: {
+            /**
+             * Attempts
+             * @description 累计投递次数
+             */
+            attempts: number;
+            /**
+             * Created At
+             * Format: date-time
+             * @description 落库时间（UTC）
+             */
+            created_at: string;
+            /**
+             * Detail
+             * @description 失败上下文（字段名 → 说明；消费端上报时原样保存）
+             */
+            detail?: {
+                [key: string]: string;
+            };
+            /**
+             * Disposed At
+             * @description 处置时间（UTC）
+             */
+            disposed_at?: string | null;
+            /**
+             * Disposition Reason
+             * @description 处置原因
+             */
+            disposition_reason?: string | null;
+            /**
+             * Failed At
+             * Format: date-time
+             * @description 失败时间（UTC）
+             */
+            failed_at: string;
+            /**
+             * Id
+             * @description 死信 ID（雪花，JSON 输出为字符串）
+             */
+            id: string;
+            /**
+             * Log Id
+             * @description 原记录 ID
+             */
+            log_id: string;
+            /**
+             * Message Id
+             * @description 原消息 ID
+             */
+            message_id: string;
+            /**
+             * Namespace
+             * @description 命名空间
+             */
+            namespace: string;
+            /**
+             * Offset
+             * @description 原 offset（分区内序号）
+             */
+            offset: number;
+            /**
+             * Partition No
+             * @description 分区号
+             */
+            partition_no: number;
+            /**
+             * Reason
+             * @description 转入原因（delivery_exhausted / schema_invalid / processing_failed）
+             */
+            reason: string;
+            /**
+             * Replay Task Id
+             * @description 重放任务 ID（仅 replaying 有值）
+             */
+            replay_task_id?: string | null;
+            /**
+             * Status
+             * @description 状态（pending / replaying / resolved / ignored / archived）
+             */
+            status: string;
+            /**
+             * Topic
+             * @description 主题名
+             */
+            topic: string;
+            /**
+             * Trace Id
+             * @description 链路标识
+             */
+            trace_id?: string | null;
+        };
+        /**
+         * DlqDisposeResult
+         * @description 处置响应（状态与重放任务 ID）。
+         */
+        DlqDisposeResult: {
+            /**
+             * Id
+             * @description 死信 ID
+             */
+            id: string;
+            /**
+             * Replay Task Id
+             * @description 重放任务 ID（仅重放返回）
+             */
+            replay_task_id?: string | null;
+            /**
+             * Status
+             * @description 处置后的状态
+             */
+            status: string;
+        };
+        /**
+         * DlqIgnoreRequest
+         * @description 忽略请求（原因必填、去空白后 1~256）。
+         */
+        DlqIgnoreRequest: {
+            /**
+             * Confirm
+             * @description 显式确认（高危写操作；必须为 true）
+             * @default false
+             */
+            confirm: boolean;
+            /**
+             * Reason
+             * @description 忽略原因（必填）
+             */
+            reason: string;
+        };
+        /**
+         * DlqItem
+         * @description 死信摘要（列表行）。
+         */
+        DlqItem: {
+            /**
+             * Attempts
+             * @description 累计投递次数
+             */
+            attempts: number;
+            /**
+             * Created At
+             * Format: date-time
+             * @description 落库时间（UTC）
+             */
+            created_at: string;
+            /**
+             * Disposed At
+             * @description 处置时间（UTC）
+             */
+            disposed_at?: string | null;
+            /**
+             * Disposition Reason
+             * @description 处置原因
+             */
+            disposition_reason?: string | null;
+            /**
+             * Failed At
+             * Format: date-time
+             * @description 失败时间（UTC）
+             */
+            failed_at: string;
+            /**
+             * Id
+             * @description 死信 ID（雪花，JSON 输出为字符串）
+             */
+            id: string;
+            /**
+             * Log Id
+             * @description 原记录 ID
+             */
+            log_id: string;
+            /**
+             * Message Id
+             * @description 原消息 ID
+             */
+            message_id: string;
+            /**
+             * Namespace
+             * @description 命名空间
+             */
+            namespace: string;
+            /**
+             * Offset
+             * @description 原 offset（分区内序号）
+             */
+            offset: number;
+            /**
+             * Partition No
+             * @description 分区号
+             */
+            partition_no: number;
+            /**
+             * Reason
+             * @description 转入原因（delivery_exhausted / schema_invalid / processing_failed）
+             */
+            reason: string;
+            /**
+             * Replay Task Id
+             * @description 重放任务 ID（仅 replaying 有值）
+             */
+            replay_task_id?: string | null;
+            /**
+             * Status
+             * @description 状态（pending / replaying / resolved / ignored / archived）
+             */
+            status: string;
+            /**
+             * Topic
+             * @description 主题名
+             */
+            topic: string;
+            /**
+             * Trace Id
+             * @description 链路标识
+             */
+            trace_id?: string | null;
+        };
+        /**
+         * DlqList
+         * @description 死信分页响应。
+         */
+        DlqList: {
+            /**
+             * Items
+             * @description 当页死信
+             */
+            items: components["schemas"]["DlqItem"][];
+            /**
+             * Page
+             * @description 页码
+             */
+            page: number;
+            /**
+             * Size
+             * @description 每页条数
+             */
+            size: number;
+            /**
+             * Total
+             * @description 过滤后总数
+             */
+            total: number;
+        };
+        /**
+         * DlqReplayRequest
+         * @description 重放请求（`confirm` 必填 true；速率缺省 100 条/秒）。
+         */
+        DlqReplayRequest: {
+            /**
+             * Confirm
+             * @description 显式确认（高危写操作；必须为 true）
+             * @default false
+             */
+            confirm: boolean;
+            /**
+             * Rate Per Second
+             * @description 重放限速（条/秒，1~1000）
+             * @default 100
+             */
+            rate_per_second: number;
         };
         /**
          * GroupDetail
@@ -4009,6 +4443,419 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_DelaySummary_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    list_dead_letters_api_v1_msg_admin_dlq_get: {
+        parameters: {
+            query?: {
+                /** @description 状态过滤；缺省排除 archived */
+                status?: string | null;
+                /** @description 转入原因过滤 */
+                reason?: string | null;
+                /** @description 主题名过滤 */
+                topic?: string | null;
+                /** @description 分区号过滤 */
+                partition?: number | null;
+                /** @description 失败时间下限（含，UTC） */
+                failed_from?: string | null;
+                /** @description 失败时间上限（不含，UTC） */
+                failed_to?: string | null;
+                /** @description log_id / message_id 模糊匹配 */
+                keyword?: string | null;
+                /** @description 页码（从 1 起） */
+                page?: number;
+                /** @description 每页条数 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DlqList_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    get_dead_letter_api_v1_msg_admin_dlq__dlq_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 死信 ID（雪花） */
+                dlq_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DlqDetail_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    archive_dead_letter_api_v1_msg_admin_dlq__dlq_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 死信 ID（雪花） */
+                dlq_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DlqArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DlqDisposeResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    ignore_dead_letter_api_v1_msg_admin_dlq__dlq_id__ignore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 死信 ID（雪花） */
+                dlq_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DlqIgnoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DlqDisposeResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    replay_dead_letter_api_v1_msg_admin_dlq__dlq_id__replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 死信 ID（雪花） */
+                dlq_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DlqReplayRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DlqDisposeResult_"];
                 };
             };
             /** @description 未认证 */

@@ -7,20 +7,24 @@
 
 import inspect
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.plugin import default_plugin_registry
 from bms_core.core.resources import ResourceManager
+from bms_core.db.unit_of_work import UnitOfWork
 from fastapi import FastAPI
 
+from bms_msg.broker.deadletter import DatabaseDeadLetterQueue, InMemoryDeadLetterQueue
 from bms_msg.broker.delay import DelayRecord, DelayStore, InMemoryDelayStore
 from bms_msg.broker.lifecycle import BackgroundLoops, DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
-from bms_msg.main import ApplicationFactory
+from bms_msg.main import ApplicationFactory, load_dead_letter_index
 
 pytestmark = pytest.mark.kiwi_id(2420)
 
@@ -230,7 +234,38 @@ def test_factory_exposes_startup_hook() -> None:
     """应用工厂把钩子登记在 `startup_hooks()`（不是 `configure_service()`：那时事件循环还没起）。"""
     hooks = ApplicationFactory().startup_hooks()
 
-    assert [hook.__name__ for hook in hooks] == ["start_background_tasks"]
+    assert [hook.__name__ for hook in hooks] == ["load_dead_letter_index", "start_background_tasks"]
+
+
+@pytest.mark.kiwi_id(2467)
+async def test_load_dead_letter_index_only_loads_persistent_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """启动钩子只对持久化队列执行加载（内存替身直接跳过）。"""
+    calls = ConcurrentStableList[int]()
+
+    def _unused_uow() -> AbstractAsyncContextManager[UnitOfWork]:
+        """用例不触达工作单元。
+
+        Returns:
+            AbstractAsyncContextManager[UnitOfWork]: 不会返回。
+
+        Raises:
+            AssertionError: 恒抛（不应被调用）。
+        """
+        raise AssertionError("用例不触达工作单元")
+
+    async def _load() -> None:
+        """记录一次加载调用。"""
+        calls.add(1)
+
+    queue = DatabaseDeadLetterQueue(uow_factory=_unused_uow)
+    monkeypatch.setattr(queue, "load", _load)
+    app = cast("FastAPI", SimpleNamespace(state=SimpleNamespace(dead_letter_queue=queue)))
+    await load_dead_letter_index(app)
+    assert len(calls) == 1
+
+    other = cast("FastAPI", SimpleNamespace(state=SimpleNamespace(dead_letter_queue=InMemoryDeadLetterQueue())))
+    await load_dead_letter_index(other)
+    assert len(calls) == 1
 
 
 class _RebuildableStore(InMemoryDelayStore):

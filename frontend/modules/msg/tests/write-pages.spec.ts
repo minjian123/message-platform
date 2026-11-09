@@ -543,7 +543,7 @@ describe('主题详情：表单 / 弹窗关闭与空参数（Kiwi 2466）', () =
   })
 
   it('改保留期成功：PATCH 后关闭弹窗并刷新详情', async () => {
-    const page = await mountPage(TopicDetailPage)
+    await mountPage(TopicDetailPage)
     await click('[data-test="topic-retention"]')
     api.patch.mockResolvedValue({ code: 0, message: 'ok', data: TOPIC })
     await click('[data-test="retention-submit"]')

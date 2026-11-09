@@ -120,6 +120,7 @@ const DATA: Record<string, unknown> = {
   '/admin/messages': { items: [MESSAGE], namespace: 'bms', topic: 'order.created', page: 1, size: 20, total: 1 },
   '/admin/delayed': { items: [DELAYED], page: 1, size: 20, total: 1 },
   '/admin/delayed/summary': SUMMARY,
+  '/admin/dlq': { items: [], page: 1, size: 20, total: 0 },
 }
 
 /** 装配默认取数响应（可按路径覆盖）。 */
@@ -361,16 +362,16 @@ describe('只读列表页（Kiwi 2464）', () => {
     failed.unmount()
   })
 
-  it('死信与重放：两张只读表占位、后续任务说明；无权限时不渲染数据区', async () => {
+  it('死信与重放：进入即取数、空态渲染；无权限时不渲染数据区', async () => {
     const wrapper = mountView(DlqPage)
-    expect(wrapper.find('[data-test="dlq-dead-table"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="dlq-replay-table"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="dlq-later"]').exists()).toBe(true)
-    expect(scopeGet).not.toHaveBeenCalled()
+    await settle()
+    expect(wrapper.find('[data-test="readonly-empty"]').exists()).toBe(true)
+    expect(scopeGet).toHaveBeenCalledWith('/admin/dlq', { page: 1, size: 20 })
     wrapper.unmount()
 
     permissionRef.value = ['msg:manage']
     const denied = mountView(DlqPage)
+    await settle()
     expect(denied.findAll('[data-test="readonly-denied"]')).toHaveLength(2)
     denied.unmount()
   })

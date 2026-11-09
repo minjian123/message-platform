@@ -63,7 +63,7 @@ from bms_msg.api.router import api_router, frame_router
 from bms_msg.audit.trail import ACTION_CLASSES
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
-from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
+from bms_msg.broker.deadletter import DatabaseDeadLetterQueue
 from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.delay_file import FileDelayStore
@@ -107,6 +107,17 @@ from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
 
 _LOGGER = get_logger("bms_msg.main")
+
+
+async def load_dead_letter_index(app: FastAPI) -> None:
+    """启动加载死信定位三元组（06-5；建表与接库校验之后、后台循环之前）。
+
+    Args:
+        app: 应用实例（取已装配的持久化队列）。
+    """
+    queue = app.state.dead_letter_queue
+    if isinstance(queue, DatabaseDeadLetterQueue):
+        await queue.load()
 
 
 class ApplicationFactory(BaseServiceApplicationFactory):
@@ -180,7 +191,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         Returns:
             ConcurrentStableList[StartupHook]: 启动钩子（执行序）。
         """
-        return ConcurrentStableList([start_background_tasks])
+        return ConcurrentStableList([load_dead_letter_index, start_background_tasks])
 
     def configure_service(self, app: FastAPI, settings: Settings) -> None:
         """数据面进程级状态注入：消息存储（含唤醒包装） / 位点 / 死信 / 投递状态 / 组存储 /
@@ -248,7 +259,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.storage_metrics = StorageMetrics()
         app.state.storage_watermark = StorageWatermark(root=root, metrics=app.state.storage_metrics)
         app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
-        app.state.dead_letter_queue = InMemoryDeadLetterQueue()
+        # 06-5：死信换持久化实现（平台库短事务 + 启动加载内存索引）；`uow_factory` 必须先就位。
+        app.state.uow_factory = platform_uow_factory(app)
+        app.state.dead_letter_queue = DatabaseDeadLetterQueue(uow_factory=app.state.uow_factory)
         app.state.delivery_state = DeliveryState()
         app.state.group_store = InMemoryGroupStore()
         app.state.stream_registry = StreamRegistry()
@@ -278,7 +291,6 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             wheel=app.state.delay_scheduler.wheel,
             sink=sink,
         )
-        app.state.uow_factory = platform_uow_factory(app)
         lifecycle_ledger = DbTenantLifecycleLedger(session_scope=lambda: lifecycle_session_scope(app))
         lifecycle_runtime = TenantLifecycleRuntime(
             ledger=lifecycle_ledger,

@@ -367,3 +367,85 @@ export async function resetOffset(body: OffsetResetBody): Promise<OffsetResetRes
   )
   return required(envelope.data)
 }
+
+/** 死信列表响应。 */
+export type DlqPage = Schema['DlqList']
+/** 死信列表行。 */
+export type DlqItem = Schema['DlqItem']
+/** 死信详情。 */
+export type DlqDetail = Schema['DlqDetail']
+/** 死信处置结果。 */
+export type DlqDisposeResult = Schema['DlqDisposeResult']
+/** 死信列表查询参数。 */
+export type DlqQuery = NonNullable<Ops['list_dead_letters_api_v1_msg_admin_dlq_get']['parameters']['query']>
+
+/** 死信列表（默认排除已归档）。 */
+export async function fetchDeadLetters(params: DlqQuery = {}): Promise<DlqPage> {
+  const envelope = await request<Schema['ApiResponse_DlqList_']>('/admin/dlq', params)
+  return envelope.data ?? { items: [], page: 1, size: 20, total: 0 }
+}
+
+/**
+ * 死信详情（含失败上下文）。
+ *
+ * @param dlqId 死信主键（雪花，JSON 字符串）。
+ */
+export async function fetchDeadLetter(dlqId: string): Promise<DlqDetail | null> {
+  const envelope = await request<Schema['ApiResponse_DlqDetail_']>(`/admin/dlq/${dlqId}`)
+  return envelope.data ?? null
+}
+
+/**
+ * 重放死信（按原分区 / offset 建单条重放任务）。
+ *
+ * @param dlqId 死信主键。
+ * @param ratePerSecond 重放速率（条/秒）。
+ */
+export async function replayDeadLetter(dlqId: string, ratePerSecond: number): Promise<DlqDisposeResult> {
+  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/replay`, (path) =>
+    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, {
+      confirm: true,
+      rate_per_second: ratePerSecond,
+    } satisfies Schema['DlqReplayRequest']),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 忽略死信（原因必填）。
+ *
+ * @param dlqId 死信主键。
+ * @param reason 忽略原因。
+ */
+export async function ignoreDeadLetter(dlqId: string, reason: string): Promise<DlqDisposeResult> {
+  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/ignore`, (path) =>
+    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, {
+      confirm: true,
+      reason,
+    } satisfies Schema['DlqIgnoreRequest']),
+  )
+  return required(envelope.data)
+}
+
+/**
+ * 归档死信（从活跃列表隐藏）。
+ *
+ * @param dlqId 死信主键。
+ * @param reason 归档原因（可选）。
+ */
+export async function archiveDeadLetter(dlqId: string, reason?: string): Promise<DlqDisposeResult> {
+  const body: Schema['DlqArchiveRequest'] = { confirm: true }
+  if (reason !== undefined && reason !== '') {
+    body.reason = reason
+  }
+  const envelope = await requestWrite<Schema['ApiResponse_DlqDisposeResult_']>(`/admin/dlq/${dlqId}/archive`, (path) =>
+    scope().post<Schema['ApiResponse_DlqDisposeResult_']>(path, body),
+  )
+  return required(envelope.data)
+}
+
+/** 死信列表投影取数器。 */
+export const loadDeadLetters: ReadOnlyLoader<DlqItem> = async (params: ReadOnlyQueryParams) => {
+  const page = await fetchDeadLetters(params as DlqQuery)
+  return { items: page.items, total: page.total }
+}

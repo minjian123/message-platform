@@ -74,6 +74,13 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="主题删除清理台账（状态 / 已完成步骤 / 尝试次数 / 最后错误）",
     ),
+    TableRecord(
+        table_name="msg_dead_letter",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="死信（定位三元组 / 转入原因 / 失败上下文 / 五态处置 / 重放任务关联）",
+    ),
 )
 """msg 元数据表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 
