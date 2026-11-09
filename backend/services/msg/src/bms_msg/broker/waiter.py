@@ -28,6 +28,7 @@ from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.log import MessageHeaderView, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.core.config import MAX_LONG_POLL_WAITERS, MS_PER_SECOND
+from bms_msg.core.trace import TraceContext
 
 __all__ = ["DeliveryWaiter", "NotifyingMessageStore", "WaitKey", "WaitOutcome"]
 
@@ -192,7 +193,7 @@ class NotifyingMessageStore(MessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -208,7 +209,7 @@ class NotifyingMessageStore(MessageStore):
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
-            trace_id: 链路标识（可空）。
+            trace: 链路字段（06-4；四个字段一物一传）。
             published_at: 发布时间（UTC）。
             content_type: 消息体内容类型。
             compression: 压缩算法。
@@ -225,7 +226,7 @@ class NotifyingMessageStore(MessageStore):
             key=key,
             payload=payload,
             headers=headers,
-            trace_id=trace_id,
+            trace=trace,
             published_at=published_at,
             content_type=content_type,
             compression=compression,

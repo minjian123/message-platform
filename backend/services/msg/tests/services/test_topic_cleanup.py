@@ -32,6 +32,7 @@ from bms_msg.broker.scheduler import DelayWheel
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageReading, StorageWatermark
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.models.topic_cleanup import (
     CLEANUP_COMPLETED,
     CLEANUP_PENDING,
@@ -323,7 +324,7 @@ def _delay_record(*, topic_id: int, log_id: str, tenant_id: int = TENANT_ID) -> 
         key=None,
         payload=b"x",
         headers=ConcurrentStableDict[str, str](),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=now,
         deliver_at=now + timedelta(minutes=5),
     )
@@ -413,7 +414,7 @@ async def _append_messages(store: InMemoryMessageStore, *, topic_id: int, count:
             key=None,
             payload=b"x",
             headers=ConcurrentStableDict[str, str](),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=datetime.now(UTC),
         )
 

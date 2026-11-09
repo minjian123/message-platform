@@ -35,6 +35,7 @@ from bms_msg.broker.record import (
 )
 from bms_msg.broker.segment import list_segment_bases
 from bms_msg.core.config import CORRUPT_TAIL_KEEP, RECORD_FRAME_BYTES
+from bms_msg.core.trace import TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2432)
 
@@ -69,7 +70,7 @@ def _header(*, log_id: str = "log-1", delay: DelayStamp | None = None) -> Record
         message_id="msg-1",
         log_id=log_id,
         key="order-1",
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at_us=1_767_225_600_000_000,
         headers=(("source", "test"),),
         content_type="application/json",

@@ -816,7 +816,7 @@ class ReplayRunner:
             key=message.key,
             payload=message.payload,
             headers=message.headers,
-            trace_id=message.trace_id,
+            trace=message.trace,
             published_at=self._now(),
             content_type=message.content_type,
             compression=message.compression,

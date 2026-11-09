@@ -77,6 +77,7 @@ from bms_msg.core.config import (
     FSYNC_MODE_TIME,
     MS_PER_SECOND,
 )
+from bms_msg.core.trace import EMPTY_TRACE
 
 __all__ = [
     "DelayDedupeSource",
@@ -1032,7 +1033,7 @@ def _put_header(record: DelayRecord) -> RecordHeader:
         message_id=record.message_id,
         log_id=record.log_id,
         key=record.key,
-        trace_id=record.trace_id,
+        trace=record.trace,
         published_at_us=to_epoch_us(record.published_at),
         headers=tuple((str(name), str(value)) for name, value in record.headers.items()),
         content_type=record.content_type,
@@ -1067,7 +1068,7 @@ def _clear_header(record: DelayRecord, *, now: datetime) -> RecordHeader:
         message_id=record.message_id,
         log_id=record.log_id,
         key=None,
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at_us=to_epoch_us(now),
         headers=(),
         content_type="",
@@ -1100,7 +1101,7 @@ def _to_record(header: RecordHeader, payload: bytes, *, stamp: DelayStamp) -> De
         key=header.key,
         payload=payload,
         headers=ConcurrentStableDict(dict(header.headers)),
-        trace_id=header.trace_id,
+        trace=header.trace,
         published_at=from_epoch_us(header.published_at_us),
         deliver_at=from_epoch_us(stamp.deliver_at_us),
         attempts=stamp.attempts,

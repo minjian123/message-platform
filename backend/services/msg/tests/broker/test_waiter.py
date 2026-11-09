@@ -17,6 +17,7 @@ from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore, StoredMessage
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore, WaitOutcome
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2425)
 
@@ -131,7 +132,7 @@ async def _append(store: MessageStore, *, payload: bytes = b"x") -> StoredMessag
         key=None,
         payload=payload,
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=datetime.now(UTC),
     )
 
@@ -177,7 +178,7 @@ async def test_notifying_store_forwards_payload_marks() -> None:
         key="k",
         payload=b"compressed",
         headers=ConcurrentStableDict(),
-        trace_id="t-1",
+        trace=TraceContext(trace_id="t-1"),
         published_at=datetime.now(UTC),
         content_type="application/json",
         compression="gzip",

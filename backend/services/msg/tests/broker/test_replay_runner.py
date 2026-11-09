@@ -36,6 +36,7 @@ from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner, ReplayService
 from bms_msg.broker.router import TopicRouter
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 from bms_msg.models.replay import TASK_CANCELLED, TASK_COMPLETED, TASK_FAILED, TASK_PAUSED, TASK_RUNNING
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.replay import ReplayTaskRepository
@@ -85,7 +86,7 @@ class RecordingStore(InMemoryMessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -101,7 +102,7 @@ class RecordingStore(InMemoryMessageStore):
             key: 分区键。
             payload: 载荷。
             headers: 结构化头。
-            trace_id: 链路标识。
+            trace: 链路字段。
             published_at: 发布时间。
 
         Returns:
@@ -120,7 +121,7 @@ class RecordingStore(InMemoryMessageStore):
             key=key,
             payload=payload,
             headers=headers,
-            trace_id=trace_id,
+            trace=trace,
             published_at=published_at,
             content_type=content_type,
             compression=compression,
@@ -185,7 +186,7 @@ async def _seed(store: InMemoryMessageStore, *, topic: MsgTopic, count: int, par
             key="order-1",
             payload=PAYLOAD,
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id="trace-1",
+            trace=TraceContext(trace_id="trace-1"),
             published_at=_BASE,
         )
 
@@ -551,7 +552,7 @@ async def test_runner_skips_records_outside_key_filter(
             key="order-2",
             payload=b"payload",
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=_BASE,
         )
     task = await replay_service.create(tenant=current_tenant, request=_request(key="order-1"))

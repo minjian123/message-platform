@@ -30,6 +30,7 @@ from bms_msg.broker.record import (
     read_frame,
 )
 from bms_msg.broker.segment import INDEX_SUFFIX, LOG_SUFFIX, TIME_SUFFIX
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2427)
 
@@ -109,7 +110,7 @@ async def _append(
         key="order-1",
         payload=payload,
         headers=ConcurrentStableDict({"source": "file"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=at,
         content_type="application/json",
         compression="none",
@@ -406,7 +407,7 @@ async def test_unsupported_format_version_is_rejected(tmp_path: Path) -> None:
         message_id="m-x",
         log_id="l-x",
         key=None,
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at_us=0,
         headers=(),
         content_type="application/json",

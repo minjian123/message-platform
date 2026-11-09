@@ -19,6 +19,7 @@ from bms_msg.broker.deadletter import DeadLetter, DeadLetterReason
 from bms_msg.broker.delay import DelayRecord
 from bms_msg.broker.group import ConsumerGroup
 from bms_msg.broker.transport import ConnectionMeta
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.models.partition import MsgPartition
 from bms_msg.models.topic import MsgTopic
 from bms_msg.tenant.lifecycle import MsgTenantResourceHandler, TenantLifecycleConsumer
@@ -150,7 +151,7 @@ async def _seed_volatile(runtime: TenantLifecycleRuntime) -> None:
             key=None,
             payload=b"x",
             headers=ConcurrentStableDict(),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=now,
             deliver_at=now + timedelta(seconds=1),
         )

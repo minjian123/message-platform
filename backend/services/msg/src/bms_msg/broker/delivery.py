@@ -47,6 +47,7 @@ from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
 from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
 from bms_msg.core.message_id import new_message_id
+from bms_msg.core.trace import trace_of
 from bms_msg.errors import (
     MsgDeliveryExhaustedError,
     MsgMessageNotFoundError,
@@ -347,7 +348,7 @@ class DeliveryService:
             key=request.key,
             payload=resolve_payload(request),
             headers=ConcurrentStableDict(request.headers.items()),
-            trace_id=request.trace_id,
+            trace=trace_of(request),
             published_at=self._now(),
             content_type=normalize_content_type(request.content_type),
             compression=normalize_compression(request.compression),

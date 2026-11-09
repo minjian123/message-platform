@@ -22,6 +22,7 @@ from bms_core.core.exceptions import ParamError
 
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.retention import RetentionService
+from bms_msg.core.trace import EMPTY_TRACE
 
 pytestmark = pytest.mark.kiwi_id(2418)
 
@@ -89,7 +90,7 @@ async def _append(store: InMemoryMessageStore, *, at: datetime, count: int = 1) 
             key="order-1",
             payload=PAYLOAD,
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=at,
         )
 

@@ -2987,11 +2987,37 @@
             "title": "Namespace",
             "type": "string"
           },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产 span 的父 span（链路起点可为空）",
+            "title": "Parent Span Id"
+          },
           "payload": {
             "default": "",
             "description": "消息体（base64 编码；空串表示空消息体）",
             "title": "Payload",
             "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产者本次 span 标识（消费端据它建子 span）",
+            "title": "Span Id"
           },
           "topic": {
             "description": "主题名（与创建主题时的 name 同值）",
@@ -2999,6 +3025,19 @@
             "minLength": 1,
             "title": "Topic",
             "type": "string"
+          },
+          "trace_flags": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "采样标记（约定 W3C 8 位十六进制；broker 不解释，原样透传）",
+            "title": "Trace Flags"
           },
           "trace_id": {
             "anyOf": [
@@ -4167,6 +4206,18 @@
             "title": "Offset",
             "type": "integer"
           },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产 span 的父 span",
+            "title": "Parent Span Id"
+          },
           "partition": {
             "description": "分区号",
             "title": "Partition",
@@ -4187,6 +4238,42 @@
             "format": "date-time",
             "title": "Published At",
             "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产者本次 span 标识",
+            "title": "Span Id"
+          },
+          "trace_flags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "采样标记（broker 原样透传，不解释）",
+            "title": "Trace Flags"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "链路标识（06-4；排障时据此串联生产与消费）",
+            "title": "Trace Id"
           }
         },
         "required": [
@@ -4196,6 +4283,10 @@
           "offset",
           "published_at",
           "headers",
+          "trace_id",
+          "span_id",
+          "parent_span_id",
+          "trace_flags",
           "payload_len",
           "payload_sha256"
         ],
@@ -4349,6 +4440,18 @@
             "title": "Offset",
             "type": "integer"
           },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产 span 的父 span（链路起点可为空）",
+            "title": "Parent Span Id"
+          },
           "partition": {
             "description": "分区号",
             "title": "Partition",
@@ -4365,10 +4468,34 @@
             "title": "Published At",
             "type": "string"
           },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生产者本次 span 标识（消费端据它建子 span）",
+            "title": "Span Id"
+          },
           "topic": {
             "description": "主题名",
             "title": "Topic",
             "type": "string"
+          },
+          "trace_flags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "采样标记（约定 W3C 8 位十六进制；broker 不解释，原样透传）",
+            "title": "Trace Flags"
           },
           "trace_id": {
             "anyOf": [
@@ -4403,6 +4530,9 @@
           "key",
           "payload",
           "trace_id",
+          "span_id",
+          "parent_span_id",
+          "trace_flags",
           "delivery_count",
           "published_at"
         ],
@@ -10862,6 +10992,9 @@
           "key",
           "headers",
           "trace_id",
+          "span_id",
+          "parent_span_id",
+          "trace_flags",
           "delay_level",
           "content_type",
           "compression",
@@ -11170,6 +11303,9 @@
         "offset",
         "key",
         "trace_id",
+        "span_id",
+        "parent_span_id",
+        "trace_flags",
         "delivery_count",
         "published_at",
         "headers",
@@ -11180,6 +11316,20 @@
       "message_payload": "消息体原始字节（不 base64；三字段随 header 回显，与 SSE / JSON 同口径）",
       "open_frame": "type=subscribe + flags.response；header 带 stream_id / max_seconds / max_wait_ms / poll_interval_ms / prefetch / inflight_messages / inflight_bytes（等价 SSE 的 open 事件）",
       "subscribe_frame_type": 4
+    },
+    "tracing": {
+      "additive": "旧客户端不传即为 null；旧记录无该字段解出为 null，不批量改写、不升记录格式版本",
+      "batch": "批量消费逐条回显，不设批级字段（批内可能跨多个 trace，批级单一 span 会串链）",
+      "fields": [
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "trace_flags"
+      ],
+      "max_length": 128,
+      "sampling": "按 trace 采样；broker 不读 trace_flags 含义、不据此丢弃、不改写",
+      "shape": "字符串，只判长度不判形态（span id 允许 SDK 自定义变体，与 trace_id 同尺）",
+      "who_decides": "span 创建 / 采样决策在链路根部（SDK / OTel）；broker 只存、搬、回显"
     },
     "version_rule": {
       "accept_major": [

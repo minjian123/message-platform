@@ -36,6 +36,7 @@ from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner
+from bms_msg.core.trace import EMPTY_TRACE
 from tests_support.frame_app import install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2467)
@@ -209,7 +210,7 @@ async def _seed_message(api_app: FastAPI, *, topic_id: int, offset: int = 0) -> 
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=_BASE,
     )
 

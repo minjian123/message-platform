@@ -24,6 +24,7 @@ from bms_msg.broker.delay import DelayRecord, DelayStore, InMemoryDelayStore
 from bms_msg.broker.lifecycle import BackgroundLoops, DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
+from bms_msg.core.trace import TraceContext
 from bms_msg.main import ApplicationFactory, load_dead_letter_index
 
 pytestmark = pytest.mark.kiwi_id(2420)
@@ -58,7 +59,7 @@ def _record(*, clock: Callable[[], datetime], span_ms: int) -> DelayRecord:
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
     )

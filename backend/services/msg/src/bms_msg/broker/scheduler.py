@@ -405,7 +405,7 @@ class DelayScheduler:
                 key=record.key,
                 payload=record.payload,
                 headers=record.headers,
-                trace_id=record.trace_id,
+                trace=record.trace,
                 published_at=record.deliver_at,
                 content_type=record.content_type,
                 compression=record.compression,

@@ -46,6 +46,7 @@ from bms_msg.broker.group import ConsumerGroup, InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.tenant.context import CurrentTenant
@@ -301,7 +302,7 @@ async def _seed(api_app: FastAPI, *, topic_id: int, count: int) -> None:
             key="order-1",
             payload=b"payload",
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=_BASE,
         )
 

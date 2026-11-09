@@ -44,6 +44,7 @@ from bms_msg.core.config import (
     SUBSCRIBE_PREFETCH,
     SUBSCRIBE_PREFETCH_LIMIT,
 )
+from bms_msg.core.trace import TRACE_FIELD_MAX_LENGTH
 from bms_msg.errors import ErrorCategory, MsgErrorCode
 from bms_msg.rpc.contract import rpc_contract
 
@@ -138,6 +139,17 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                     ),
                 }
             ),
+            "tracing": ConcurrentStableDict(
+                {
+                    "fields": ConcurrentStableList(["trace_id", "span_id", "parent_span_id", "trace_flags"]),
+                    "max_length": TRACE_FIELD_MAX_LENGTH,
+                    "shape": "字符串，只判长度不判形态（span id 允许 SDK 自定义变体，与 trace_id 同尺）",
+                    "who_decides": "span 创建 / 采样决策在链路根部（SDK / OTel）；broker 只存、搬、回显",
+                    "sampling": "按 trace 采样；broker 不读 trace_flags 含义、不据此丢弃、不改写",
+                    "batch": "批量消费逐条回显，不设批级字段（批内可能跨多个 trace，批级单一 span 会串链）",
+                    "additive": "旧客户端不传即为 null；旧记录无该字段解出为 null，不批量改写、不升记录格式版本",
+                }
+            ),
             "endpoint_fields": ConcurrentStableDict(
                 {
                     "publish": {
@@ -147,6 +159,9 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                                 "key",
                                 "headers",
                                 "trace_id",
+                                "span_id",
+                                "parent_span_id",
+                                "trace_flags",
                                 "delay_level",
                                 "content_type",
                                 "compression",
@@ -227,6 +242,9 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
                             "offset",
                             "key",
                             "trace_id",
+                            "span_id",
+                            "parent_span_id",
+                            "trace_flags",
                             "delivery_count",
                             "published_at",
                             "headers",

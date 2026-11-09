@@ -28,6 +28,7 @@ from bms_msg.core.config import (
     RECORD_FORMAT_VERSION,
     RECORD_FRAME_BYTES,
 )
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 
 __all__ = [
     "DELAY_KIND_CLEAR",
@@ -200,8 +201,8 @@ class RecordHeader(BaseValueObject):
     key: str | None
     """分区键（可空）。"""
 
-    trace_id: str | None
-    """链路标识（可空）。"""
+    trace: TraceContext
+    """链路字段（06-4；`trace_id` 恒写顶层，span 侧三项走 `trace` 子结构，见 `_pack_header`）。"""
 
     published_at_us: int
     """发布时间（epoch 微秒，UTC）：用整数而非 `datetime`，避免 MessagePack 时间扩展的类型歧义。"""
@@ -229,6 +230,15 @@ class RecordHeader(BaseValueObject):
 
     delay: DelayStamp | None = None
     """延迟区元数据（02-7；`.log` 记录为 None，因此不写 `delay` 键、零体积开销）。"""
+
+    @property
+    def trace_id(self) -> str | None:
+        """链路标识（读兼容属性：既有读取点只关心这一个字段，不必展开 `trace`）。
+
+        Returns:
+            str | None: 链路标识；未注入为 None。
+        """
+        return self.trace.trace_id
 
 
 @dataclass(frozen=True)
@@ -307,7 +317,7 @@ def _pack_header(header: RecordHeader) -> bytes:
         "message_id": header.message_id,
         "log_id": header.log_id,
         "key": header.key,
-        "trace_id": header.trace_id,
+        "trace_id": header.trace.trace_id,
         "published_at": header.published_at_us,
         "headers": dict(header.headers),
         "content_type": header.content_type,
@@ -317,6 +327,14 @@ def _pack_header(header: RecordHeader) -> bytes:
         "hw": header.hw,
         "replicas": list(header.replicas),
     }
+    if header.trace.has_span:
+        # 只在带 span 侧信息时写该键：普通消息头部字节与 06-4 之前完全一致；
+        # 顶层 `trace_id` 恒写，旧读程序（只认顶层键）照常工作。
+        raw["trace"] = {
+            "span_id": header.trace.span_id,
+            "parent_span_id": header.trace.parent_span_id,
+            "trace_flags": header.trace.trace_flags,
+        }
     if header.delay is not None:
         # 只在延迟记录上写该键：`.log` 记录的字节与 02-1 完全一致（`delay` 子结构约 90 字节）
         raw["delay"] = _pack_delay(header.delay)
@@ -362,7 +380,7 @@ def _unpack_header(blob: bytes) -> RecordHeader:
         message_id=str(data.get("message_id", "")),
         log_id=str(data.get("log_id", "")),
         key=cast("str | None", data.get("key")),
-        trace_id=cast("str | None", data.get("trace_id")),
+        trace=_decode_trace(data),
         published_at_us=int(data.get("published_at", 0)),
         headers=tuple((str(name), str(value)) for name, value in headers_map.items()),
         content_type=str(data.get("content_type", "")),
@@ -416,6 +434,47 @@ def _decode_delay(value: object) -> DelayStamp | None:
         namespace=str(data.get("namespace", "")),
         topic=str(data.get("topic", "")),
     )
+
+
+def _decode_trace(value: object) -> TraceContext:
+    """把顶层 `trace_id` 与 `trace` 子 map 合成链路上下文（缺键 / 类型不符一律退化为 None）。
+
+    **不判损坏**：多一个键或某键类型不对，不该让整条记录作废（只增不删口径）；沿用
+    `_decode_delay` 的同一处理原则。入参声明为 `object` 而非 map：解出的头来自 msgpack 的原生
+    map，用 map 形状做签名会把「框架产出的内置类型」带进业务签名（与 `_decode_delay` 同法）。
+
+    Args:
+        value: 解出的头 map。
+
+    Returns:
+        TraceContext: 链路上下文（未注入即空链路）。
+    """
+    if not isinstance(value, dict):
+        return EMPTY_TRACE
+    data = cast("dict[str, Any]", value)
+    trace_id = _optional_str(data.get("trace_id"))
+    nested = data.get("trace")
+    if not isinstance(nested, dict):
+        return TraceContext(trace_id=trace_id)
+    span = cast("dict[str, Any]", nested)
+    return TraceContext(
+        trace_id=trace_id,
+        span_id=_optional_str(span.get("span_id")),
+        parent_span_id=_optional_str(span.get("parent_span_id")),
+        trace_flags=_optional_str(span.get("trace_flags")),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    """取可选字符串（非字符串视为缺失，不抛错）。
+
+    Args:
+        value: 解出的值。
+
+    Returns:
+        str | None: 字符串原值；其他类型返回 None。
+    """
+    return value if isinstance(value, str) else None
 
 
 def _split(buf: bytes, *, verify_crc: bool) -> tuple[RecordHeader, bytes, int]:

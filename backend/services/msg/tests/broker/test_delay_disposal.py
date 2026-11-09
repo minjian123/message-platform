@@ -17,6 +17,7 @@ from bms_msg.broker.delay import DelayRecord, InMemoryDelayStore
 from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.core.trace import TraceContext
 from bms_msg.errors import MsgMessageNotFoundError
 
 pytestmark = pytest.mark.kiwi_id(2455)
@@ -152,7 +153,7 @@ def _record(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "audit"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
         attempts=3,

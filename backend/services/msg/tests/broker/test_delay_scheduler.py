@@ -31,6 +31,7 @@ from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 from bms_msg.broker.delay import DelayRecord, DelayStore
 from bms_msg.broker.log import InMemoryMessageStore, MessageHeaderView, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.core.trace import TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2417)
 
@@ -74,7 +75,7 @@ def _record(*, published_at: datetime, span_ms: int, log_id: str, partition_no: 
         key="order-1",
         payload=base64.b64decode("cGF5bG9hZA=="),
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
     )
@@ -129,7 +130,7 @@ class _FailingMessageStore(MessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -145,7 +146,7 @@ class _FailingMessageStore(MessageStore):
             key: 分区键。
             payload: 载荷。
             headers: 结构化头。
-            trace_id: 链路标识。
+            trace: 链路字段。
             published_at: 发布时间。
 
         Returns:
@@ -165,7 +166,7 @@ class _FailingMessageStore(MessageStore):
             key=key,
             payload=payload,
             headers=headers,
-            trace_id=trace_id,
+            trace=trace,
             published_at=published_at,
             content_type=content_type,
             compression=compression,

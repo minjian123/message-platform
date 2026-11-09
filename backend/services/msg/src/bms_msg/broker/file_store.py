@@ -80,6 +80,7 @@ from bms_msg.core.config import (
     SEGMENT_ROLL_MS,
     TIME_INDEX_INTERVAL_MS,
 )
+from bms_msg.core.trace import TraceContext
 
 __all__ = [
     "FileMessageStore",
@@ -436,7 +437,7 @@ class _PartitionLog:
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str,
         compression: str,
@@ -453,7 +454,7 @@ class _PartitionLog:
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
-            trace_id: 链路标识（可空）。
+            trace: 链路字段（06-4；四个字段一物一传）。
             published_at: 发布时间（必须带时区）。
             content_type: 内容类型。
             compression: 压缩算法。
@@ -471,7 +472,7 @@ class _PartitionLog:
             message_id=message_id,
             log_id=log_id,
             key=key,
-            trace_id=trace_id,
+            trace=trace,
             published_at_us=published_at_us,
             headers=tuple((str(name), str(value)) for name, value in headers.items()),
             content_type=content_type,
@@ -499,7 +500,7 @@ class _PartitionLog:
             key=key,
             payload=payload,
             headers=headers,
-            trace_id=trace_id,
+            trace=trace,
             published_at=published_at,
             content_type=content_type,
             compression=compression,
@@ -1135,7 +1136,7 @@ def _to_message(parsed: ParsedRecord, *, offset: int) -> StoredMessage:
         key=header.key,
         payload=parsed.payload,
         headers=ConcurrentStableDict(dict(header.headers)),
-        trace_id=header.trace_id,
+        trace=header.trace,
         published_at=from_epoch_us(header.published_at_us),
         content_type=header.content_type or DEFAULT_CONTENT_TYPE,
         compression=header.compression or COMPRESSION_NONE,
@@ -1216,7 +1217,7 @@ class FileMessageStore(MessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -1232,7 +1233,7 @@ class FileMessageStore(MessageStore):
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
-            trace_id: 链路标识（可空）。
+            trace: 链路字段（06-4；四个字段一物一传）。
             published_at: 发布时间（UTC）。
             content_type: 内容类型。
             compression: 压缩算法。
@@ -1256,7 +1257,7 @@ class FileMessageStore(MessageStore):
                 key=key,
                 payload=payload,
                 headers=headers,
-                trace_id=trace_id,
+                trace=trace,
                 published_at=published_at,
                 content_type=content_type,
                 compression=compression,

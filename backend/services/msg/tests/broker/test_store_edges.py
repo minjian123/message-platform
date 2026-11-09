@@ -34,6 +34,7 @@ from bms_msg.broker.record import (
     to_epoch_us,
 )
 from bms_msg.core.config import MAX_RECORD_BYTES, MAX_RECORD_HEADER_BYTES
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2427)
 
@@ -73,7 +74,7 @@ def _header(**overrides: object) -> RecordHeader:
         "message_id": "m-0",
         "log_id": "l-0",
         "key": None,
-        "trace_id": None,
+        "trace": TraceContext(),
         "published_at_us": 1_767_225_600_000_000,
         "headers": (),
         "content_type": "application/json",
@@ -132,7 +133,7 @@ async def _append(store: FileMessageStore, *, index: int = 0, payload: bytes = b
         key=None,
         payload=payload,
         headers=ConcurrentStableDict({}),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=BASE_AT,
     )
 
@@ -478,7 +479,7 @@ async def test_truncate_rewrites_index_on_same_instance(tmp_path: Path) -> None:
         key=None,
         payload=b"z" * 5_000,
         headers=ConcurrentStableDict({}),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=BASE_AT + timedelta(seconds=2),
     )
     partition = cast("Any", store)._partitions[(TOPIC_ID, PARTITION)]

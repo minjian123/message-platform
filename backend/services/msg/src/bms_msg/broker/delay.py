@@ -41,6 +41,7 @@ from bms_msg.core.config import (
     DELAY_QUOTA_PER_TENANT,
 )
 from bms_msg.core.message_id import new_message_id
+from bms_msg.core.trace import TraceContext, trace_of
 from bms_msg.errors import MsgDelayQuotaExceededError
 from bms_msg.schemas.message import PublishRequest
 from bms_msg.services.topic import MAX_LIST_SIZE
@@ -300,7 +301,7 @@ class DelayRecord(BaseValueObject):
     """延迟区中的一条记录（不可变快照；重试时整条替换，`attempts` 递增）。
 
     到期 `append` 时除 `offset` 外逐字段搬到 `StoredMessage`：`message_id` / `log_id` / `key` /
-    `payload` / `headers` / `trace_id` 原样沿用，`published_at` 取 `deliver_at`（保留期自到期起算）。
+    `payload` / `headers` / `trace` 原样沿用，`published_at` 取 `deliver_at`（保留期自到期起算）。
     """
 
     log_id: str
@@ -336,8 +337,8 @@ class DelayRecord(BaseValueObject):
     headers: ConcurrentStableDict[str, str]
     """结构化头（trace / 业务标记）。"""
 
-    trace_id: str | None
-    """链路标识（排障）。"""
+    trace: TraceContext
+    """链路字段（06-4：四个字段一物一传；到期转投原样带入日志记录）。"""
 
     published_at: datetime
     """原始发布时刻（UTC；用于跨度校验与排障，**不等于**日志记录的 `published_at`）。"""
@@ -356,6 +357,15 @@ class DelayRecord(BaseValueObject):
 
     uncompressed_len: int | None = None
     """解压后字节数（生产者可选声明；随记录带入日志）。"""
+
+    @property
+    def trace_id(self) -> str | None:
+        """链路标识（读兼容属性；只关心链路标识的调用点不必展开 `trace`）。
+
+        Returns:
+            str | None: 链路标识；未注入为 None。
+        """
+        return self.trace.trace_id
 
 
 @dataclass(frozen=True)
@@ -621,7 +631,7 @@ class DelayService:
             key=request.key,
             payload=resolve_payload(request),
             headers=ConcurrentStableDict(request.headers.items()),
-            trace_id=request.trace_id,
+            trace=trace_of(request),
             published_at=published_at,
             deliver_at=published_at + timedelta(milliseconds=delay_ms),
             content_type=normalize_content_type(request.content_type),

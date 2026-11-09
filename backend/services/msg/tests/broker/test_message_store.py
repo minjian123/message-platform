@@ -12,6 +12,7 @@ import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
+from bms_msg.core.trace import TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2414)
 
@@ -41,7 +42,7 @@ async def _append(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=_PUBLISHED_AT,
     )
 

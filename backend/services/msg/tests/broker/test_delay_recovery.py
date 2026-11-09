@@ -35,6 +35,7 @@ from bms_msg.broker.record import (
 )
 from bms_msg.broker.recovery import RecoveryLedger
 from bms_msg.broker.scheduler import DELAY_LAYER_SECOND, DelayScheduler, DelayWheel
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2432)
 
@@ -134,7 +135,7 @@ def _record(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
         attempts=attempts,
@@ -205,7 +206,7 @@ async def test_rebuild_clears_records_already_in_log(tmp_path: Path, clock: Call
         key=record.key,
         payload=record.payload,
         headers=record.headers,
-        trace_id=record.trace_id,
+        trace=record.trace,
         published_at=record.deliver_at,
         content_type=DEFAULT_CONTENT_TYPE,
         compression=COMPRESSION_NONE,
@@ -323,7 +324,7 @@ class _FailingMessages(InMemoryMessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -339,7 +340,7 @@ class _FailingMessages(InMemoryMessageStore):
             key: 分区键。
             payload: 载荷。
             headers: 结构化头。
-            trace_id: 链路标识。
+            trace: 链路字段。
             published_at: 发布时间。
             content_type: 内容类型。
             compression: 压缩算法。
@@ -348,7 +349,7 @@ class _FailingMessages(InMemoryMessageStore):
         Raises:
             OSError: 恒抛（磁盘满）。
         """
-        del topic_id, partition_no, message_id, log_id, key, payload, headers, trace_id, published_at
+        del topic_id, partition_no, message_id, log_id, key, payload, headers, trace, published_at
         del content_type, compression, uncompressed_len
         raise OSError(28, "No space left on device")
 
@@ -466,7 +467,7 @@ async def test_log_ids_since_anchors_by_time(tmp_path: Path, clock: Callable[[],
             key=None,
             payload=b"x" * 90,
             headers=ConcurrentStableDict(),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=moment,
             content_type=DEFAULT_CONTENT_TYPE,
             compression=COMPRESSION_NONE,
@@ -499,7 +500,7 @@ async def test_store_sync_writes_recovery_point(tmp_path: Path, clock: Callable[
         key=None,
         payload=b"payload",
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
         content_type=DEFAULT_CONTENT_TYPE,
         compression=COMPRESSION_NONE,
@@ -529,7 +530,7 @@ async def test_rebuild_dedupes_multiple_records_in_one_partition(tmp_path: Path,
         key=first.key,
         payload=first.payload,
         headers=first.headers,
-        trace_id=first.trace_id,
+        trace=first.trace,
         published_at=first.deliver_at,
         content_type=DEFAULT_CONTENT_TYPE,
         compression=COMPRESSION_NONE,
@@ -594,7 +595,7 @@ async def test_rebuild_survives_clear_write_failure(
         key=record.key,
         payload=record.payload,
         headers=record.headers,
-        trace_id=record.trace_id,
+        trace=record.trace,
         published_at=record.deliver_at,
         content_type=DEFAULT_CONTENT_TYPE,
         compression=COMPRESSION_NONE,
@@ -671,7 +672,7 @@ def _clear_only_blob() -> bytes:
         message_id="m-orphan",
         log_id="l-orphan",
         key=None,
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at_us=1,
         headers=(),
         content_type="",

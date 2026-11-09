@@ -19,6 +19,7 @@ from bms_core.core.exceptions import ParamError
 
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.log import InMemoryMessageStore, MessageStore
+from bms_msg.core.trace import TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2427)
 
@@ -107,7 +108,7 @@ async def _append(
         key=key,
         payload=payload,
         headers=ConcurrentStableDict({"source": "contract"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=at,
         content_type="application/json",
         compression="none",

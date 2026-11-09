@@ -39,6 +39,7 @@ from bms_msg.core.config import (
     SUBSCRIBE_MAX_WAIT_LIMIT_MS,
     SUBSCRIBE_MAX_WAIT_MS,
 )
+from bms_msg.core.trace import TRACE_FIELD_MAX_LENGTH
 from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, PARTITION_FIELD, TOPIC_FIELD
 
 __all__ = [
@@ -75,6 +76,18 @@ _CONSUMER_ID_FIELD = CONSUMER_ID_FIELD
 
 _PARTITION_FIELD = PARTITION_FIELD
 """分区号字段（拉取 / 确认共用）。"""
+
+TRACE_ID_DESCRIPTION = "链路标识"
+"""链路标识字段描述（请求与响应同一句，防契约描述漂移）。"""
+
+SPAN_ID_DESCRIPTION = "生产者本次 span 标识（消费端据它建子 span）"
+"""span 标识字段描述。"""
+
+PARENT_SPAN_ID_DESCRIPTION = "生产 span 的父 span（链路起点可为空）"
+"""父 span 字段描述。"""
+
+TRACE_FLAGS_DESCRIPTION = "采样标记（约定 W3C 8 位十六进制；broker 不解释，原样透传）"
+"""采样标记字段描述（broker 只透传，不据此丢弃消息）。"""
 
 
 class DelayLevel(StrEnum):
@@ -121,7 +134,14 @@ class PublishRequest(BaseSchema):
     headers: Annotated[ConcurrentStableDict[str, str], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_DICT, description="结构化头（trace / 业务标记）"
     )
-    trace_id: str | None = Field(default=None, max_length=128, description="链路标识")
+    trace_id: str | None = Field(default=None, max_length=TRACE_FIELD_MAX_LENGTH, description=TRACE_ID_DESCRIPTION)
+    span_id: str | None = Field(default=None, max_length=TRACE_FIELD_MAX_LENGTH, description=SPAN_ID_DESCRIPTION)
+    parent_span_id: str | None = Field(
+        default=None, max_length=TRACE_FIELD_MAX_LENGTH, description=PARENT_SPAN_ID_DESCRIPTION
+    )
+    trace_flags: str | None = Field(
+        default=None, max_length=TRACE_FIELD_MAX_LENGTH, description=TRACE_FLAGS_DESCRIPTION
+    )
     delay_level: DelayLevel | None = Field(
         default=None, description="延迟档位（缺省 null = 普通发布；给值即延迟发布，到期才进入 offset 空间）"
     )
@@ -208,7 +228,10 @@ class MessageItem(BaseSchema):
     headers: Annotated[ConcurrentStableDict[str, str], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_DICT, description="结构化头"
     )
-    trace_id: str | None = Field(description="链路标识")
+    trace_id: str | None = Field(description=TRACE_ID_DESCRIPTION)
+    span_id: str | None = Field(description=SPAN_ID_DESCRIPTION)
+    parent_span_id: str | None = Field(description=PARENT_SPAN_ID_DESCRIPTION)
+    trace_flags: str | None = Field(description=TRACE_FLAGS_DESCRIPTION)
     delivery_count: int = Field(description="投递次数（首次 1，重投递增）")
     published_at: datetime = Field(description="发布时间（UTC）")
     content_type: str = Field(

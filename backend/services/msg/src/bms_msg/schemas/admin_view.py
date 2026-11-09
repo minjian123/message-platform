@@ -60,6 +60,10 @@ class MessageItem(BaseSchema):
     headers: dict[str, str] = Field(  # bare-collections:allow pydantic 响应字段须为内置 dict，否则序列化退化
         description="结构化头（不含载荷）"
     )
+    trace_id: str | None = Field(description="链路标识（06-4；排障时据此串联生产与消费）")
+    span_id: str | None = Field(description="生产者本次 span 标识")
+    parent_span_id: str | None = Field(description="生产 span 的父 span")
+    trace_flags: str | None = Field(description="采样标记（broker 原样透传，不解释）")
     payload_len: int = Field(description="落盘载荷字节数")
     payload_sha256: str = Field(description="落盘载荷 SHA-256（64 位小写十六进制）")
 

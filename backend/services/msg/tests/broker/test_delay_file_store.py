@@ -39,6 +39,7 @@ from bms_msg.core.config import (
     DELAY_MAX_SPAN_MS,
     DELAY_STUCK_TTL_MS,
 )
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 from bms_msg.errors import MsgDelayQuotaExceededError
 
 pytestmark = pytest.mark.kiwi_id(2432)
@@ -153,7 +154,7 @@ def _record(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
         attempts=attempts,
@@ -343,7 +344,7 @@ async def test_unknown_kind_skipped_without_isolating(tmp_path: Path, clock: Cal
             message_id="m-future",
             log_id="l-future",
             key=None,
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at_us=1,
             headers=(),
             content_type="",
@@ -447,7 +448,7 @@ async def test_rebuild_counts_tombstone_and_plain_records(tmp_path: Path, clock:
         message_id="m-plain",
         log_id="l-plain",
         key=None,
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at_us=1,
         headers=(),
         content_type="",

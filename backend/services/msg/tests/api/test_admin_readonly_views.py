@@ -52,6 +52,7 @@ from bms_msg.broker.log import (
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.watermark import StorageMetrics, StorageReading
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode, MsgStorageWatermarkExceededError
 from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.models.topic import MsgTopic
@@ -459,7 +460,7 @@ async def test_message_log_id_uses_index_and_blocks_foreign_topic(client: AsyncC
         offset=0,
         key=None,
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=datetime.now(UTC),
         content_type="application/msgpack",
         payload_len=8,
@@ -545,7 +546,7 @@ async def test_delay_summary_matches_list_and_stale_hint(client: AsyncClient, ap
             key=None,
             payload=b"x",
             headers=ConcurrentStableDict(),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=now - timedelta(hours=1),
             deliver_at=now - timedelta(minutes=1),
             attempts=0,
@@ -634,7 +635,7 @@ def test_stored_message_header_view_never_carries_payload() -> None:
         key=None,
         payload=b"secret",
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=datetime.now(UTC),
     )
     view = message_header_view(message)

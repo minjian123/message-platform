@@ -19,6 +19,7 @@ from fastapi import Depends, Query
 from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
 from bms_msg.api.deps import CurrentTenantDep, MessageStoreDep, TopicAclServiceDep
 from bms_msg.broker.admin_view import MessageInspector
+from bms_msg.broker.log import MessageHeaderView
 from bms_msg.broker.router import TopicRouter
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import TopicRepository
@@ -63,6 +64,34 @@ def _inspector(uow: UnitOfWork, messages: MessageStoreDep) -> MessageInspector:
     return MessageInspector(router=TopicRouter(TopicRepository(session)), messages=messages)
 
 
+def _admin_item(view: MessageHeaderView) -> MessageItem:
+    """把头视图映射为管理面响应项（字段口径唯一出处：检索响应与用例共用）。
+
+    **只搬头信息**：载荷长度与摘要由存储侧算好随视图传入，本函数在类型上拿不到正文；
+    trace 四字段（06-4）一并回显，排障时可凭 `span_id` 定位到具体一跳。
+
+    Args:
+        view: 存储侧只读头视图。
+
+    Returns:
+        MessageItem: 管理面消息项（不含正文）。
+    """
+    return MessageItem(
+        log_id=view.log_id,
+        message_id=view.message_id,
+        partition=view.partition_no,
+        offset=view.offset,
+        published_at=view.published_at,
+        headers=dict(view.headers.items()),
+        trace_id=view.trace.trace_id,
+        span_id=view.trace.span_id,
+        parent_span_id=view.trace.parent_span_id,
+        trace_flags=view.trace.trace_flags,
+        payload_len=view.payload_len,
+        payload_sha256=view.payload_sha256,
+    )
+
+
 @router.get("", dependencies=[_QUERY], openapi_extra={"x-error-codes": _QUERY_ERRORS})
 async def search_messages(
     tenant: CurrentTenantDep,
@@ -101,19 +130,7 @@ async def search_messages(
         page=page,
         size=size,
     )
-    items: ConcurrentStableList[MessageItem] = ConcurrentStableList(
-        MessageItem(
-            log_id=view.log_id,
-            message_id=view.message_id,
-            partition=view.partition_no,
-            offset=view.offset,
-            published_at=view.published_at,
-            headers=dict(view.headers.items()),
-            payload_len=view.payload_len,
-            payload_sha256=view.payload_sha256,
-        )
-        for view in views
-    )
+    items: ConcurrentStableList[MessageItem] = ConcurrentStableList(_admin_item(view) for view in views)
     return ApiResponse.ok(
         MessagePage(
             namespace=namespace,

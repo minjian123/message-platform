@@ -26,6 +26,7 @@ from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replay import ReplayService
 from bms_msg.broker.router import TopicRouter
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.models.replay import MsgReplayTask
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.replay import ReplayTaskRepository
@@ -91,7 +92,7 @@ async def _seed(
             key=key,
             payload=b"payload",
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=at,
         )
 

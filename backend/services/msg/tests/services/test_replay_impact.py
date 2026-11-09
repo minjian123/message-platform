@@ -20,6 +20,7 @@ from bms_msg.broker.group import ConsumerGroup, InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.core.config import REPLAY_IMPACT_MAX_GROUPS
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.services.replay_impact import ImpactBaseline, ReplayImpactInspector
 
 pytestmark = pytest.mark.kiwi_id(2468)
@@ -96,7 +97,7 @@ async def _seed(store: InMemoryMessageStore, *, partition_no: int, count: int, t
             key=None,
             payload=b"payload",
             headers=ConcurrentStableDict({"source": "test"}),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=BASE,
         )
 

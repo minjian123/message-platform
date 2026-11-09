@@ -29,7 +29,7 @@ from functools import wraps
 from typing import Annotated, Any, cast
 
 from bms_core.api.base import BaseRouter
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.exceptions import BizError
 from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
@@ -461,7 +461,10 @@ def message_item(message: StoredMessage, topic: str, delivery_count: int) -> Mes
         key=message.key,
         payload="",
         headers=message.headers,
-        trace_id=message.trace_id,
+        trace_id=message.trace.trace_id,
+        span_id=message.trace.span_id,
+        parent_span_id=message.trace.parent_span_id,
+        trace_flags=message.trace.trace_flags,
         delivery_count=delivery_count,
         published_at=message.published_at,
         content_type=message.content_type,
@@ -652,6 +655,48 @@ def _track_data_plane(operation: str) -> Callable[[Any], Any]:
     return decorator
 
 
+def _log_published(
+    *,
+    request: PublishRequest,
+    message_id: str,
+    log_id: str,
+    partition: int,
+    offset: int | None,
+    delayed: bool,
+) -> None:
+    """写一条发布事件日志，带上消息自带的 trace 字段（06-4）。
+
+    **为什么只在发布路径打**：一条消息一个 trace，日志量恒定；消费是批量、批内可能多 trace，
+    逐条打会把日志量放大到「条数」，故消费侧只回契约字段、由 SDK 在 OTel 侧串链。
+
+    **为什么空值不写 key**：日志器对上下文字段用 `setdefault` 注入，显式传 `None` 会把
+    自动注入的 `trace_id` 顶掉；故只在字段有值时放入（`span_id` 等新字段同理，避免噪声键）。
+
+    Args:
+        request: 发布请求（取 trace 四字段）。
+        message_id: 消息身份。
+        log_id: 记录身份。
+        partition: 落到的分区号。
+        offset: 分区内序号（延迟发布为 None）。
+        delayed: 是否延迟发布（先进延迟区）。
+    """
+    fields: ConcurrentStableDict[str, object] = ConcurrentStableDict()
+    fields.set("message_id", message_id)
+    fields.set("log_id", log_id)
+    fields.set("partition", partition)
+    fields.set("offset", offset)
+    fields.set("delayed", delayed)
+    for name, value in (
+        ("trace_id", request.trace_id),
+        ("span_id", request.span_id),
+        ("parent_span_id", request.parent_span_id),
+        ("trace_flags", request.trace_flags),
+    ):
+        if value is not None:
+            fields.set(name, value)
+    _LOGGER.info("msg_message_published", **dict(fields.items()))
+
+
 @_track_data_plane("publish")
 async def publish(
     req: PublishRequest,
@@ -719,6 +764,14 @@ async def publish(
             gate=gate,
         ).publish(tenant=tenant, request=req)
         delay_scheduler.ensure_started()
+        _log_published(
+            request=req,
+            message_id=order.message_id,
+            log_id=order.log_id,
+            partition=order.partition_no,
+            offset=None,
+            delayed=True,
+        )
         return ApiResponse.ok(
             PublishResult(
                 message_id=order.message_id,
@@ -752,6 +805,14 @@ async def publish(
         gate=gate,
         counter=counter,
     ).publish(tenant=tenant, request=req)
+    _log_published(
+        request=req,
+        message_id=message.message_id,
+        log_id=message.log_id,
+        partition=message.partition_no,
+        offset=message.offset,
+        delayed=False,
+    )
     return ApiResponse.ok(
         PublishResult(
             message_id=message.message_id,

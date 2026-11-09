@@ -10,6 +10,8 @@
 - **两类 ID 分工**（架构 04 §2.2）：`message_id` 是**消息身份**（重投 / 重放 / 转投都不变），
   `log_id` 是**记录身份**（发布时分配、延迟转投沿用、重放新分配）——重放会合法地产生同一
   `message_id` 的多条记录，故记录级去重（延迟恢复期）只能按 `log_id` 判。
+- **链路字段一物一传**（06-4）：`trace` 以 `TraceContext` 单参进出端口，四个字段同生共死；
+  读取侧保留 `trace_id` 只读属性，既有只关心链路标识的调用点不必展开对象。
 - **不解析 payload**：store 只搬运字节，可解析的头信息由消息记录原样携带（零拷贝前提）。
 - **进程内实现**：数据按「主题 + 分区」分桶，`list` 的追加与切片在单事件循环内原子（无 `await` 切换点）。
 """
@@ -25,6 +27,7 @@ from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
 from bms_msg.core.config import RETENTION_SEGMENT_RECORDS
+from bms_msg.core.trace import TraceContext
 
 __all__ = [
     "InMemoryMessageStore",
@@ -79,8 +82,8 @@ class StoredMessage(BaseValueObject):
     headers: ConcurrentStableDict[str, str]
     """结构化头（trace / 业务标记）。"""
 
-    trace_id: str | None
-    """链路标识（排障）。"""
+    trace: TraceContext
+    """链路字段（06-4：`trace_id` / `span_id` / `parent_span_id` / `trace_flags`）。"""
 
     published_at: datetime
     """发布时间（UTC）。"""
@@ -93,6 +96,15 @@ class StoredMessage(BaseValueObject):
 
     uncompressed_len: int | None = None
     """解压后字节数（生产者可选声明；broker 不校验也不解压）。"""
+
+    @property
+    def trace_id(self) -> str | None:
+        """链路标识（读兼容属性；只关心链路标识的调用点不必展开 `trace`）。
+
+        Returns:
+            str | None: 链路标识；未注入为 None。
+        """
+        return self.trace.trace_id
 
 
 @dataclass(frozen=True)
@@ -114,7 +126,9 @@ class MessageHeaderView(BaseValueObject):
     offset: int
     key: str | None
     headers: ConcurrentStableDict[str, str]
-    trace_id: str | None
+    trace: TraceContext
+    """链路字段（06-4；管理面检索一并回显，便于按 span 排障）。"""
+
     published_at: datetime
     content_type: str
     payload_len: int
@@ -122,6 +136,15 @@ class MessageHeaderView(BaseValueObject):
 
     payload_sha256: str
     """落盘载荷的 SHA-256（64 位小写十六进制）。"""
+
+    @property
+    def trace_id(self) -> str | None:
+        """链路标识（读兼容属性）。
+
+        Returns:
+            str | None: 链路标识；未注入为 None。
+        """
+        return self.trace.trace_id
 
 
 def message_header_view(message: StoredMessage) -> MessageHeaderView:
@@ -141,7 +164,7 @@ def message_header_view(message: StoredMessage) -> MessageHeaderView:
         offset=message.offset,
         key=message.key,
         headers=message.headers,
-        trace_id=message.trace_id,
+        trace=message.trace,
         published_at=message.published_at,
         content_type=message.content_type,
         payload_len=len(message.payload),
@@ -183,7 +206,7 @@ class MessageStore(BaseFrameworkObject, ABC):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -199,7 +222,7 @@ class MessageStore(BaseFrameworkObject, ABC):
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
-            trace_id: 链路标识（可空）。
+            trace: 链路字段（06-4；四个字段一物一传）。
             published_at: 发布时间（UTC）。
             content_type: 消息体内容类型（缺省 MessagePack）。
             compression: 压缩算法（缺省 `none`）。
@@ -356,7 +379,7 @@ class InMemoryMessageStore(MessageStore):
         key: str | None,
         payload: bytes,
         headers: ConcurrentStableDict[str, str],
-        trace_id: str | None,
+        trace: TraceContext,
         published_at: datetime,
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
@@ -372,7 +395,7 @@ class InMemoryMessageStore(MessageStore):
             key: 分区键（可空）。
             payload: 业务字节。
             headers: 结构化头。
-            trace_id: 链路标识（可空）。
+            trace: 链路字段（06-4；四个字段一物一传）。
             published_at: 发布时间（UTC）。
             content_type: 消息体内容类型（缺省 MessagePack）。
             compression: 压缩算法（缺省 `none`）。
@@ -392,7 +415,7 @@ class InMemoryMessageStore(MessageStore):
             key=key,
             payload=payload,
             headers=headers,
-            trace_id=trace_id,
+            trace=trace,
             published_at=published_at,
             content_type=content_type,
             compression=compression,
@@ -563,4 +586,4 @@ def _record_bytes(message: StoredMessage) -> int:
         int: 载荷 + 键 + 头的字节数合计。
     """
     headers = sum(len(name) + len(value) for name, value in message.headers.items())
-    return len(message.payload) + len(message.key or "") + headers + len(message.trace_id or "")
+    return len(message.payload) + len(message.key or "") + headers + len(message.trace.trace_id or "")

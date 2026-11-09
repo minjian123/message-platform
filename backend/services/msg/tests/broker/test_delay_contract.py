@@ -19,6 +19,7 @@ from bms_msg.broker.delay import DelayRecord, DelayStore, InMemoryDelayStore
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.core.config import DELAY_MAX_SPAN_MS
+from bms_msg.core.trace import TraceContext
 from bms_msg.errors import MsgDelayQuotaExceededError
 
 pytestmark = pytest.mark.kiwi_id(2432)
@@ -115,7 +116,7 @@ def _record(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "contract"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
         attempts=attempts,

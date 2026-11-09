@@ -43,6 +43,7 @@ from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode
 from tests_support.frame_app import NoopAuditSink, install_backpressure_state
 
@@ -524,7 +525,7 @@ async def test_entrypoints_trigger_retention_cleanup(client: AsyncClient, api_ap
             key="order-1",
             payload=b"payload",
             headers=ConcurrentStableDict(),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=expired_at,
         )
 

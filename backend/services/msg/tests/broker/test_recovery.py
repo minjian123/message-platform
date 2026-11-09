@@ -33,6 +33,7 @@ from bms_msg.broker.recovery import (
 )
 from bms_msg.broker.segment import INDEX_SUFFIX, LOG_SUFFIX, TIME_SUFFIX
 from bms_msg.core.config import CORRUPT_TAIL_INFIX, RECOVERY_POINT_NAME
+from bms_msg.core.trace import TraceContext
 
 pytestmark = pytest.mark.kiwi_id(2428)
 
@@ -131,7 +132,7 @@ async def _append(
         key="order-1",
         payload=payload,
         headers=ConcurrentStableDict({"source": "recovery"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=at,
         content_type="application/json",
         compression="none",

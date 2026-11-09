@@ -36,6 +36,7 @@ from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.topic_cache import TopicCache
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.models.topic_cleanup import CLEANUP_PENDING
 from bms_msg.schemas.topic import DeleteImpact
 
@@ -502,7 +503,7 @@ async def test_offset_reset_rejects_before_start_offset(client: AsyncClient, api
             key=None,
             payload=b"x",
             headers=ConcurrentStableDict[str, str](),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=_utcnow(),
         )
     await messages.truncate_before(topic_id=topic_id, partition_no=0, offset=4)

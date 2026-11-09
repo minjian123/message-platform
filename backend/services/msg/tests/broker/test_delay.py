@@ -39,6 +39,7 @@ from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DELAY_LAYER_HOUR, DELAY_LAYER_MINUTE, DELAY_LAYER_SECOND, DelayWheel
 from bms_msg.core.config import DELAY_LEVEL_MS, DELAY_MAX_SPAN_MS
 from bms_msg.core.routing import select_partition
+from bms_msg.core.trace import TraceContext
 from bms_msg.errors import MsgDelayQuotaExceededError
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import TopicRepository
@@ -117,7 +118,7 @@ def _record(
         key="order-1",
         payload=b"payload",
         headers=ConcurrentStableDict({"source": "test"}),
-        trace_id="trace-1",
+        trace=TraceContext(trace_id="trace-1"),
         published_at=published_at,
         deliver_at=published_at + timedelta(milliseconds=span_ms),
     )

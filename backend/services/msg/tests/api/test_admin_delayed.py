@@ -46,6 +46,7 @@ from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.core.routing import select_partition
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode
 from tests_support.frame_app import NoopAuditSink, install_backpressure_state
 
@@ -409,7 +410,7 @@ async def test_remaining_zero_for_overdue_record(client: AsyncClient, api_app: F
             key=None,
             payload=b"payload",
             headers=ConcurrentStableDict(),
-            trace_id=None,
+            trace=EMPTY_TRACE,
             published_at=published_at,
             deliver_at=published_at + timedelta(seconds=60),
         )

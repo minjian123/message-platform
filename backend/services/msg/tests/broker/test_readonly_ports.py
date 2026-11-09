@@ -35,6 +35,7 @@ from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
+from bms_msg.core.trace import EMPTY_TRACE, TraceContext
 from bms_msg.metrics import get_traffic_metrics, reset_traffic_metrics
 from bms_msg.metrics.lag import LagSnapshot, MetricsSnapshotStore
 from bms_msg.metrics.sampler import MetricsSampler
@@ -66,7 +67,7 @@ async def _append(store: MessageStore, *, log_id: str, offset_partition: int = 0
         key="alpha",
         payload=b"payload",
         headers=ConcurrentStableDict({"trace": "t1"}),
-        trace_id="t1",
+        trace=TraceContext(trace_id="t1"),
         published_at=_NOW,
     )
 
@@ -144,7 +145,7 @@ async def test_file_store_drop_topic_skips_other_topics(tmp_path: Path) -> None:
         key=None,
         payload=b"payload",
         headers=ConcurrentStableDict({"trace": "t2"}),
-        trace_id="t2",
+        trace=TraceContext(trace_id="t2"),
         published_at=_NOW,
     )
 
@@ -168,6 +169,16 @@ async def test_file_store_drop_topic_recovers_unregistered_directory(tmp_path: P
 
     topic_dir = tmp_path / "data" / str(_TENANT_ID) / _NAMESPACE / f"{_TOPIC_NAME}.{_TOPIC_ID}"
     assert not topic_dir.exists()
+
+
+async def test_file_store_drop_topic_tolerates_absent_directory(tmp_path: Path) -> None:
+    """登记了主题但目录尚未落盘（清理由另一实例先删）：跳过 `rmtree` 分支，返回 0 不抛错。"""
+    directory = PartitionDirectory(root=tmp_path)
+    directory.bind(tenant_id=_TENANT_ID, namespace=_NAMESPACE, name="ghost.topic", topic_id=99)
+    store = FileMessageStore(directory=directory, fsync_mode="os", clock=lambda: 0.0)
+
+    assert await store.drop_topic(topic_id=99) == 0
+    assert directory.locate(99) is None
 
 
 async def test_file_store_header_views_and_lru_fallback(tmp_path: Path) -> None:
@@ -294,7 +305,7 @@ def _header(
         offset=offset,
         key=key,
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=published_at,
         content_type="application/msgpack",
         payload_len=7,
@@ -561,7 +572,7 @@ def _delay_record(
         key=None,
         payload=b"x",
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=_NOW,
         deliver_at=deliver_at,
         attempts=0,

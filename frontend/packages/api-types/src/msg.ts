@@ -3198,16 +3198,31 @@ export interface components {
              */
             namespace: string;
             /**
+             * Parent Span Id
+             * @description 生产 span 的父 span（链路起点可为空）
+             */
+            parent_span_id?: string | null;
+            /**
              * Payload
              * @description 消息体（base64 编码；空串表示空消息体）
              * @default
              */
             payload: string;
             /**
+             * Span Id
+             * @description 生产者本次 span 标识（消费端据它建子 span）
+             */
+            span_id?: string | null;
+            /**
              * Topic
              * @description 主题名（与创建主题时的 name 同值）
              */
             topic: string;
+            /**
+             * Trace Flags
+             * @description 采样标记（约定 W3C 8 位十六进制；broker 不解释，原样透传）
+             */
+            trace_flags?: string | null;
             /**
              * Trace Id
              * @description 链路标识
@@ -3901,6 +3916,11 @@ export interface components {
              */
             offset: number;
             /**
+             * Parent Span Id
+             * @description 生产 span 的父 span
+             */
+            parent_span_id: string | null;
+            /**
              * Partition
              * @description 分区号
              */
@@ -3921,6 +3941,21 @@ export interface components {
              * @description 发布时间（UTC）
              */
             published_at: string;
+            /**
+             * Span Id
+             * @description 生产者本次 span 标识
+             */
+            span_id: string | null;
+            /**
+             * Trace Flags
+             * @description 采样标记（broker 原样透传，不解释）
+             */
+            trace_flags: string | null;
+            /**
+             * Trace Id
+             * @description 链路标识（06-4；排障时据此串联生产与消费）
+             */
+            trace_id: string | null;
         };
         /**
          * PartitionItem
@@ -4013,6 +4048,11 @@ export interface components {
              */
             offset: number;
             /**
+             * Parent Span Id
+             * @description 生产 span 的父 span（链路起点可为空）
+             */
+            parent_span_id: string | null;
+            /**
              * Partition
              * @description 分区号
              */
@@ -4029,10 +4069,20 @@ export interface components {
              */
             published_at: string;
             /**
+             * Span Id
+             * @description 生产者本次 span 标识（消费端据它建子 span）
+             */
+            span_id: string | null;
+            /**
              * Topic
              * @description 主题名
              */
             topic: string;
+            /**
+             * Trace Flags
+             * @description 采样标记（约定 W3C 8 位十六进制；broker 不解释，原样透传）
+             */
+            trace_flags: string | null;
             /**
              * Trace Id
              * @description 链路标识

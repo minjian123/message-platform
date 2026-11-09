@@ -45,6 +45,7 @@ from bms_msg.broker.watermark import (
     StorageWatermark,
 )
 from bms_msg.core.config import STORAGE_REJECT_RATIO, STORAGE_SAMPLE_TTL_MS, STORAGE_WARN_RATIO
+from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode, MsgStorageWatermarkExceededError
 from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.topic import TopicRepository
@@ -680,7 +681,7 @@ async def test_delay_transfer_failure_logs_reason_with_window_suppression(
         key=None,
         payload=b"x",
         headers=ConcurrentStableDict(),
-        trace_id=None,
+        trace=EMPTY_TRACE,
         published_at=now,
         deliver_at=now,
     )
