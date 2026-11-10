@@ -4711,7 +4711,7 @@
   "paths": {
     "/": {
       "get": {
-        "description": "应用信息。\n\nReturns:\n    ApiResponse: {code, message, data:{name, version}}。",
+        "description": "应用信息。\n\n显式声明 `x-error-codes: []`：本端点不触达业务判定，没有产品码可声明\n（与探针同性质，区别于「漏声明」）。\n\nReturns:\n    ApiResponse: {code, message, data:{name, version}}。",
         "operationId": "root__get",
         "responses": {
           "200": {
@@ -4725,7 +4725,8 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Root"
+        "summary": "Root",
+        "x-error-codes": []
       }
     },
     "/api/v1/msg/ack": {
@@ -9959,7 +9960,7 @@
     },
     "/healthz": {
       "get": {
-        "description": "存活检查端点。\n\nArgs:\n    request: 当前请求（取服务身份）。\n\nReturns:\n    dict: 服务状态与身份，固定返回 {\"status\": \"ok\", \"service\": 名, \"version\": 版}。",
+        "description": "存活检查端点。\n\n显式声明 `x-error-codes: []`：探针不触达业务判定，没有产品码可声明（区别于漏声明）。\n\nArgs:\n    request: 当前请求（取服务身份）。\n\nReturns:\n    dict: 服务状态与身份，固定返回 {\"status\": \"ok\", \"service\": 名, \"version\": 版}。",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -9975,7 +9976,8 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Healthz"
+        "summary": "Healthz",
+        "x-error-codes": []
       }
     },
     "/msg/ack": {
@@ -10084,7 +10086,7 @@
     },
     "/msg/connection": {
       "get": {
-        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址 + 连接键 / 活跃流 / 阈值 / drain 标记）。\n\n只读自报，不含租户业务数据，故不加权限码（05 域认证落地后再评估收紧）。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、客户端取服务端口径（心跳间隔 / 上限 / drain）。\n**兼作保活**：本端点每被调用一次就刷新连接 `last_seen`——无帧能力的客户端（curl / EventSource）\n用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。\n**不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。\n版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。\n**不声明 `x-error-codes`**：不触达业务判定，没有产品码可声明（与探针端点同性质）。",
+        "description": "回本连接元数据（协议版本 / 承载方式 / 客户端地址 + 连接键 / 活跃流 / 阈值 / drain 标记）。\n\n只读自报，不含租户业务数据，故不加权限码（05 域认证落地后再评估收紧）。\n用途：排障第一问（协商到 h2 还是退回 1.1）、用例断言、客户端取服务端口径（心跳间隔 / 上限 / drain）。\n**兼作保活**：本端点每被调用一次就刷新连接 `last_seen`——无帧能力的客户端（curl / EventSource）\n用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。\n**不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。\n版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。\n**显式声明 `x-error-codes: []`**：不触达业务判定，没有产品码可声明（与探针端点同性质；\n空数组是「已确认无码」，区别于漏声明——跨仓契约反向对账据此区分两者）。",
         "operationId": "connection_msg_connection_get",
         "responses": {
           "200": {
@@ -10151,7 +10153,8 @@
         "summary": "Connection",
         "tags": [
           "msg-frame"
-        ]
+        ],
+        "x-error-codes": []
       }
     },
     "/msg/connection/heartbeat": {
@@ -10798,7 +10801,7 @@
     },
     "/readyz": {
       "get": {
-        "description": "就绪检查端点（启动完成态 + 停机摘流 + 注册表聚合）。\n\nArgs:\n    request: 当前请求（取应用启动完成态 / 停机摘流标记 / 服务身份）。\n    registry: 健康检查项注册表（依赖注入）。\n\nReturns:\n    JSONResponse: 全部就绪 200；未就绪、启动未完成或停机中 503。",
+        "description": "就绪检查端点（启动完成态 + 停机摘流 + 注册表聚合）。\n\n显式声明 `x-error-codes: []`：探针不触达业务判定，没有产品码可声明（区别于漏声明）。\n\nArgs:\n    request: 当前请求（取应用启动完成态 / 停机摘流标记 / 服务身份）。\n    registry: 健康检查项注册表（依赖注入）。\n\nReturns:\n    JSONResponse: 全部就绪 200；未就绪、启动未完成或停机中 503。",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
@@ -10810,7 +10813,8 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Readyz"
+        "summary": "Readyz",
+        "x-error-codes": []
       }
     },
     "/rpc/{service}/{method}": {

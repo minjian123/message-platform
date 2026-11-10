@@ -266,13 +266,18 @@ async def test_connection_endpoint_reports_version_and_client(client: AsyncClien
 
 
 def test_openapi_contains_root_paths(api_app: FastAPI) -> None:
-    """公开契约含 5 条根路径，且三个数据面端点声明了 `x-error-codes`。"""
+    """公开契约含 5 条根路径，且三个数据面端点声明了 `x-error-codes`。
+
+    `/msg/connection` 是排障自报端点、不触达业务判定，按「显式无码」口径声明空数组
+    （与探针同性质；空数组 ≠ 漏声明，跨仓契约反向对账据此区分）。
+    """
     paths = api_app.openapi()["paths"]
 
     for path in ("/msg/publish", "/msg/consume", "/msg/ack", "/msg/subscribe", "/msg/connection"):
         assert path in paths
     assert "x-error-codes" in paths["/msg/subscribe"]["get"]
     assert "x-error-codes" in paths["/msg/publish"]["post"]
+    assert paths["/msg/connection"]["get"]["x-error-codes"] == []
 
 
 def test_both_mounts_share_the_same_spec(api_app: FastAPI) -> None:

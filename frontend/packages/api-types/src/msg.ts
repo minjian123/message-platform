@@ -17,6 +17,9 @@ export interface paths {
          * Root
          * @description 应用信息。
          *
+         *     显式声明 `x-error-codes: []`：本端点不触达业务判定，没有产品码可声明
+         *     （与探针同性质，区别于「漏声明」）。
+         *
          *     Returns:
          *         ApiResponse: {code, message, data:{name, version}}。
          */
@@ -977,6 +980,8 @@ export interface paths {
          * Healthz
          * @description 存活检查端点。
          *
+         *     显式声明 `x-error-codes: []`：探针不触达业务判定，没有产品码可声明（区别于漏声明）。
+         *
          *     Args:
          *         request: 当前请求（取服务身份）。
          *
@@ -1032,7 +1037,8 @@ export interface paths {
          *     用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。
          *     **不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。
          *     版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。
-         *     **不声明 `x-error-codes`**：不触达业务判定，没有产品码可声明（与探针端点同性质）。
+         *     **显式声明 `x-error-codes: []`**：不触达业务判定，没有产品码可声明（与探针端点同性质；
+         *     空数组是「已确认无码」，区别于漏声明——跨仓契约反向对账据此区分两者）。
          */
         get: operations["connection_msg_connection_get"];
         put?: never;
@@ -1201,6 +1207,8 @@ export interface paths {
         /**
          * Readyz
          * @description 就绪检查端点（启动完成态 + 停机摘流 + 注册表聚合）。
+         *
+         *     显式声明 `x-error-codes: []`：探针不触达业务判定，没有产品码可声明（区别于漏声明）。
          *
          *     Args:
          *         request: 当前请求（取应用启动完成态 / 停机摘流标记 / 服务身份）。

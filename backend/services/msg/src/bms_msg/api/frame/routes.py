@@ -999,7 +999,7 @@ async def _single_frame(payload: bytes) -> AsyncGenerator[bytes]:
     yield payload
 
 
-@connection_router.get("/connection")
+@connection_router.get("/connection", openapi_extra={"x-error-codes": []})
 async def connection(
     request: Request,
     record: ConnectionInfoRecordDep,
@@ -1013,6 +1013,7 @@ async def connection(
     用它当心跳，与 `POST /msg/connection/heartbeat` 共用同一份登记（03-4 详细设计 §6.1）。
     **不判连接数上限**（守卫豁免该判定）：它是打满时的排障入口，判上限会让「满」变成「连查都查不了」。
     版本可见（03-2）：`supported_protocol_version` 恒有值；本端点是 JSON 请求，`protocol_version` 恒为 null。
-    **不声明 `x-error-codes`**：不触达业务判定，没有产品码可声明（与探针端点同性质）。
+    **显式声明 `x-error-codes: []`**：不触达业务判定，没有产品码可声明（与探针端点同性质；
+    空数组是「已确认无码」，区别于漏声明——跨仓契约反向对账据此区分两者）。
     """
     return ApiResponse.ok(connection_info(request, record, tuning))
