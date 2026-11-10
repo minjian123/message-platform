@@ -156,7 +156,7 @@ async def test_endpoint_rejects_with_429_and_retry_after(msg_app: FastAPI, clien
     """端点层：超限 → `429` + `350005` + `Retry-After`（JSON 形态）。"""
     # 直接换进程级单例（`get_rate_limiter` 读 `app.state`）：与生产装配同一入口，不必依赖
     # `dependency_overrides` 的匹配细节。
-    msg_app.state.rate_limiter = _limiter(rpc=1)
+    msg_app.state.msg_rate_limiter = _limiter(rpc=1)
 
     first = await client.post("/rpc/demo/echo", json={"payload": ""})
     second = await client.post("/rpc/demo/echo", json={"payload": ""})
@@ -169,7 +169,7 @@ async def test_endpoint_rejects_with_429_and_retry_after(msg_app: FastAPI, clien
 
 async def test_frame_rejection_carries_retry_after_ms(msg_app: FastAPI, client: AsyncClient) -> None:
     """帧形态：超限 → ERROR 帧 + `350005` + `retry_after_ms`（HTTP 仍 200）。"""
-    msg_app.state.rate_limiter = _limiter(rpc=1)
+    msg_app.state.msg_rate_limiter = _limiter(rpc=1)
     body = frame_bytes(RPC_TYPE, header(request_id="q1"), b"x")
 
     await post_frame(client, "/rpc/demo/echo", body)

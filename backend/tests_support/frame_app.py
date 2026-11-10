@@ -82,7 +82,7 @@ def install_backpressure_state(app: FastAPI) -> None:
     app.state.waiter = waiter
     app.state.message_store = NotifyingMessageStore(cast("MessageStore", app.state.message_store), waiter)
     app.state.backpressure_metrics = BackpressureMetrics(waiter=waiter)
-    app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
+    app.state.msg_rate_limiter = RateLimiter(default_rate_limit_tuning())
 
 
 class NoopAuditSink:

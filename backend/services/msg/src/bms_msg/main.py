@@ -263,7 +263,10 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 因此不参与 02-2 / 02-3 的关闭偏序；发布侧经 `api/deps.py::StorageGateDep` 取用。
         app.state.storage_metrics = StorageMetrics()
         app.state.storage_watermark = StorageWatermark(root=root, metrics=app.state.storage_metrics)
-        app.state.rate_limiter = RateLimiter(default_rate_limit_tuning())
+        # 键名**不能用 `rate_limiter`**：基座装配表 `PluginWiring("rate_limiter", …, "rate_limiter")` 会在
+        # 启动期把基座插件写到同一属性上，覆盖本实例（表现为真实启动后 publish 恒 500：
+        # `RateLimiter.check(tenant=…)` 打到 `RedisRateLimiter`）。07-6-1 故障演练实测发现。
+        app.state.msg_rate_limiter = RateLimiter(default_rate_limit_tuning())
         # 06-5：死信换持久化实现（平台库短事务 + 启动加载内存索引）；`uow_factory` 必须先就位。
         app.state.uow_factory = platform_uow_factory(app)
         app.state.dead_letter_queue = DatabaseDeadLetterQueue(uow_factory=app.state.uow_factory)

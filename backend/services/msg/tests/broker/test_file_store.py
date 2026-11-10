@@ -22,9 +22,11 @@ from bms_msg.broker.file_store import (
     PartitionNotBoundError,
 )
 from bms_msg.broker.record import (
+    RECORD_FORMAT_VERSION,
     CorruptedRecordError,
     RecordHeader,
     UnsupportedRecordVersionError,
+    _pack_id,
     decode_record,
     encode_record,
     read_frame,
@@ -152,6 +154,36 @@ async def test_record_layout_and_header_fields(tmp_path: Path) -> None:
     assert (header.content_type, header.compression) == ("application/json", "none")
     assert header.uncompressed_len == 5
     assert (header.epoch, header.hw, header.replicas) == (0, 0, ())
+
+
+def test_header_round_trips_huge_snowflake_ids() -> None:
+    """F1b：126 位雪花主键（超 MessagePack 整数上限）的记录头可编码并原值解回。
+
+    基座雪花是 48+40+38 位，`topic_id` / `tenant_id` 远超 2^64-1；按 int 直接打包会
+    `OverflowError`（07-6-1 故障演练实测：真实 id 下发布即 500）。
+    """
+    huge = (1 << 125) + 7
+    header = RecordHeader(
+        format_version=RECORD_FORMAT_VERSION,
+        topic_id=huge,
+        partition_no=PARTITION,
+        tenant_id=huge - 1,
+        message_id="m-huge",
+        log_id="l-huge",
+        key=None,
+        trace=EMPTY_TRACE,
+        published_at_us=0,
+        headers=(),
+        content_type="application/json",
+        compression="none",
+        uncompressed_len=None,
+    )
+
+    parsed = decode_record(encode_record(header=header, payload=b"p"))
+
+    assert (parsed.header.topic_id, parsed.header.tenant_id) == (huge, huge - 1)
+    assert parsed.payload == b"p"
+    assert _pack_id(-1) == "-1"  # 负值同样退化为字符串（防御分支，不产生越界)
 
 
 async def test_corrupted_record_raises(tmp_path: Path) -> None:

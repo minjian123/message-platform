@@ -429,13 +429,16 @@ def get_backpressure_metrics(request: Request) -> BackpressureMetrics:
 def get_rate_limiter(request: Request) -> RateLimiter:
     """取生产限流器（进程级单例；令牌桶状态跨请求存续）。
 
+    **读 `msg_rate_limiter` 而非 `rate_limiter`**：后者会被基座装配表的 `rate_limiter` 插件
+    （`RedisRateLimiter`）在启动期占用，两者签名不同，混用即 `TypeError`（07-6-1 实测）。
+
     Args:
         request: 当前请求。
 
     Returns:
         RateLimiter: 两级令牌桶。
     """
-    return cast("RateLimiter", request.app.state.rate_limiter)
+    return cast("RateLimiter", request.app.state.msg_rate_limiter)
 
 
 def get_connection_registry(request: Request) -> ConnectionRegistry:

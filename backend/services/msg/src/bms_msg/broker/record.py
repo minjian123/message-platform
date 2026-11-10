@@ -297,6 +297,28 @@ def record_total_bytes(length: int) -> int:
     return 4 + length
 
 
+_MAX_PACKED_INT = 2**64 - 1
+"""MessagePack 整数上限：超出即按十进制字符串编码。
+
+基座雪花是 **126 位**（48+40+38，`DECIMAL(38,0)`），主题 / 租户主键远超该上限；直接按 int
+打包会 `OverflowError: Integer value out of range`（07-6-1 故障演练实测：真实 id 下发布即 500）。
+只在超限时改写，小 id 的头部字节与既有段完全一致，不需要抬格式版本。"""
+
+
+def _pack_id(value: int) -> int | str:
+    """把 id 编码为 MessagePack 可承载的形态（超 2^64-1 时转十进制字符串）。
+
+    Args:
+        value: 主键值。
+
+    Returns:
+        int | str: 未超限为原整数，超限为十进制字符串。
+    """
+    if value > _MAX_PACKED_INT or value < 0:
+        return str(value)
+    return value
+
+
 def _pack_header(header: RecordHeader) -> bytes:
     """把头编码为 MessagePack（键名固定，只增不删）。
 
@@ -311,9 +333,9 @@ def _pack_header(header: RecordHeader) -> bytes:
     """
     raw: dict[str, Any] = {
         "format_version": header.format_version,
-        "topic_id": header.topic_id,
+        "topic_id": _pack_id(header.topic_id),
         "partition_no": header.partition_no,
-        "tenant_id": header.tenant_id,
+        "tenant_id": _pack_id(header.tenant_id),
         "message_id": header.message_id,
         "log_id": header.log_id,
         "key": header.key,

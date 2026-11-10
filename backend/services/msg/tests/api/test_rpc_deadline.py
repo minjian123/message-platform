@@ -195,7 +195,7 @@ async def test_handler_own_timeout_is_not_misreported(msg_app: FastAPI) -> None:
     with pytest.raises(TimeoutError):
         await invoke_rpc(
             registry=_registry(msg_app),
-            limiter=msg_app.state.rate_limiter,
+            limiter=msg_app.state.msg_rate_limiter,
             tenant="demo",
             service="budget",
             method="boom",
@@ -207,7 +207,7 @@ async def test_handler_own_timeout_is_not_misreported(msg_app: FastAPI) -> None:
 
 async def test_exhausted_requests_do_not_consume_quota(msg_app: FastAPI) -> None:
     """预算预检排在限流之前：刷 `deadline_ms=0` 打不穿配额桶。"""
-    msg_app.state.rate_limiter = RateLimiter(
+    msg_app.state.msg_rate_limiter = RateLimiter(
         RateLimitTuning(tenant_per_second=0, topic_per_second=0, rpc_per_second=1, burst_seconds=1)
     )
     async with AsyncClient(transport=ASGITransport(app=msg_app), base_url=BASE_URL, headers=DEMO_HEADERS) as session:
@@ -380,7 +380,7 @@ async def test_injected_disconnect_probe_cancels_handler(msg_app: FastAPI) -> No
     with pytest.raises(asyncio.CancelledError):
         await invoke_rpc(
             registry=_registry(msg_app),
-            limiter=msg_app.state.rate_limiter,
+            limiter=msg_app.state.msg_rate_limiter,
             tenant="demo",
             service="budget",
             method="dropped",

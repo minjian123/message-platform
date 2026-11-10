@@ -98,7 +98,7 @@ async def test_default_is_unlimited(msg_app: FastAPI, client: AsyncClient) -> No
     for _ in range(3):
         assert (await _publish(client)).status_code == 200
 
-    assert cast("RateLimiter", msg_app.state.rate_limiter).tuning.enabled is False
+    assert cast("RateLimiter", msg_app.state.msg_rate_limiter).tuning.enabled is False
 
 
 async def test_tenant_scope_rejects_with_retry_after(msg_app: FastAPI, client: AsyncClient) -> None:
