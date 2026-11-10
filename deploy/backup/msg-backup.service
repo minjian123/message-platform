@@ -1,0 +1,16 @@
+# msg 位点快照备份（07-3-1）：用户级 oneshot，模板内路径全部由部署侧替换占位。
+# 安装时把 <检出根> / <仓内解释器> / <备份日志> 换成实际值，落到 ~/.config/systemd/user/。
+# 键位文件 msg-backup.env 不入库：只列 deploy/.env.example「备份」段的四个键，由部署侧注入。
+# 脚本只消费进程环境变量，自己不读取任何 .env 明文。
+
+[Unit]
+Description=msg daily offset snapshot backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=<检出根>/backend
+EnvironmentFile=<检出根>/deploy/backup/msg-backup.env
+ExecStart=<仓内解释器> -m ops.backup
+StandardOutput=append:<备份日志>
+StandardError=append:<备份日志>
+TimeoutStartSec=3600

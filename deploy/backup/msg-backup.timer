@@ -1,0 +1,15 @@
+# msg 位点快照备份定时单元（07-3-1）：每日 13:00，排在平台库备份 12:00 之后。
+# Persistent=true：挂起 / 关机期间错过的触发点，下次用户会话起来后立即补跑；cron 没有这个能力。
+# 本任务只交模板，不在开发服务器执行 enable --now；真机启用归部署阶段。
+
+[Unit]
+Description=msg daily offset snapshot backup timer (13:00, persistent)
+
+[Timer]
+OnCalendar=*-*-* 13:00:00
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

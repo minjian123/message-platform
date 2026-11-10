@@ -698,3 +698,57 @@ ACCESS_ANOMALY_WINDOW_MS = 60_000
 
 ACCESS_ANOMALY_MAX_KEYS = 1_024
 """访问异常节流键数量上限：超过即清空，防止随机路径打爆内存。"""
+
+# ---------------------------------------------------------------------------
+# 07-3-1 备份脚本与调度：宿主侧运行旋钮（不进 Settings，基座 extra="forbid"）
+# ---------------------------------------------------------------------------
+
+BACKUP_DIR_ENV = "MSG_BACKUP_DIR"
+"""备份根目录的环境变量名（必填；宿主独立卷，不与消息数据根同盘）。"""
+
+BACKUP_PLATFORM_DUMP_DIR_ENV = "MSG_BACKUP_PLATFORM_DUMP_DIR"
+"""平台库备份产物目录的环境变量名（必填；只读扫描，不复制平台库）。"""
+
+BACKUP_KEEP_DAYS_ENV = "MSG_BACKUP_KEEP_DAYS"
+"""位点快照保留天数的环境变量名。"""
+
+BACKUP_SPACE_FACTOR_ENV = "MSG_BACKUP_SPACE_FACTOR"
+"""空间估算系数的环境变量名（乘位点文件总字节）。"""
+
+BACKUP_KEEP_DAYS = 7
+"""快照保留天数缺省值：与平台库备份的本地保留口径一致。"""
+
+BACKUP_SPACE_FACTOR = 1.2
+"""空间估算系数缺省值：覆盖副本与清单之外的写放大。"""
+
+BACKUP_SPACE_RESERVE_BYTES = 64 * 1024 * 1024
+"""空间固定余量（64 MiB）：位点目录为空时也留出清单与指针的写入空间。
+
+不把余量做成环境变量：它只兜住清单自身的体量，按备份体量缩放没有意义，
+多一个可配项只会让「空间不足」的判据更难解释。
+"""
+
+BACKUP_SNAPSHOT_RETRIES = 3
+"""单文件一致性校验重试次数：写入期间内容变化最多重试三轮。
+
+位点文件是双槽 + 原子替换，正常写入不会读到半文件；重试是并发写入边界的
+兜底证据，不是正确性的前提。
+"""
+
+BACKUP_STAGING_PREFIX = ".staging-"
+"""写入期临时目录前缀（失败只删这类目录，绝不触碰已发布快照）。"""
+
+BACKUP_MANIFEST_NAME = "manifest.json"
+"""备份清单文件名（与快照同目录）。"""
+
+BACKUP_POINTER_NAME = "current.json"
+"""最新可用备份指针文件名（普通文件，不用符号链接）。"""
+
+BACKUP_POINTER_TEMP_NAME = ".current.json.tmp"
+"""指针原子替换用的同目录临时文件名。"""
+
+BACKUP_ID_FORMAT = "%Y%m%dT%H%M%SZ"
+"""备份标识时间格式（UTC，字典序即时间序，清理无需读目录元数据）。"""
+
+BACKUP_MANIFEST_SCHEMA_VERSION = 1
+"""清单格式版本（恢复侧读到更高版本即拒，与记录 / 恢复点同口径）。"""

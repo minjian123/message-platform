@@ -99,9 +99,14 @@ HOST_ONLY_KEYS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
         "MSG_TAG",
         "MSG_DATA_HOST_DIR",
         "MSG_OFFSETS_HOST_DIR",
+        # 07-3-1 备份运行旋钮：由宿主侧调度单元注入备份进程，服务容器内无消费者。
+        "MSG_BACKUP_DIR",
+        "MSG_BACKUP_PLATFORM_DUMP_DIR",
+        "MSG_BACKUP_KEEP_DAYS",
+        "MSG_BACKUP_SPACE_FACTOR",
     ]
 )
-"""只做宿主侧 compose 插值、不进容器的键（C6 例外）。"""
+"""只做宿主侧 compose 插值 / 调度注入、不进容器的键（C6 例外）。"""
 
 SCAN_DIRS: ConcurrentStableFrozenList[Path] = ConcurrentStableFrozenList(
     [Path("deploy"), Path("backend"), Path("frontend"), Path("msg文档")]
