@@ -13,7 +13,12 @@
 | 凭据 | `deploy/.env`（由 `.env.example` 复制填写，**不入库**） |
 
 `.env` 必填项：`MSG_REGISTRY_IMAGE_PREFIX`、`MSG_TAG`、`MSG_DATA_HOST_DIR`、`MSG_OFFSETS_HOST_DIR`、
-两个库 URL 模板；`PLATFORM_NETWORK` 按平台实际网络名填写（缺省值仅作参照）。
+平台 / 租户 / 归档三个库 URL、Redis URL 与 OTLP 端点（均由 `:?` 强制必填）；`PLATFORM_NETWORK` 按平台
+实际网络名填写。密钥、证书路径与存储水位旋钮留空即沿用缺省，切换环境只改本文件。
+
+**凭据纪律**：六类敏感项（库连接串与密码、Redis URL、OTLP 端点、服务令牌密钥、用户令牌密钥、
+TLS 证书路径）只从环境变量读取；仓内只保留 `.env.example` 的空占位，真实值只落部署态 `.env` 或 CI
+Secret 变量，不入配置文件、镜像与公开文档。`deploy/.env` 与 `backend/.env` 都已忽略。
 
 ## 2. 准备宿主目录（首次一次）
 
@@ -113,6 +118,9 @@ docker compose -f compose/msg.yml exec msg ls /var/lib/msg/data /var/lib/msg/off
 ```bash
 # 声明装载 / 七段齐备 / 唯一性 / 服务行同值 / 路由口径 / 探针接线（退出码 0 通过、1 违规）
 python -m ops.check_deployment
+
+# 四层配置 / 六类敏感项 / 凭据形态 / 两份 .env 纪律 / 生产禁用项（C1~C6，退出码 0 通过、1 违规）
+python -m ops.check_credentials
 
 # 平台侧识别情况另查：产品 / 服务行 / 产品路由登记行与网关生成件（见部署记录）
 ```
