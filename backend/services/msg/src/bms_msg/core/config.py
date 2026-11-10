@@ -850,3 +850,28 @@ MIGRATION_DEFAULT_READ_ONLY_METHOD = "echo"
 
 MIGRATION_DEFAULT_TENANT = "demo"
 """演练缺省租户编码（数据面与管理面共用同一租户口径）。"""
+
+# ---------------------------------------------------------------------------
+# 07-4-2 回滚演练与记录：场景单源 / 恢复预算 / 记录（不进 Settings）
+# ---------------------------------------------------------------------------
+
+ROLLBACK_SCENARIOS_PATH = "deploy/migration/rollback_scenarios.toml"
+"""回滚场景相对仓根的缺省路径（注入方式 / 判据锚点 / 阈值占位 / 恢复预算唯一来源）。"""
+
+ROLLBACK_REPORT_DIR = "tmp/rollback"
+"""回滚演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+
+ROLLBACK_RECORD_SCHEMA_VERSION = 1
+"""回滚演练记录格式版本（后续只增字段，不删不改语义）。"""
+
+ROLLBACK_RECOVERY_BUDGET_MS = 300_000
+"""恢复时间缺省预算（毫秒）：回滚开始到事件链与只读调用均恢复；场景表可覆盖。"""
+
+ROLLBACK_ERROR_RATE_THRESHOLD = 1.0
+"""错误率判据缺省阈值（百分比，1.0 = 1%）；真实数值归 8B_12 压测结论。"""
+
+ROLLBACK_LATENCY_THRESHOLD_MS = 200.0
+"""延迟判据缺省阈值（毫秒，P95 形状）；真实数值归 8B_12 压测结论。"""
+
+ROLLBACK_DEFAULT_SAMPLES = 20
+"""错误率场景缺省采样次数（够算出百分比，又不把演练拖长）。"""

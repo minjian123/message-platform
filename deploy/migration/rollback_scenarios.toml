@@ -1,0 +1,49 @@
+# 回滚演练场景（任务 07-4-2；需求 07-4）
+#
+# 用途：回答「注入什么失败、命中哪条回滚判据、多久必须恢复」——一条场景 = 一次
+# 「切到 msg → 注入 → 配置层回滚 → 验证原链路恢复」闭环。
+# 口径：
+#   - mode 只允许 unavailable / error_rate / latency，三类必须齐备；
+#   - target 与 mode 一一对应：unavailable=both / error_rate=event / latency=readonly；
+#   - criterion 必须逐字出现在 switch_matrix.toml 对应域（low_risk_event / readonly_rpc）的
+#     rollback_criteria 中，改判据必须先改矩阵；
+#   - threshold 是「判据形状」的占位值（错误率百分比 / 延迟毫秒），真实数值归 8B_12；
+#   - recovery_budget_ms 是「回滚开始 → 事件链与只读调用均恢复」的预算；
+#   - 本文件是唯一机器可读源，设计文档的场景表由 `python -m ops.rollback matrix` 渲染后粘贴。
+schema_version = 1
+
+[meta]
+updated_at = "2026-11-10"
+owner = "minjian"
+recovery_budget_ms = 300000
+note = "阈值数值为判据形状占位，真实数值归 8B_12；三类注入必须每次发版前按同一脚本复跑"
+
+[[scenarios]]
+name = "msg_unavailable"
+mode = "unavailable"
+target = "both"
+criterion = "观察窗口内出现消费方报错或事件缺失"
+threshold = 0.0
+samples = 1
+expected = "msg 不可达：发布抛 EventPublishError，只读调用不可用"
+note = "不可达不使用阈值；两个端口同时失败才判命中"
+
+[[scenarios]]
+name = "publish_error_rate"
+mode = "error_rate"
+target = "event"
+criterion = "msg_publish_errors_total 5 分钟增幅 > 1%"
+threshold = 1.0
+samples = 20
+expected = "发布错误率 ≥ 1% 时触发回滚判据"
+note = "采样 20 次，注入使每 5 次失败 1 次（20%），远高于一一百分比阈值"
+
+[[scenarios]]
+name = "rpc_latency"
+mode = "latency"
+target = "readonly"
+criterion = "msg_rpc_duration_ms P95 > http 基线 2 倍"
+threshold = 200.0
+samples = 1
+expected = "只读调用延迟 ≥ 阈值时触发回滚判据"
+note = "进程内演练以观测值注入（不真实等待），记录标 latency_source=simulated"

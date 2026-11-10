@@ -1,8 +1,8 @@
-# 迁移编排与切换开关（07-4-1）
+# 迁移编排与切换开关（07-4-1 / 07-4-2）
 
-> 操作手册 · 需求 07-4 · 任务 07-4-1 · 设计见任务目录 `设计/01_详细设计_07-4-1_切换开关与分域迁移编排.md`
+> 操作手册 · 需求 07-4 · 任务 07-4-1 / 07-4-2 · 设计见任务目录 `设计/01_详细设计_07-4-1_切换开关与分域迁移编排.md`、`设计/01_详细设计_07-4-2_回滚演练与记录.md`
 
-本目录回答三个问题：**现在能不能迁**（前置清单）、**迁哪个域按什么顺序**（切换矩阵）、**配错了会怎样**（开关契约）。生产环境执行迁移归 bms `8B_08`；本站只负责编排、演练与阻止「前置未满足就迁」。
+本目录回答四个问题：**现在能不能迁**（前置清单）、**迁哪个域按什么顺序**（切换矩阵）、**配错了会怎样**（开关契约）、**切过去怎么退回来**（回滚演练）。生产环境执行迁移归 bms `8B_08`；本站只负责编排、演练与阻止「前置未满足就迁」。
 
 ## 1. 三条命令
 
@@ -14,16 +14,24 @@ python -m ops.migration matrix               # 渲染切换矩阵（文档表由
 python -m ops.migration drill --msg-url http://msg:8000 --env test   # 隔离环境演练
 ```
 
-- `drill` 只允许 `test` / `dev`（`prod` / `production` 直接退出 2，无覆盖开关）；
-- 缺省路径：`deploy/migration/preconditions.toml`、`deploy/migration/switch_matrix.toml`；
-- 记录落 `tmp/migration/`（已忽略），JSON 是机器对接契约、Markdown 供人阅读。
+回滚演练（07-4-2）：
+
+```bash
+python -m ops.rollback check --env prod      # 场景单源 / 判据可追溯 / 生产闸门
+python -m ops.rollback matrix                # 渲染注入场景表（设计文档表由此粘贴）
+python -m ops.rollback drill --env test      # 切 msg → 三类注入 → 回滚 → 恢复 + 一致性
+```
+
+- 两条 `drill` 都只允许 `test` / `dev`（`prod` / `production` 直接拒绝，无覆盖开关）；
+- 缺省路径：`deploy/migration/preconditions.toml`、`deploy/migration/switch_matrix.toml`、`deploy/migration/rollback_scenarios.toml`；
+- 记录落 `tmp/migration/` 与 `tmp/rollback/`（已忽略），JSON 是机器对接契约、Markdown 供人阅读。
 
 ## 2. 前置清单（`preconditions.toml`）
 
 - 唯一状态源：**不在任务 / 计划文档另抄状态**；
 - `status` 只允许 `satisfied` / `not_ready`；`required_in` 写生效环境（`prod` 为硬闸门）；
 - `evidence` 必须写证据锚点（文档 / 任务编号 / 演练记录），空证据视为未核对；
-- 当前仓内缺省：`copy_replication`（8B_05）与 `rollback_drill`（07-4-2）为 `not_ready`，**生产迁移被阻断**；
+- 当前仓内缺省：`copy_replication`（8B_05）为 `not_ready`，`rollback_drill`（07-4-2）已 `satisfied`；**生产迁移仍被 8B_05 阻断**；
 - 前置交付后只改 `status` + `evidence`，不改代码、不重新发布业务镜像。
 
 ## 3. 切换矩阵（`switch_matrix.toml`）
@@ -66,9 +74,20 @@ python -m ops.migration drill --msg-url http://msg:8000 --env test   # 隔离环
 
 结论三态：`通过`（退出 0）/ `降级通过`（退出 2）/ `失败`（退出 1）。失败也写记录。
 
-## 6. 禁止项
+## 6. 回滚演练（07-4-2）
+
+- 判据唯一来源：`rollback_scenarios.toml`（模式 / 目标 / 矩阵判据原文 / 阈值占位 / 采样 / 恢复预算）；
+- 三类注入**必须齐备**：`unavailable`（两端口不可达）、`error_rate`（发布失败率）、`latency`（只读延迟）；
+- 闭环：切到 `msg` → 每条场景注入 → 把两个 `provider` 改回原实现（只改配置 + 重启调用方）→ 验证 outbox 补发恰好一次、再投零次、只读调用同构；
+- 四类一致性全验：效果一次、无丢失（`outbox_enqueued = delivered + pending`、`published = consumed`）、位点 / 死信 / 重放、审计链；
+- 记录字段：环境、版本、配置版本、切换域、注入观测、回滚起止、`config_change_ms`、`recovery_ms`、数据完整性、问题与遗留；JSON / Markdown 同源，失败也落盘；
+- 判据阈值是**占位值**（`threshold_source = "placeholder_8b12"`），真实数值归 8B_12；
+- 原链路事件侧 broker 未部署时 `recover.*` 记 `degraded`、结论 `降级通过` 并登记遗留，**不冒充通过**。
+
+## 7. 禁止项
 
 - 不在生产环境执行 `drill`；生产切换、观察窗口与 PromQL 取值归 bms `8B_08`；
+- 回滚只改 `[event].provider` / `[service_client].provider` + 重启调用方：不重新发布业务代码、不执行数据库降级、不删除原链路；
 - 不为了让演练通过而改判据或放宽矩阵（改判据要先改设计并重新确认）；
 - 不在前置未满足时把 `check --env prod` 当「参考」——它是闸门，不是提示；
 - 不删除 RocketMQ / outbox / HTTP 原链路，不改业务端口契约；

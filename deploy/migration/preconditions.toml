@@ -13,7 +13,7 @@ schema_version = 1
 [meta]
 updated_at = "2026-11-10"
 owner = "minjian"
-note = "8B_05 复制能力与 07-4-2 回滚演练未交付，生产迁移被硬闸门阻断（D24：复制必须先于迁移）"
+note = "8B_05 复制能力未交付，生产迁移被硬闸门阻断（D24：复制必须先于迁移）；07-4-2 回滚演练已交付"
 
 [[items]]
 id = "adapter_switch"
@@ -74,7 +74,7 @@ note = "无复制就迁移等于把单点故障放大到全平台；未满足不
 [[items]]
 id = "rollback_drill"
 label = "07-4-2 回滚演练与记录"
-status = "not_ready"
+status = "satisfied"
 required_in = ["prod"]
-evidence = "07-4 子任务清单：07-4-2 未开始"
-note = "回滚未演练过一次不得进入生产迁移（需求 07-4 第 3 条）"
+evidence = "07-4-2 交付（Kiwi 2478）；回滚演练记录：任务 07-4-2 测试/02_回滚演练记录_07-4-2_回滚演练与记录.md（结论降级通过：三类注入全命中、四类一致性全过，原链路事件侧 broker 未部署）"
+note = "配置层回滚已演练：切 msg → 三类注入 → provider 回原实现 → 原链路事件链与只读调用恢复，无重复副作用 / 无丢失事件"

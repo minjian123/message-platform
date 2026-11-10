@@ -491,13 +491,13 @@ def test_preconditions_missing_file(tmp_path: Path) -> None:
 
 
 def test_gate_blocks_production_but_allows_test() -> None:
-    """生产闸门拒绝 8B_05 / 07-4-2；隔离环境只记录阻断项。"""
+    """生产闸门拒绝 8B_05；07-4-2 交付后 `rollback_drill` 已满足，隔离环境只记录阻断项。"""
     preconditions, _ = migration.load_preconditions(_PRECONDITIONS)
     prod_code, prod_lines = migration.run_check(preconditions_path=_PRECONDITIONS, matrix_path=_MATRIX, env="prod")
     assert prod_code == 1
     text = "\n".join(prod_lines)
     assert "copy_replication" in text
-    assert "rollback_drill" in text
+    assert "rollback_drill" not in text
 
     test_code, test_lines = migration.run_check(preconditions_path=_PRECONDITIONS, matrix_path=_MATRIX, env="test")
     assert test_code == 0
@@ -769,7 +769,7 @@ async def test_full_drill_passes_with_event_chain_and_readonly_call(
         "business_zero_change": "ok",
     }
     assert report.gate.allowed is True
-    assert [item for item in report.gate.blocked_by] == ["copy_replication", "rollback_drill"]
+    assert [item for item in report.gate.blocked_by] == ["copy_replication"]
     assert report.counts["published"] == 4
     assert report.counts["consumed"] == 4
     assert report.counts["duplicates"] == 0
