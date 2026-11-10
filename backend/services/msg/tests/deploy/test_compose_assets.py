@@ -116,7 +116,10 @@ def test_dockerfile_contract() -> None:
     assert "--no-dev" in text, "运行镜像不得装 dev 组（含跨仓路径依赖 engkit）"
     assert "\nUSER msg\n" in text, "须以非 root 用户运行（架构 08 §4）"
     assert "EXPOSE 8000" in text
-    assert "HEALTHCHECK" in text and "/healthz" in text
+    # 健康检查判据 = 就绪（07-1-2 拍板）：与网关摘流同一判据；/healthz 只表达进程存活，
+    # Docker 本就只在进程退出时按 restart 策略重启，判据放在存活侧会让「盘满仍 healthy」。
+    assert "HEALTHCHECK" in text and "/readyz" in text, "镜像健康检查须打 /readyz"
+    assert "/healthz" not in text, "镜像健康检查不得打 /healthz"
     assert 'CMD ["python", "-m", "bms_msg"]' in text
     assert "BMS_BACKEND_ROOT=/opt/msg/backend" in text
 

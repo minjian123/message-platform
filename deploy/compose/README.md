@@ -51,7 +51,7 @@ docker build --provenance=false -t <registry>/<项目路径>/msg:<tag> -f msg/de
 docker compose -f compose/msg.yml --env-file .env config >/dev/null && \
 docker compose -f compose/msg.yml --env-file .env up -d
 
-# 状态（healthy 表示镜像内 /healthz 通过；就绪另看 /readyz）
+# 状态（healthy 表示镜像内 /readyz 通过 = 能读写；就绪判据与网关摘流同源）
 docker compose -f compose/msg.yml ps
 
 # 换镜像版本后重建（一次只替换一个实例；首期单实例即停旧起新）
@@ -105,13 +105,26 @@ docker compose -f compose/msg.yml exec msg ls /var/lib/msg/data /var/lib/msg/off
 
 文件仍在即卷正确；`/readyz` 200 表示恢复完成并已可写。三样持久化中，元数据库随平台库（不在本编排）。
 
-## 8. 排障速查
+## 8. 部署自检
+
+在**构建上下文的本机仓**（`backend/` 目录，需仓内虚拟环境）执行——判据是声明 / 契约 / 配置 / 镜像 / 编排文本，
+镜像内不含 `ops/`（运行镜像只装服务与基座），故不在容器内跑：
+
+```bash
+# 声明装载 / 七段齐备 / 唯一性 / 服务行同值 / 路由口径 / 探针接线（退出码 0 通过、1 违规）
+python -m ops.check_deployment
+
+# 平台侧识别情况另查：产品 / 服务行 / 产品路由登记行与网关生成件（见部署记录）
+```
+
+## 9. 排障速查
 
 | 现象 | 先看 | 处置 |
 | --- | --- | --- |
 | `config` 报缺变量 | 报错里的变量名 | 按 `.env.example` 补齐（`:?` 是刻意设计，不做兜底） |
 | `up` 报 network not found | `PLATFORM_NETWORK` | 先确认平台网络已创建，再改 `.env` |
-| 容器 `unhealthy` | `logs` 中 `/healthz` 相关 | 进程未起或端口未监听 |
-| 容器 healthy 但 `/readyz` 503 | 宿主目录属主 / 磁盘水位 | `chown -R 10001:10001`；清盘或调保留期（水位拒绝阈值见 `MSG_STORAGE_REJECT_RATIO`） |
+| 容器 `unhealthy` | `docker inspect msg --format '{{json .State.Health}}'` 与 `/readyz` 明细 | 按 `checks` 失败项处置：目录属主 `chown -R 10001:10001`、磁盘水位清理或调保留期、元数据库连通性 |
+| 容器长期 `starting` | 启动期恢复日志 | 恢复未完成时 `/readyz` 503 属预期（不提前接流量）；确为卡死再查恢复扫描 |
+| 业务写返回 507 但容器 healthy | `msg_storage_rejected_total` 与水位日志 | 水位拒绝只拦发布、不摘实例：清盘或扩容后重试 |
 | 停机 45s 后仍有 SIGKILL | 日志收尾行 | 一并调 `stop_grace_period` 与 `[server].graceful_timeout_seconds`（只改编排一处） |
 | 启动即退、日志 `CatalogError` | 声明目录是否缺件 | 镜像必须带 `deploy/registry`（本镜像已 COPY，见 Dockerfile） |

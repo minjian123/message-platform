@@ -99,6 +99,9 @@ RUN python -m pip uninstall -y pip
 ENV PATH=/opt/msg/backend/.venv/bin:$PATH
 USER msg
 EXPOSE 8000
+# 健康检查判据 = 就绪（`/readyz`，与网关摘流同一判据，任务 07-1-2）：
+# 存活由进程是否退出表达（Docker 只在进程退出时按 restart 策略重启，**不因 unhealthy 重启**），
+# 把判据放在就绪侧，`docker ps` 的 Health.Status 才与「能不能服务」一致。
 HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=3 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
 CMD ["python", "-m", "bms_msg"]
