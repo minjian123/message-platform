@@ -104,6 +104,13 @@ HOST_ONLY_KEYS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
         "MSG_BACKUP_PLATFORM_DUMP_DIR",
         "MSG_BACKUP_KEEP_DAYS",
         "MSG_BACKUP_SPACE_FACTOR",
+        # 07-3-2 恢复演练旋钮：宿主侧离线命令消费，服务容器内无消费者。
+        "MSG_RECOVERY_WORK_DIR",
+        "MSG_RECOVERY_STOP_CMD",
+        "MSG_RECOVERY_START_CMD",
+        "MSG_RECOVERY_METADATA_CMD",
+        "MSG_RECOVERY_READY_URL",
+        "MSG_RECOVERY_TIMEOUT_SEC",
     ]
 )
 """只做宿主侧 compose 插值 / 调度注入、不进容器的键（C6 例外）。"""

@@ -92,8 +92,8 @@ _BACKUP_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z$")
 _CONFIG_FILES = ConcurrentStableFrozenList(("config.toml", "config.dev.toml", "config.test.toml", "config.prod.toml"))
 """配置版本摘要的四份基线 / 环境覆盖（不含两份 `.env`）。"""
 
-_RECOVERY_ORDER = ConcurrentStableFrozenList(("元数据库", "位点文件", "消息日志", "校验对齐"))
-"""恢复顺序（架构 08「备份与恢复」节；恢复脚本按此顺序执行）。"""
+RECOVERY_ORDER = ConcurrentStableFrozenList(("元数据库", "位点文件", "消息日志", "校验对齐"))
+"""恢复顺序（架构 08「备份与恢复」节；恢复脚本按此顺序执行，并逐项与清单核对）。"""
 
 
 class BackupError(RuntimeError):
@@ -630,7 +630,7 @@ def build_manifest(
     offsets.set("bytes", plan.total_bytes)
     payload.set("offsets", offsets)
     payload.set("log_segments", plan.segments)
-    payload.set("recovery_order", _RECOVERY_ORDER)
+    payload.set("recovery_order", RECOVERY_ORDER)
     payload.set("files", files)
     payload.set("retention_days", config.keep_days)
     return payload

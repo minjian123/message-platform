@@ -752,3 +752,55 @@ BACKUP_ID_FORMAT = "%Y%m%dT%H%M%SZ"
 
 BACKUP_MANIFEST_SCHEMA_VERSION = 1
 """清单格式版本（恢复侧读到更高版本即拒，与记录 / 恢复点同口径）。"""
+
+# ---------------------------------------------------------------------------
+# 07-3-2 恢复演练与记录：宿主侧运行旋钮（不进 Settings；恢复是宿主离线动作）
+# ---------------------------------------------------------------------------
+
+RECOVERY_WORK_DIR_ENV = "MSG_RECOVERY_WORK_DIR"
+"""演练工作根的环境变量名（drill 必填；目标副本与临时备份根都落在这里）。"""
+
+RECOVERY_STOP_CMD_ENV = "MSG_RECOVERY_STOP_CMD"
+"""停止服务命令模板的环境变量名（live 必填；按平台 shell 语义执行）。"""
+
+RECOVERY_START_CMD_ENV = "MSG_RECOVERY_START_CMD"
+"""启动服务命令模板的环境变量名（live 必填）。"""
+
+RECOVERY_METADATA_CMD_ENV = "MSG_RECOVERY_METADATA_CMD"
+"""元数据库导入命令模板的环境变量名（live 必填；可用 `{dump}` / `{backup_id}` / `{target_env}`）。"""
+
+RECOVERY_READY_URL_ENV = "MSG_RECOVERY_READY_URL"
+"""就绪探针地址的环境变量名（live 必填）。"""
+
+RECOVERY_TIMEOUT_SEC_ENV = "MSG_RECOVERY_TIMEOUT_SEC"
+"""命令与就绪轮询超时的环境变量名（正整数秒）。"""
+
+RECOVERY_DEFAULT_TIMEOUT_SEC = 120
+"""超时缺省值（秒）：导入大库可上调，但不允许无限等待。"""
+
+RECOVERY_PROBE_INTERVAL_MS = 500
+"""就绪轮询间隔（毫秒）；也是 live 模式等待服务可见的步进。"""
+
+RECOVERY_SAMPLE_PER_PARTITION = 20
+"""每分区抽样读回的缺省条数（已确认消息可读的最小证据）。"""
+
+RECOVERY_SAMPLE_LIMIT = 200
+"""抽样总量缺省上限：避免分区多时把演练拖成全量扫描。"""
+
+RECOVERY_REPORT_DIR = "tmp/recovery"
+"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+
+RECOVERY_REPORT_SCHEMA_VERSION = 1
+"""演练记录格式版本（后续只增字段，不删不改语义）。"""
+
+RECOVERY_WORK_TARGET_SUBDIR = "target"
+"""演练副本数据根在工作根下的子目录名。"""
+
+RECOVERY_WORK_BACKUP_SUBDIR = "backup"
+"""演练前自动备份目录在工作根下的子目录名。"""
+
+RECOVERY_OUTPUT_TAIL_CHARS = 2_048
+"""命令输出摘要保留的末尾字符数（只做排障线索，不作判据）。"""
+
+RECOVERY_PROD_ENVS = ("prod", "production")
+"""禁止执行 live 恢复的环境名：生产恢复走人工流程，不提供覆盖开关。"""
