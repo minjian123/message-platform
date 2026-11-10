@@ -134,6 +134,18 @@ label = "部署：编排与镜像资产断言（端口 / 网络 / 双卷 / 停�
 cmd = ["uv", "run", "pytest", "services/msg/tests/deploy", "-q"]
 cwd = "backend"
 
+# ---- 配置与凭据（07-2）：全仓凭据扫描 + 四层配置断言 ----
+# always 步：只改 deploy/.env.example、msg.yml 或配置文本时选测选不到，必须每次提交都判。
+[[preflight.steps]]
+label = "配置：四层配置与凭据扫描（C1~C6）"
+cmd = ["uv", "run", "python", "-m", "ops.check_credentials"]
+cwd = "backend"
+
+# [rules.env_example] 早已登记模板与必填键，但未接预检 → 规则空转；此处补登记。
+[[preflight.steps]]
+label = "配置：环境变量模板键位（engkit base env-example）"
+cmd = ["{python}", "-m", "engkit", "base", "env-example"]
+
 [[preflight.steps]]
 label = "后端测试：定向（选测 + 覆盖率门禁 + 扩圈）"
 type = "scoped_tests"
@@ -171,9 +183,26 @@ required_keys = [
   "PLATFORM_NETWORK",
   "MSG_REGISTRY_IMAGE_PREFIX",
   "MSG_TAG",
+  "MSG_DATA_HOST_DIR",
+  "MSG_OFFSETS_HOST_DIR",
   "BMS_DATABASE__PLATFORM__URL_TEMPLATE",
+  "BMS_DATABASE__PLATFORM__PASSWORD",
+  "BMS_DATABASE__TENANTS__URL_TEMPLATE",
+  "BMS_DATABASE__TENANTS__PASSWORD",
+  "BMS_DATABASE__ARCHIVE__URL",
+  "BMS_DATABASE__ARCHIVE__PASSWORD",
   "BMS_REDIS__URL",
+  "BMS_TRACER__OTLP_ENDPOINT",
   "BMS_SERVICE_TOKEN__KEYS",
+  "BMS_SERVICE_TOKEN__ACTIVE_KID",
+  "BMS_SECURITY__KEYS",
+  "BMS_SECURITY__ACTIVE_KID",
+  "BMS_SECURITY__SECRET_KEY",
+  "BMS_SERVER__CERTFILE",
+  "BMS_SERVER__KEYFILE",
+  "MSG_STORAGE_WARN_RATIO",
+  "MSG_STORAGE_REJECT_RATIO",
+  "MSG_STORAGE_SAMPLE_TTL_MS",
 ]
 
 [rules.docs_status]

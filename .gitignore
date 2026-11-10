@@ -19,8 +19,9 @@ htmlcov/
 node_modules/
 *.log
 
-# 本地凭据 / 资源
+# 本地凭据 / 资源（两份 .env 都不入库：deploy/.env 供 compose 插值，backend/.env 供本地裸跑的 dotenv 层）
 deploy/.env
+backend/.env
 msg文档/用户文档/本地资源.md
 
 # 消息数据根（02-1 缺省开发态落点：backend/var/lib/msg）

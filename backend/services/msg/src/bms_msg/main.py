@@ -27,6 +27,7 @@
 """
 
 import importlib
+import os
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import cast
@@ -80,6 +81,7 @@ from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.broker.watermark import StorageMetrics, StorageWatermark
+from bms_msg.config_guard import flatten_settings, validate_config_invariants
 from bms_msg.core.config import DATA_ROOT_SUBDIR, OFFSETS_SUBDIR
 from bms_msg.health import register_msg_health_registry
 from bms_msg.metrics import MetricsSnapshotStore, get_traffic_metrics
@@ -208,6 +210,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             app: 应用实例（供 `api/deps.py` 读取）。
             settings: 应用配置（审计发件箱实现选择取自 `[outbox_store]`）。
         """
+        # 07-2：启动期配置断言（与离线 ops.check_credentials 的 C5 共用同一纯函数）。
+        # 只判分层结果与生产禁用项，不判密钥是否存在——缺密钥由基座在使用时失效关闭。
+        validate_config_invariants(flatten_settings(settings), os.environ.get("BMS_ENV") or settings.app.env)
         waiter = DeliveryWaiter()
         app.state.waiter = waiter
         resources = cast("ResourceManager", app.state.resources)
