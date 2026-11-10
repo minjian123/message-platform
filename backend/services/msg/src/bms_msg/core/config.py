@@ -804,3 +804,49 @@ RECOVERY_OUTPUT_TAIL_CHARS = 2_048
 
 RECOVERY_PROD_ENVS = ("prod", "production")
 """禁止执行 live 恢复的环境名：生产恢复走人工流程，不提供覆盖开关。"""
+
+# ---------------------------------------------------------------------------
+# 07-4-1 切换开关与分域迁移编排：前置清单 / 矩阵 / 演练记录（不进 Settings）
+# ---------------------------------------------------------------------------
+
+MIGRATION_PRECONDITIONS_PATH = "deploy/migration/preconditions.toml"
+"""迁移前置清单相对仓根的缺省路径（唯一状态源；8B_05 交付后只改状态）。"""
+
+MIGRATION_MATRIX_PATH = "deploy/migration/switch_matrix.toml"
+"""切换矩阵相对仓根的缺省路径（机器可读单源；文档表由渲染结果粘贴）。"""
+
+MIGRATION_REPORT_DIR = "tmp/migration"
+"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+
+MIGRATION_RECORD_SCHEMA_VERSION = 1
+"""演练记录格式版本（后续只增字段，不删不改语义）。"""
+
+MIGRATION_DEFAULT_ENV = "test"
+"""`check` / `drill` 的缺省环境（隔离环境；生产闸门须显式 `--env prod`）。"""
+
+MIGRATION_PROD_ENVS = ("prod", "production")
+"""生产环境名：`check` 走硬闸门，`drill` 一律拒绝（生产切换归 bms 8B_08）。"""
+
+MIGRATION_DRILL_ENVS = ("test", "testing", "dev", "development")
+"""允许执行演练的环境名（隔离环境）；其它取值按参数错误处理，不猜语义。"""
+
+MIGRATION_OBSERVE_WINDOW_MINUTES = 30
+"""每域切换后的观察窗口缺省时长（分钟；生产窗口由 bms 8B_08 取值）。"""
+
+MIGRATION_DEFAULT_EVENT_TYPE = "demo.order.created"
+"""演练用事件类型（`topic_for` 据此派生 `bms-demo-order`，与跨仓契约夹具同源）。"""
+
+MIGRATION_DEFAULT_GROUP = "migration-drill"
+"""演练用消费组（与业务组隔离，避免污染真实位点）。"""
+
+MIGRATION_DEFAULT_CONSUMER_ID = "drill-1"
+"""演练用消费成员标识（组内唯一即可）。"""
+
+MIGRATION_DEFAULT_READ_ONLY_SERVICE = "demo"
+"""网络演练的只读调用目标服务（msg 内置 `demo` 方法恒可调用）。"""
+
+MIGRATION_DEFAULT_READ_ONLY_METHOD = "echo"
+"""网络演练的只读调用目标方法（`demo.echo` 原样回传，幂等且无副作用）。"""
+
+MIGRATION_DEFAULT_TENANT = "demo"
+"""演练缺省租户编码（数据面与管理面共用同一租户口径）。"""

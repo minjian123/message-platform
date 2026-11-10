@@ -1,0 +1,80 @@
+# 迁移前置清单（任务 07-4-1；需求 07-4）
+#
+# 用途：回答「现在能不能迁」——逐项登记谁、什么时候、以什么证据确认了这项前置。
+# 口径：
+#   - status 只允许 satisfied / not_ready；
+#   - required_in 决定「哪些环境必须满足」：prod 为硬闸门，test / dev 只记录不阻断；
+#   - evidence 是证据锚点（文档路径 / 任务编号 / 演练记录），空证据视为未核对；
+#   - 8B_05 与 07-4-2 交付后只改 status + evidence，不改代码、不重新发布业务镜像；
+#   - 本文件是唯一状态源，不在任务 / 计划文档另抄一份状态。
+# 校验：python -m ops.migration check --env prod
+schema_version = 1
+
+[meta]
+updated_at = "2026-11-10"
+owner = "minjian"
+note = "8B_05 复制能力与 07-4-2 回滚演练未交付，生产迁移被硬闸门阻断（D24：复制必须先于迁移）"
+
+[[items]]
+id = "adapter_switch"
+label = "04-5 + bms 07B 06_01 适配层与切换"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "msg 04-5 收口说明（Kiwi 2442）；bms 06_01 实施记录（Kiwi 2440 / 2441 / 2442 / 2443）"
+note = "EventPublisher / BaseServiceClient 的 msg 实现、provider 切换、回滚三态已交付"
+
+[[items]]
+id = "deployment"
+label = "07-1 部署形态与产品声明"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "07-1 两子任务交付（Kiwi 2472 / 2473）；真机取证见 07-1-2 测试记录"
+note = "产品声明、路由命名空间、探针与双持久卷可用"
+
+[[items]]
+id = "credentials"
+label = "07-2 配置分层与凭据管理"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "07-2 交付（Kiwi 2474）"
+note = "四层配置优先级与凭据扫描可用；镜像与配置无凭据"
+
+[[items]]
+id = "backup_recovery"
+label = "07-3 备份与恢复"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "07-3 两子任务交付（Kiwi 2475 / 2476）；drill 恢复演练退出 0"
+note = "切换前备份与恢复回退入口可用"
+
+[[items]]
+id = "admin_ops"
+label = "8B_06 管理与运维"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "阶段计划里程碑 7：06-1 ~ 06-8 全部交付（Kiwi 2460 ~ 2471）"
+note = "积压 / 死信 / 重放 / 管理面 / 指标告警可操作"
+
+[[items]]
+id = "tenant_isolation_quota"
+label = "8B_07 多租户与安全"
+status = "satisfied"
+required_in = ["prod"]
+evidence = "阶段计划 05 域交付行：05-1 ~ 05-5（Kiwi 2452 ~ 2456）"
+note = "租户隔离、主题授权、配额与审计留痕可用"
+
+[[items]]
+id = "copy_replication"
+label = "8B_05 复制能力（02-4 副本与 ISR / 02-5 选举与故障切换）"
+status = "not_ready"
+required_in = ["prod"]
+evidence = "阶段计划 §3：02-4 / 02-5 仍搁置（待 8B_05）"
+note = "无复制就迁移等于把单点故障放大到全平台；未满足不得进入生产迁移"
+
+[[items]]
+id = "rollback_drill"
+label = "07-4-2 回滚演练与记录"
+status = "not_ready"
+required_in = ["prod"]
+evidence = "07-4 子任务清单：07-4-2 未开始"
+note = "回滚未演练过一次不得进入生产迁移（需求 07-4 第 3 条）"

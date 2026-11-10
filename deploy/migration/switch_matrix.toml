@@ -1,0 +1,141 @@
+# 切换矩阵（任务 07-4-1；需求 07-4）
+#
+# 用途：回答「迁哪个域、按什么顺序、看什么指标、什么条件下回滚」。
+# 口径：
+#   - 两类端口：event（事件发布）/ service_client（服务调用）；
+#   - 批次只约束运维推进顺序：1 低风险事件 + 只读调用 → 2 审计事件 → 3 业务事件与写调用；
+#   - 首期 bms 只有全局 provider，domain_level_key 是 8B_08 待交付的域级键（仅校验键形）；
+#   - observe_metrics 必须命中 bms_msg.metrics.names 的登记（不得臆造指标名）；
+#   - 回滚判据写「形状」，阈值数值归 8B_12 压测结论；
+#   - 本文件是唯一机器可读源，设计文档的表由 `python -m ops.migration matrix` 渲染后粘贴。
+schema_version = 1
+
+[meta]
+updated_at = "2026-11-10"
+owner = "minjian"
+switch_scope = "global"
+observe_window_minutes = 30
+note = "域级白名单 / 灰度归 bms 8B_08；本阶段按端口整体切换，按批次推进观察"
+
+[[phases]]
+id = 1
+name = "低风险通路"
+scope = "一条低风险事件域 + 一个只读远程调用"
+gate = "前置清单在目标环境全绿（生产）+ 切换前备份成功"
+
+[[phases]]
+id = 2
+name = "审计事件"
+scope = "审计事件域（操作审计 / 访问异常）"
+gate = "批次 1 观察窗口通过"
+
+[[phases]]
+id = 3
+name = "业务事件与写调用"
+scope = "业务事件逐域 + 写远程调用（幂等键必须覆盖）"
+gate = "批次 2 观察窗口通过"
+
+[[domains]]
+key = "low_risk_event"
+label = "低风险事件"
+port = "event"
+category = "low_risk"
+phase = 1
+switch_key = "[event].provider"
+domain_level_key = "[event].domains.low_risk"
+domain_level_status = "pending_8b08"
+default_value = "rocketmq（未部署为 null）"
+target_value = "msg"
+prerequisites = ["adapter_switch", "deployment", "credentials", "backup_recovery", "copy_replication", "rollback_drill"]
+observe_metrics = ["msg_messages_in_total", "msg_publish_latency_ms", "msg_publish_errors_total"]
+rollback_criteria = [
+  "msg_publish_errors_total 5 分钟增幅 > 1%",
+  "msg_publish_latency_ms P95 > 原链路基线 2 倍",
+  "观察窗口内出现消费方报错或事件缺失",
+]
+owner = "minjian"
+note = "首批切换对象：低风险、可重放、无资金语义的事件"
+
+[[domains]]
+key = "readonly_rpc"
+label = "只读远程调用"
+port = "service_client"
+category = "readonly"
+phase = 1
+switch_key = "[service_client].provider"
+domain_level_key = "[service_client].domains.readonly"
+domain_level_status = "pending_8b08"
+default_value = "http"
+target_value = "msg"
+prerequisites = ["adapter_switch", "deployment", "credentials", "backup_recovery", "copy_replication", "rollback_drill"]
+observe_metrics = ["msg_rpc_calls_total", "msg_rpc_duration_ms"]
+rollback_criteria = [
+  "msg_rpc_calls_total 中 outcome=error 占比 > 1%",
+  "msg_rpc_duration_ms P95 > http 基线 2 倍",
+  "outcome=cancel 相对基线突增",
+]
+owner = "minjian"
+note = "首批切换对象：只读、幂等、失败可降级的调用（如 platform.modules.snapshot）"
+
+[[domains]]
+key = "audit_event"
+label = "审计事件"
+port = "event"
+category = "audit"
+phase = 2
+switch_key = "[event].provider"
+domain_level_key = "[event].domains.audit"
+domain_level_status = "pending_8b08"
+default_value = "rocketmq（未部署为 null）"
+target_value = "msg"
+prerequisites = ["adapter_switch", "deployment", "credentials", "backup_recovery", "copy_replication", "rollback_drill"]
+observe_metrics = ["msg_messages_in_total", "msg_publish_errors_total", "msg_dlq_growth_total"]
+rollback_criteria = [
+  "审计链路缺条（业务侧对账差 > 0）",
+  "msg_dlq_growth_total 5 分钟增幅 > 0",
+  "msg_publish_errors_total 5 分钟增幅 > 1%",
+]
+owner = "minjian"
+note = "审计事件量可预估、可对账；切换前确认审计表与消费记录可核对"
+
+[[domains]]
+key = "business_event"
+label = "业务事件域"
+port = "event"
+category = "business"
+phase = 3
+switch_key = "[event].provider"
+domain_level_key = "[event].domains.business"
+domain_level_status = "pending_8b08"
+default_value = "rocketmq（未部署为 null）"
+target_value = "msg"
+prerequisites = ["adapter_switch", "deployment", "credentials", "backup_recovery", "copy_replication", "rollback_drill"]
+observe_metrics = ["msg_messages_in_total", "msg_consumer_lag", "msg_dlq_growth_total"]
+rollback_criteria = [
+  "msg_consumer_lag 连续 10 分钟单调增",
+  "死信新增 > 0",
+  "业务对账差 > 0",
+]
+owner = "minjian"
+note = "逐业务域推进；每域切换前备份、切换后独立观察窗口"
+
+[[domains]]
+key = "write_rpc"
+label = "写远程调用"
+port = "service_client"
+category = "write"
+phase = 3
+switch_key = "[service_client].provider"
+domain_level_key = "[service_client].domains.write"
+domain_level_status = "pending_8b08"
+default_value = "http"
+target_value = "msg"
+prerequisites = ["adapter_switch", "deployment", "credentials", "backup_recovery", "copy_replication", "rollback_drill"]
+observe_metrics = ["msg_rpc_calls_total", "msg_rpc_duration_ms"]
+rollback_criteria = [
+  "出现重复副作用（同一幂等键二次执行）",
+  "msg_rpc_calls_total 中 outcome=error 占比 > 1%",
+  "msg_rpc_duration_ms P95 > http 基线 2 倍",
+]
+owner = "minjian"
+note = "风险最高：必须确认调用点非幂等操作已带幂等键（04-4 口径）"
