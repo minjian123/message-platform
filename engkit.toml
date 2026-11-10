@@ -124,6 +124,16 @@ cmd = ["{python}", "-m", "engkit", "base", "bare-collections"]
 label = "基座：check_snowflake_ids（裸 BigInteger 雪花 ID 列 / schema 残留）"
 cmd = ["{python}", "-m", "engkit", "base", "snowflake-ids"]
 
+# ---- 部署资产：编排 / 镜像 / 凭据模板（07-1-1）----
+# 为什么是 always 步而不是靠选测：选测按 import 关系选文件，只改 `deploy/compose/msg.yml` 或
+# `deploy/Dockerfile` 时选不到 `services/msg/tests/deploy/`；不钉住就会出现「编排改了、断言没跑」。
+# 窄目录（1 个测试文件）远低于 `[guard].dir_test_threshold`，不触重命令守卫；未设
+# `MSG_COVERAGE_DATA` 时覆盖率插件静默不采，不污染后续覆盖率步骤的数据。
+[[preflight.steps]]
+label = "部署：编排与镜像资产断言（端口 / 网络 / 双卷 / 停机 / 镜像契约）"
+cmd = ["uv", "run", "pytest", "services/msg/tests/deploy", "-q"]
+cwd = "backend"
+
 [[preflight.steps]]
 label = "后端测试：定向（选测 + 覆盖率门禁 + 扩圈）"
 type = "scoped_tests"

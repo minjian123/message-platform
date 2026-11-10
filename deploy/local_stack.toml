@@ -5,6 +5,13 @@
 #
 # 本服务：消息平台（`python -m bms_msg`），统一 8000 端口 + 回环别名区分；
 # 库落工作区根 `database/msg`（相对 backend/ 上两级）。
+#
+# 数据根对照（本机裸跑 vs 容器部署）：
+# - 本机裸跑不设 `MSG_DATA_DIR`，走缺省 `var/lib/msg`，即 `backend/var/lib/msg/`（已 gitignore）；
+# - 容器部署由 `../compose/msg.yml` 固定 `MSG_DATA_DIR=/var/lib/msg`，两个子目录各挂一个宿主卷
+#   （`/var/lib/msg/data` 消息日志、`/var/lib/msg/offsets` 位点），迁移与备份只搬这两处。
+# 二者布局同构（`data/` 与 `offsets/` 平级），故同一份代码在两侧行为一致；本文件只管本机裸跑，
+# 不参与容器部署（容器口径见 `Dockerfile` 与 `compose/msg.yml`）。
 
 [[services]]
 key = "msg"

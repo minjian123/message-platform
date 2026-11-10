@@ -1,0 +1,55 @@
+# msg 运行镜像的构建上下文排除规则（Dockerfile 专用 ignore；随仓库走）
+#
+# 为什么放在这里：构建上下文是**工作区根**（`msg/` 与 `bms/` 平级并置），但排除规则是**本镜像专属**的，
+# 放在工作区根会让「产品镜像的构建细节」进入组合层配置仓。BuildKit 对 `<Dockerfile>.dockerignore`
+# 的优先级高于上下文根的 `.dockerignore`，故本文件即唯一生效规则（CI 与本地共用同一份）。
+#
+# 为什么上下文必须是工作区根：`bms-core` 为**路径依赖**（`msg/backend/pyproject.toml` 的
+# `../../bms/backend/libs/bms_core`），镜像内需同时具备 `msg/` 与 `bms/backend/libs/bms_core`；
+# Docker 只能从**单一上下文**取其内容，故上下文上移到工作区根（构建命令见 `deploy/Dockerfile` 头部）。
+#
+# 本文件内的路径一律相对**上下文根**（工作区根）。只排除「与本镜像无关」与「大体积 / 本地产物」；
+# 新增平级产品仓时按需追加排除。
+
+# 版本库与工作区配置
+.git/
+.gitignore
+.ignore
+*.code-workspace
+
+# 本地产物与临时目录（工作区卫生红线：临时文件只落 tmp/）
+tmp/
+**/.cache/
+**/.git/
+
+# 依赖与构建产物（本地均为外置符号链接，容器内一律现装）
+**/node_modules/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.coverage
+**/coverage.json
+*.db
+*.log
+
+# 与本镜像无关的平级仓与文档（缩小上下文、避免误触发层缓存失效）
+biz/
+cws/
+mdm/
+engkit/
+test/
+msg/msg文档/
+msg/scripts/
+bms/bms文档/
+msg/frontend/
+msg/deploy/compose/
+msg/deploy/.env.example
+msg/deploy/local_stack.toml
+# 本服务端口 / 声明目录的说明性资产（镜像内由 Dockerfile 显式 COPY 三目录，无需整体带入）
+msg/deploy/boundaries/*.md
+
+# 部署态凭据与生成物（宿主机 `.env` / 发布台账 / 网关生成件不进镜像）
+**/deploy/.env
+bms/deploy/releases/
+bms/deploy/gateway/

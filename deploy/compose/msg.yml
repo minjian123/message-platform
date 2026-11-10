@@ -1,0 +1,82 @@
+# msg 产品服务编排（服务名 = 服务标识 `msg`，与平台网关声明式上游 `msg:8000` 对齐）
+#
+# 拉起（在 msg 仓 `deploy/` 目录，`.env` 提供变量；模板见 `.env.example`）：
+#   docker compose -f compose/msg.yml --env-file .env up -d
+#
+# 口径：
+# - 服务名（Compose DNS）取服务标识 `msg`，与平台网关 upstream 节点同口径——对外经产品命名空间
+#   `/api/msg/v1/msg/...` 暴露（网关由平台侧产品登记清单 + `PRODUCT_ROUTES` 生成，msg 无需改网关）；
+# - **平台基础设施归 bms 部署**（网关 / 认证 / Redis / MySQL / 可观测后端），本编排不重复、不建库；
+#   msg 服务经 `.env` 接入平台基础设施与平台网络（见 `networks.platform`）；
+# - 仅内部网络（`expose 8000`，**不映射宿主端口**），经平台网关统一入口访问；调试走
+#   `docker compose -f compose/msg.yml exec msg <命令>`；
+# - 镜像标签必填（`MSG_TAG`，`:?` 语法无 latest 兜底）——由发布流程按版本台账注入；
+#   `MSG_REGISTRY_IMAGE_PREFIX` 为「Registry + 项目路径」，镜像全名 = `<前缀>/msg:<标签>`；
+# - **三样持久化**：消息日志挂 `/var/lib/msg/data`、位点文件挂 `/var/lib/msg/offsets`（两个独立宿主卷），
+#   元数据库随平台库（本编排不挂库目录、容器内无库文件）；
+# - **停机**：`stop_grace_period: 45s` 覆盖基座 `[server].graceful_timeout_seconds`（缺省 30s）的
+#   在途等待 + drain 协商与「刷日志 → 刷 .delay → 刷位点」收尾；Docker 缺省 10s 会直接 SIGKILL；
+# - 健康检查在**镜像层**声明（`/healthz`），本编排不重复声明，避免两处参数漂移。
+#
+# 环境变量（.env，模板见 deploy/.env.example）：密钥与连接串一律经环境变量注入，不入库 / 不入镜像。
+
+x-service-env: &service-env
+  BMS_ENV: ${BMS_ENV:-dev}
+  # 库名前缀（msg 产品专属；与 config.toml 基线一致，此处显式重申防环境漂移）
+  BMS_DATABASE__NAME_PREFIX: msg
+  # 运行库（每服务库 × 每租户；URL 模板占位 {service} / {tenant} / {database}，密码经环境变量注入）
+  BMS_DATABASE__PLATFORM__URL_TEMPLATE: ${BMS_DATABASE__PLATFORM__URL_TEMPLATE:?}
+  BMS_DATABASE__PLATFORM__PASSWORD: ${BMS_DATABASE__PLATFORM__PASSWORD:-}
+  BMS_DATABASE__TENANTS__URL_TEMPLATE: ${BMS_DATABASE__TENANTS__URL_TEMPLATE:?}
+  BMS_DATABASE__TENANTS__PASSWORD: ${BMS_DATABASE__TENANTS__PASSWORD:-}
+  # 归档库（config.toml 缺省为 SQLite 文件；部署态必须显式指向平台 MySQL，
+  # 否则归档链落到容器内临时文件——容器重建即丢）
+  BMS_DATABASE__ARCHIVE__URL: ${BMS_DATABASE__ARCHIVE__URL:-mysql+aiomysql://msg_app@mysql:3306/msg_archive}
+  BMS_DATABASE__ARCHIVE__PASSWORD: ${BMS_DATABASE__ARCHIVE__PASSWORD:-}
+  # 外部依赖（Compose DNS，禁硬编码 IP）
+  BMS_REDIS__URL: ${BMS_REDIS__URL:-redis://redis:6379/0}
+  BMS_TRACER__OTLP_ENDPOINT: ${BMS_TRACER__OTLP_ENDPOINT:-http://otel-collector:4318}
+  # 服务间同步调用（http + Compose DNS 基址模板；出站附自签服务 JWT）
+  BMS_SERVICE_CLIENT__PROVIDER: http
+  BMS_SERVICE_CLIENT__OPTIONS: '{"base_url_template":"http://{service}:8000","attach_service_token":true}'
+  # 边缘信任（dev 关旁路强制；prod 开 true）；实现必须是 service_jwt：
+  # 网关转发的是服务 JWT + 用户身份头，null 占位会让 msg 把用户请求当成未授权服务身份
+  BMS_EDGE__PROVIDER: ${BMS_EDGE__PROVIDER:-service_jwt}
+  BMS_EDGE__REQUIRE_GATEWAY_IDENTITY: ${BMS_EDGE__REQUIRE_GATEWAY_IDENTITY:-false}
+  # 身份密钥（只经 .env 注入；空值允许装配、使用时 fail-closed）
+  BMS_SERVICE_TOKEN__KEYS: ${BMS_SERVICE_TOKEN__KEYS:-}
+  BMS_SERVICE_TOKEN__ACTIVE_KID: ${BMS_SERVICE_TOKEN__ACTIVE_KID:-}
+  BMS_SECURITY__KEYS: ${BMS_SECURITY__KEYS:-}
+  BMS_SECURITY__ACTIVE_KID: ${BMS_SECURITY__ACTIVE_KID:-}
+  BMS_SECURITY__SECRET_KEY: ${BMS_SECURITY__SECRET_KEY:-}
+  # 消息数据根：`data/` 与 `offsets/` 两个子目录各挂一卷（容器内路径固定，不随环境改）
+  MSG_DATA_DIR: /var/lib/msg
+  # 启动期声明上报（注册表是权威来源）：部署态保持 true——上报被拒即拒启，不静默降级；
+  # 仅离线冒烟（平台未参与）时经 .env 置 false，声明装载校验归任务 07-1-2。
+  BMS_REGISTRY__REGISTER_ON_STARTUP: ${BMS_REGISTRY__REGISTER_ON_STARTUP:-true}
+
+services:
+  msg:
+    image: ${MSG_REGISTRY_IMAGE_PREFIX:?MSG_REGISTRY_IMAGE_PREFIX required}/msg:${MSG_TAG:?MSG_TAG required}
+    container_name: msg
+    restart: unless-stopped
+    # 在途请求按 GOAWAY / drain 收尾后再退出（见文件头「停机」）
+    stop_grace_period: 45s
+    expose:
+      - "8000"
+    volumes:
+      # 消息日志（独立卷，不与系统盘 / 容器可写层混放）
+      - ${MSG_DATA_HOST_DIR:?MSG_DATA_HOST_DIR required}:/var/lib/msg/data
+      # 位点文件（与 data/ 平级；备份口径不同，故各挂一卷）
+      - ${MSG_OFFSETS_HOST_DIR:?MSG_OFFSETS_HOST_DIR required}:/var/lib/msg/offsets
+    environment:
+      <<: *service-env
+    networks:
+      - platform
+
+networks:
+  # 平台网络（bms 部署创建）：使平台网关可解析 `msg:8000`，本服务亦可达平台服务。
+  # 实际网络名以平台部署为准，经 .env 的 PLATFORM_NETWORK 覆盖（缺省值只作本地参照）。
+  platform:
+    external: true
+    name: ${PLATFORM_NETWORK:-deploy_default}
