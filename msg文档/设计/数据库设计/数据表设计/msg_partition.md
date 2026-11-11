@@ -11,7 +11,7 @@
 | 归属库 | msg 平台库（`datasource = platform`；库名由 `[database]` 派生，本地 SQLite 落 `database/msg/`） |
 | 归属业务域 | `msg`（装载注册：清单 `[[domains]]`） |
 | 归属服务 | `msg` |
-| 覆盖模块 | 01-消息模型与投递 · 01-1 主题与分区模型；02-存储与复制 · 02-4 副本与 ISR 复制 |
+| 覆盖模块 | 01-消息模型与投递 · 01-1 主题与分区模型；02-存储与复制 · 02-4 副本与 ISR 复制、02-5 选举、epoch 与故障切换 |
 | 上游依据 | 《[架构设计 · 数据面：存储与复制](../../架构设计/04_架构设计_数据面_存储与复制.md)》第 2 / 7 节（`epoch` 与检查点须在 8B_02 预留）、[任务 01-1](../../../项目/08B_消息平台/任务/01_消息模型与投递/01_消息模型与投递_01_主题与分区模型/01_消息模型与投递_01_主题与分区模型.md)、[详细设计](../../../项目/08B_消息平台/任务/01_消息模型与投递/01_消息模型与投递_01_主题与分区模型/设计/01_详细设计_01_主题与分区模型.md) §4.2 |
 | ORM 模型 | `services/msg/src/bms_msg/models/partition.py::MsgPartition`（继承 `BaseModel`） |
 | 状态 | 已落库（2026-11-04；随任务 01-1，幂等建表落地，无迁移脚本） |
@@ -32,6 +32,15 @@
 | `checkpoint_hw` | BIGINT | 否 | 默认 0 | 检查点 HW（提交位点） |
 | `epoch` | INT | 否 | 默认 0 | 领导者任期（8B_05 防脑裂；02-4 起写入记录头并由 follower 校验） |
 | `min_insync_replicas` | INT | 否 | 默认 0 | `acks=all` 的最小同步副本数（02-4；0 = 继承全局配置） |
+| `switch_state` | VARCHAR(16) | 否 | 默认 `idle` | 切换状态（`idle` / `switching`；02-5 两阶段停写） |
+| `switch_started_at` | DATETIME | 是 | NULL | 切换开始时刻（UTC；审计与排障，不用于跨节点时钟判定） |
+| `switch_from_leader` | VARCHAR(128) | 是 | NULL | 切换前 leader（中断重试时据此探测旧 leader） |
+| `switch_from_epoch` | INT | 是 | NULL | 切换前 epoch（中断重试时校验同一轮切换） |
+| `last_switch_at` | DATETIME | 是 | NULL | 最近一次成功切换时刻（UTC） |
+| `last_switch_by` | VARCHAR(128) | 是 | NULL | 最近一次切换触发人（内部服务传当前用户 / `system:drill`） |
+| `last_switch_epoch` | INT | 是 | NULL | 最近一次切换后的 epoch |
+| `last_switch_result` | VARCHAR(16) | 是 | NULL | 最近一次切换结果（`truncated` / `retained` / `noop`） |
+| `last_truncate_to` | BIGINT | 是 | NULL | 最近一次切换截断后的 LEO；NULL = 未截断（保留尾部） |
 | `created_at` | DATETIME | 否 | 审计 | 创建时间（UTC） |
 | `created_by` | DECIMAL(38,0) | 是 | 审计 | 创建人 |
 | `updated_at` | DATETIME | 否 | 审计 | 更新时间（UTC） |
@@ -61,5 +70,6 @@
 | --- | --- | --- | --- |
 | 2026-11-04 | v1 | 新建表结构（平台库；随任务 01-1 定稿：`replicas` / `checkpoint_leo` / `checkpoint_hw` / `epoch` 一并预留，避免 8B_05 复制落地时改表） | minjian |
 | 2026-11-11 | v2 | 增 `min_insync_replicas`（02-4：每分区可覆盖的最小同步副本数，0 = 继承全局；`replicas` 由 02-8 写分区分配结果） | minjian |
+| 2026-11-11 | v3 | 增 9 个切换列：`switch_state` / `switch_started_at` / `switch_from_leader` / `switch_from_epoch` / `last_switch_at` / `last_switch_by` / `last_switch_epoch` / `last_switch_result` / `last_truncate_to`（02-5：两阶段停写、epoch 递增与切换结果可查；全部有缺省 / 可空，旧行不需回填） | minjian |
 
 > 数据表设计 · 与 bms《[数据库开发规范](../../../../bms文档/规范/数据库开发规范.md)》「数据表文件规范」节配套
