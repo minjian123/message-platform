@@ -967,7 +967,7 @@ async def test_ensure_started_runs_loops_and_backoff() -> None:
     transport = InProcessReplicaTransport()
     config = replace(
         _config(node_id="n2", nodes=("n1", "n2")),
-        fetch_interval_ms=1,
+        fetch_interval_ms=20,
         scan_interval_ms=1,
     )
     coordinator = ReplicationCoordinator(
@@ -975,12 +975,14 @@ async def test_ensure_started_runs_loops_and_backoff() -> None:
         store=InMemoryMessageStore(),
         transport=transport,
         topology_loader=cast("ReplicaTopologyLoader", _Topology(nodes=("n1", "n2"), min_insync=1)),
-        clock=_TickClock(),
+        # 时钟步长（5ms）小于退避窗口（20ms）：先落进「退避中跳过」分支，再于下一次重试时
+        # 命中 60s 日志抑制窗口。
+        clock=_TickClock(step=5),
     )
     await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     await coordinator.ensure_started()
     await coordinator.ensure_started()
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.35)
     await coordinator.aclose()
     await coordinator.aclose()
 
