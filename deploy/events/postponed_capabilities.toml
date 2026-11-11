@@ -1,0 +1,66 @@
+# 01-8-2 后置能力占位契约（首期不实现，不构成已承诺能力）
+# 口径：只增不删 / 未知字段忽略 / 版本可见；本文件不是公开 OpenAPI 契约。
+# 不进 deploy/contracts/msg.json、不进 deploy/events/contracts.json、不产生端点 / 错误码 / 配置键。
+# 依据：需求 01-8、架构 09 D17、架构 05 §9、规划 §11；详细设计与设计评审记录见任务目录 设计/。
+
+schema_version = "1.0.0"
+status = "reserved"
+scope = "后置能力占位登记：契约可见、当前无实现；不构成已承诺能力，不得据此把能力写成已具备"
+source = "01-8-2"
+
+[compatibility]
+additive = "只增不删：新增字段一律可选，已有键不删除、不改语义，主版本内只增"
+unknown_fields = "未知字段忽略：按已知键取缺省，未知键不报错也不进入结果；旧实现读到新增键照常工作"
+version_visible = "版本可见：schema_version 随契约返回，主版本不变即兼容"
+major_change = "主版本变更须显式设计评审，占位期内不发生"
+
+[transactional_message]
+status = "reserved"
+port_position = "bms EventPublisher.publish_transactional()（首期委托 publish()，无生产调用点）；msg 侧不新增端口"
+state_model = ["半消息", "本地事务", "提交或回滚", "回查"]
+future_components = ["半消息存储", "事务状态登记", "回查调度", "回查接口"]
+reserved_event_types = ["msg.transaction.prepared", "msg.transaction.committed", "msg.transaction.rolled_back", "msg.transaction.check_requested"]
+failure_branches = [
+  "半消息悬挂：生产者崩溃或未提交未回滚，回查调度超时",
+  "回查依据缺失：操作 / 登录审计无业务行可查，显式失败不得猜提交",
+  "提交或回滚冲突：重复提交或状态乱序，幂等拒绝并留痕",
+  "回查超时或超次数：显式失败并留可定位记录，不静默丢弃",
+  "半消息对消费者可见：不可见标记失效，真实实现须拦截",
+  "本地事务失败但消息已发：沿用至少一次与消费端幂等，不新增补偿",
+]
+trigger_conditions = [
+  "业务侧明确不再维护 outbox 表 / relay 且接受回查依据改造",
+  "平台持久化日志、位点与复制能力就绪",
+  "四类组件有明确归口与验收判据",
+  "真机验证提交 / 回滚 / 崩溃回查 / 重复投递四条路径",
+  "设计评审通过并完成投入登记",
+]
+consequence_if_skipped = "业务继续维护 outbox 表与 relay，承担轮询延迟与表运维；误用委托端口会造成消息与本地事务不一致的静默错觉"
+
+[cdc_outbox_connector]
+status = "reserved"
+form = "outbox connector：消费 outbox 变更并转投；只留接口口子，不新增扫描端点"
+excluded = ["通用 CDC 平台", "binlog / WAL 日志尾随", "业务表变更捕获", "多源同步", "跨库写回业务库"]
+failure_branches = [
+  "位点丢失或重复：重投并由消费端幂等收敛",
+  "三库方言不一致或日志无法解析：显式拒绝，不降级猜读",
+  "权限不足或跨库写回被拒：停止 connector，不静默回落",
+  "业务表 schema 耦合：字段改名即破坏事件契约，故不尾随业务表",
+]
+trigger_conditions = [
+  "出现零侵入接入需求（业务完全不改代码即产生事件）",
+  "三库日志差异与跨库权限模型有解",
+  "平台复制能力与位点 / 幂等口径可复用",
+  "明确仍以 outbox connector 为先，不尾随业务表",
+  "设计评审通过并完成投入登记",
+]
+consequence_if_skipped = "事件仍由业务写 outbox、relay 轮询投递，轮询延迟无法消除；误读口子为已接入会使事件契约与业务表结构强耦合"
+
+[review]
+record = "任务目录 设计/02_设计评审记录_01-8-2.md"
+conclusion = "占位口径通过评审；两类能力首期均不实现"
+effort_owner = "阶段计划 §6.1 跨阶段遗留台账（投入量级与承接项）"
+
+[ownership]
+consumers = ["01-8-3 可靠性验收", "07-8-2 分域切换与观察窗口"]
+stage = "8B_04 可靠性与事务；真实实现归后续阶段"
