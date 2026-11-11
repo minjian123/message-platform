@@ -97,6 +97,9 @@ class StoredMessage(BaseValueObject):
     uncompressed_len: int | None = None
     """解压后字节数（生产者可选声明；broker 不校验也不解压）。"""
 
+    epoch: int = 0
+    """leader 任期（02-4：复制开启时写当前任期；关闭 / 未复制时为 0）。"""
+
     @property
     def trace_id(self) -> str | None:
         """链路标识（读兼容属性；只关心链路标识的调用点不必展开 `trace`）。
@@ -211,6 +214,7 @@ class MessageStore(BaseFrameworkObject, ABC):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """追加一条消息并分配 offset。
 
@@ -227,6 +231,7 @@ class MessageStore(BaseFrameworkObject, ABC):
             content_type: 消息体内容类型（缺省 MessagePack）。
             compression: 压缩算法（缺省 `none`）。
             uncompressed_len: 解压后字节数（生产者可选声明）。
+            epoch: leader 任期（02-4；follower 复制落盘时沿用 leader 值，单机为 0）。
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
@@ -384,6 +389,7 @@ class InMemoryMessageStore(MessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """追加一条消息并分配 offset（= 起点 + 当前可读条数）。
 
@@ -400,6 +406,7 @@ class InMemoryMessageStore(MessageStore):
             content_type: 消息体内容类型（缺省 MessagePack）。
             compression: 压缩算法（缺省 `none`）。
             uncompressed_len: 解压后字节数（生产者可选声明）。
+            epoch: leader 任期（02-4；follower 复制落盘时沿用 leader 值）。
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
@@ -420,6 +427,7 @@ class InMemoryMessageStore(MessageStore):
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
         log.append(message)
         return message

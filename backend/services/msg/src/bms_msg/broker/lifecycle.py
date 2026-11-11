@@ -21,6 +21,7 @@ from fastapi import FastAPI
 
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.replay import ReplayRunner
+from bms_msg.broker.replication import ReplicationCoordinator
 from bms_msg.broker.scheduler import DelayScheduler
 
 __all__ = [
@@ -178,6 +179,23 @@ class OffsetFlusher(BaseAsyncResource):
         _LOGGER.info("offset_store_closed")
 
 
+class ReplicationCloser(BaseAsyncResource):
+    """复制后台循环的回收句柄（02-4）：停机时取消 follower 拉取与 leader ISR 扫描。"""
+
+    def __init__(self, *, coordinator: ReplicationCoordinator) -> None:
+        """初始化。
+
+        Args:
+            coordinator: 复制协调器（提供 `aclose`）。
+        """
+        self._coordinator = coordinator
+
+    async def aclose(self) -> None:
+        """取消任务并等待（`aclose` 幂等，重复调用无副作用）。"""
+        await self._coordinator.aclose()
+        _LOGGER.info("replication_closed")
+
+
 class BackgroundLoops(BaseAsyncResource):
     """两个后台循环的回收句柄（登记进 `ResourceManager`，停机时逆序释放）。"""
 
@@ -250,6 +268,9 @@ async def start_background_tasks(app: FastAPI) -> None:
     cleanup = cast("StoppableLoop | None", getattr(app.state, "topic_cleanup_service", None))
     if cleanup is not None:
         cleanup.ensure_started()
+    replication = cast("ReplicationCoordinator | None", getattr(app.state, "replication", None))
+    if replication is not None:
+        await replication.ensure_started()
     resources = cast("ResourceManager", app.state.resources)
     if getattr(app.state, "offset_flush_loop", None) is None:
         flush_loop = OffsetFlushLoop(store=offsets)
@@ -259,6 +280,10 @@ async def start_background_tasks(app: FastAPI) -> None:
         loops = BackgroundLoops(scheduler=scheduler, runner=runner, purge=purge, sampler=sampler, cleanup=cleanup)
         resources.register(loops)
         app.state.background_loops = loops
+    if replication is not None and getattr(app.state, "replication_closer", None) is None:
+        closer = ReplicationCloser(coordinator=replication)
+        resources.register(closer)
+        app.state.replication_closer = closer
     _LOGGER.info(
         "background_loops_started",
         delay_scheduler=scheduler.running,

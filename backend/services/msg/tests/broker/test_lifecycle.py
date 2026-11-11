@@ -21,7 +21,14 @@ from fastapi import FastAPI
 
 from bms_msg.broker.deadletter import DatabaseDeadLetterQueue, InMemoryDeadLetterQueue
 from bms_msg.broker.delay import DelayRecord, DelayStore, InMemoryDelayStore
-from bms_msg.broker.lifecycle import BackgroundLoops, DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
+from bms_msg.broker.lifecycle import (
+    BackgroundLoops,
+    DelayCloser,
+    OffsetFlusher,
+    ReplicationCloser,
+    StorageCloser,
+    start_background_tasks,
+)
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.core.trace import TraceContext
@@ -105,6 +112,7 @@ def _app(
     *,
     purge: object | None = None,
     cleanup: object | None = None,
+    replication: object | None = None,
 ) -> FastAPI:
     """构造只带后台任务与资源管理器的空应用。
 
@@ -113,6 +121,7 @@ def _app(
         runner: 重放执行器。
         purge: 租户到期清扫服务替身（05-5；None 表示不装配）。
         cleanup: 删主题清理扫描替身（06-2；None 表示不装配）。
+        replication: 复制协调器替身（02-4；None 表示不装配）。
 
     Returns:
         FastAPI: 应用实例。
@@ -127,8 +136,27 @@ def _app(
         app.state.tenant_purge_service = purge
     if cleanup is not None:
         app.state.topic_cleanup_service = cleanup
+    if replication is not None:
+        app.state.replication = replication
     app.state.resources = ResourceManager()
     return app
+
+
+class _ReplicationStub:
+    """复制协调器替身（02-4：只验证后台循环的启动 / 停止接线）。"""
+
+    def __init__(self) -> None:
+        """初始化（未启动）。"""
+        self.started = False
+        self.closed = False
+
+    async def ensure_started(self) -> None:
+        """标记拉取 / 扫描循环已启动。"""
+        self.started = True
+
+    async def aclose(self) -> None:
+        """标记循环已取消。"""
+        self.closed = True
 
 
 class _PurgeStub:
@@ -180,6 +208,36 @@ async def test_start_hook_starts_and_stops_topic_cleanup(
     await app.state.resources.aclose()
 
     assert cleanup.stopped is True
+
+
+async def test_start_hook_starts_and_stops_replication(
+    delay_scheduler: DelayScheduler, replay_runner: ReplayRunner
+) -> None:
+    """02-4：启动钩子拉起复制拉取 / 扫描循环，停机随资源管理器取消。"""
+    replication = _ReplicationStub()
+    app = _app(delay_scheduler, replay_runner, replication=replication)
+
+    await start_background_tasks(app)
+
+    assert replication.started is True
+    closer = getattr(app.state, "replication_closer", None)
+    assert isinstance(closer, ReplicationCloser)
+
+    await app.state.resources.aclose()
+
+    assert replication.closed is True
+
+
+async def test_replication_closer_registered_once(delay_scheduler: DelayScheduler, replay_runner: ReplayRunner) -> None:
+    """重复执行钩子：复制回收句柄不重复登记。"""
+    replication = _ReplicationStub()
+    app = _app(delay_scheduler, replay_runner, replication=replication)
+
+    await start_background_tasks(app)
+    first = app.state.replication_closer
+    await start_background_tasks(app)
+
+    assert app.state.replication_closer is first
 
 
 async def test_start_hook_starts_loops_and_registers_resource(

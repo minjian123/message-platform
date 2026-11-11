@@ -8,7 +8,7 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
@@ -22,6 +22,7 @@ from bms_msg.broker.delay import DelayRecord, DelayStore
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageHeaderView, MessageStore
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.watermark import StorageMetrics
 from bms_msg.core.config import DELAY_QUOTA_PER_TENANT
@@ -56,7 +57,7 @@ _PAIR_SEPARATOR = "\x1f"
 
 @dataclass(frozen=True)
 class PartitionView(BaseValueObject):
-    """单分区只读运行态（HW / ISR 不在此投影内：响应层恒给可空占位）。"""
+    """单分区只读运行态（HW / ISR 来自复制协调器；复制关闭时 `hw=LEO`、`isr=[本节点]`）。"""
 
     partition_no: int
     leader: str | None
@@ -64,6 +65,8 @@ class PartitionView(BaseValueObject):
     committed: int | None
     lag: int | None
     owner: str | None
+    hw: int | None = None
+    isr: ConcurrentStableList[str] = field(default_factory=lambda: ConcurrentStableList[str]())
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,7 @@ class PartitionInspector(BaseFrameworkObject):
         offsets: OffsetStore,
         groups: GroupStore,
         partitions: PartitionRepository,
+        replication: ReplicationView | None = None,
     ) -> None:
         """初始化。
 
@@ -192,12 +196,14 @@ class PartitionInspector(BaseFrameworkObject):
             offsets: 位点存储（已提交位点）。
             groups: 组存储（分区持有者）。
             partitions: 分区元数据仓储（leader）。
+            replication: 复制运行态视图（02-4；None 表示复制组件未装配，hw / isr 为空）。
         """
         self._router = router
         self._messages = messages
         self._offsets = offsets
         self._groups = groups
         self._partitions = partitions
+        self._replication = replication
 
     async def describe(
         self,
@@ -251,14 +257,21 @@ class PartitionInspector(BaseFrameworkObject):
                 committed = await self._offsets.get(group=group or "", topic_id=topic_id, partition_no=number)
                 lag = leo - committed
                 owner = record.owner_of(number)
+            snapshot = (
+                None
+                if self._replication is None
+                else await self._replication.snapshot(topic_id=topic_id, partition_no=number)
+            )
             result.add(
                 PartitionView(
                     partition_no=number,
-                    leader=leaders.get(number),
+                    leader=snapshot.leader if snapshot is not None else leaders.get(number),
                     leo=leo,
                     committed=committed,
                     lag=lag,
                     owner=owner,
+                    hw=snapshot.hw if snapshot is not None else None,
+                    isr=ConcurrentStableList(snapshot.isr) if snapshot is not None else ConcurrentStableList(),
                 )
             )
         return PartitionDetailView(partition_count=int(resolved.partition_count), items=result)

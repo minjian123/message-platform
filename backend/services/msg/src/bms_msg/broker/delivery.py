@@ -41,11 +41,17 @@ from bms_msg.broker.deadletter import (
 )
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.topic_cache import TopicSnapshot
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.broker.watermark import StorageGate
-from bms_msg.core.config import ACKS_FIRE_AND_FORGET, DEFAULT_VISIBILITY_TIMEOUT_MS, MAX_DELIVERY_ATTEMPTS
+from bms_msg.core.config import (
+    ACKS_FIRE_AND_FORGET,
+    ACKS_PUBLISH_ALL,
+    DEFAULT_VISIBILITY_TIMEOUT_MS,
+    MAX_DELIVERY_ATTEMPTS,
+)
 from bms_msg.core.message_id import new_message_id
 from bms_msg.core.trace import trace_of
 from bms_msg.errors import (
@@ -263,6 +269,7 @@ class DeliveryService:
         waiter: DeliveryWaiter | None = None,
         gate: StorageGate | None = None,
         counter: DeliveryCounter | None = None,
+        replication: ReplicationView | None = None,
     ) -> None:
         """初始化。
 
@@ -277,6 +284,7 @@ class DeliveryService:
             waiter: 分区唤醒器（03-5；确认 / 死信归还额度后唤醒被暂停的流）。
             gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
             counter: 今日投递计数（05-2；None 表示不计数）。
+            replication: 复制运行态视图（02-4；None 表示关闭，行为与 8B_02 完全一致）。
         """
         self._store = store
         self._offsets = offsets
@@ -288,6 +296,7 @@ class DeliveryService:
         self._waiter = waiter
         self._gate = gate
         self._counter = counter if counter is not None else default_delivery_counter()
+        self._replication = replication
 
     def _notify(self, key: PartitionKey) -> None:
         """唤醒该分区上的长轮询 / 长驻流（额度归还或消息写入后）。
@@ -331,6 +340,7 @@ class DeliveryService:
             MsgTopicNotFoundError: 主题不存在、不属于当前租户或未启用（350001）。
             MsgPartitionCountInvalidError: 主题分区数非正（350009）。
             MsgStorageWatermarkExceededError: 存储水位超拒绝阈值或数据卷不可用（350022 / 507，02-6）。
+            MsgInsufficientReplicasError: `acks=all` 时 ISR 不足 / 提交等待超时 / 非 leader（350032，02-4）。
             ParamError: 载荷非合法 base64（10001）。
         """
         tenant.ensure_namespace(request.namespace)
@@ -340,7 +350,12 @@ class DeliveryService:
             # 02-6：水位判在**主题与分区判定之后、写入之前**——非法请求的错误码优先级不变，
             # 且只约束「外部生产」（延迟转投与重放直接走 store.append，不经本闸门）。
             self._gate.ensure_writable()
-        return await self._store.append(
+        if self._replication is not None:
+            # 02-4：`acks=all` 的 ISR 预检排在水位之后——盘满（507）比副本不足（503）更优先。
+            await self._replication.ensure_writable(
+                topic_id=int(topic.id), partition_no=partition_no, acks=request.acks
+            )
+        message = await self._store.append(
             topic_id=int(topic.id),
             partition_no=partition_no,
             message_id=new_message_id(),
@@ -354,6 +369,12 @@ class DeliveryService:
             compression=normalize_compression(request.compression),
             uncompressed_len=request.uncompressed_len,
         )
+        if self._replication is not None and request.acks == ACKS_PUBLISH_ALL:
+            # 02-4：`acks=all` 等本批最后一条被 ISR 提交（HW 越过它）；超时 / ISR 收缩即 350032。
+            await self._replication.wait_committed(
+                topic_id=int(topic.id), partition_no=partition_no, offset=message.offset
+            )
+        return message
 
     async def consume(self, *, tenant: CurrentTenant, request: ConsumeRequest) -> ConcurrentStableList[Delivery]:
         """拉取一批消息（缺省至少一次：登记在途、等 ack 才推进位点）。
@@ -381,6 +402,14 @@ class DeliveryService:
             start = await self._store.start_offset(topic_id=topic_id, partition_no=partition_no)
             if committed < start:
                 raise MsgMessageNotFoundError(f"位点已被保留期清理：{committed} < {start}")
+            visible_limit = (
+                None
+                if self._replication is None
+                else await self._replication.visible_limit(topic_id=topic_id, partition_no=partition_no)
+            )
+            if visible_limit is not None and committed >= visible_limit:
+                # 02-4：已提交位点已到 HW——未提交尾部对消费不可见，直接返空批（不调用 fetch）。
+                return ConcurrentStableList()
             return await self._collect(
                 request=request,
                 tenant=tenant,
@@ -390,6 +419,7 @@ class DeliveryService:
                 partition_no=partition_no,
                 committed=committed,
                 budget=self._budget(key, request),
+                visible_limit=visible_limit,
             )
 
     async def ack(self, *, tenant: CurrentTenant, request: AckRequest) -> int:
@@ -493,6 +523,7 @@ class DeliveryService:
         partition_no: int,
         committed: int,
         budget: InflightUsage | None = None,
+        visible_limit: int | None = None,
     ) -> ConcurrentStableList[Delivery]:
         """从已提交位点起按 offset 升序收集一批投递（分区内停等）。
 
@@ -507,6 +538,9 @@ class DeliveryService:
         **03-5 的字节额度只限制「投出前的条数」，不参与上述停等判定**：额度不足时停批，
         但绝不越过队头、绝不改变「谁先谁后」——顺序性与背压是两件事。
 
+        **02-4 的可见性上限**：`visible_limit` 非空时，读取上限夹到 `HW`；未提交记录不进内存、
+        不参与死信 / 在途判定，避免「读出来再丢弃」改变停等顺序。
+
         Args:
             request: 拉取请求。
             key: 投递状态键。
@@ -514,6 +548,7 @@ class DeliveryService:
             partition_no: 分区号。
             committed: 已提交位点。
             budget: 剩余额度（None 表示不限；条数为 0 即一条不投）。
+            visible_limit: 可见上限（不含；None 表示不夹取）。
 
         Returns:
             ConcurrentStableList[Delivery]: 本次投递（可能为空；按 offset 升序）。
@@ -526,13 +561,20 @@ class DeliveryService:
         contiguous = committed
         retried = False
         limit = request.max_messages if budget is None else min(request.max_messages, budget.messages)
+        if visible_limit is not None:
+            limit = min(limit, max(visible_limit - cursor, 0))
         bytes_left = None if budget is None else budget.bytes
         while len(delivered) < limit:
+            if visible_limit is not None and cursor >= visible_limit:
+                break
+            fetch_limit = limit - len(delivered)
+            if visible_limit is not None:
+                fetch_limit = min(fetch_limit, visible_limit - cursor)
             batch = await self._store.fetch(
                 topic_id=topic_id,
                 partition_no=partition_no,
                 from_offset=cursor,
-                max_messages=limit - len(delivered),
+                max_messages=fetch_limit,
             )
             if not batch:
                 break

@@ -3218,6 +3218,13 @@ export interface components {
          */
         PublishRequest: {
             /**
+             * Acks
+             * @description 写入确认档位：1 = leader 本地落盘即返回；all = ISR 确认并推进 HW 后返回（复制关闭时与 1 等价）
+             * @default 1
+             * @enum {string}
+             */
+            acks: "1" | "all";
+            /**
              * Compression
              * @description 压缩算法（缺省 none；帧路径由 flags.compressed 与它共同判定，两者必须自洽）
              */

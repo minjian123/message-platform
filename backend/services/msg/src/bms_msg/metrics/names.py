@@ -82,6 +82,8 @@ GAUGE_NAMES: ConcurrentStableList[str] = ConcurrentStableList(
         "msg_delay_pending",
         "msg_delay_segments",
         "msg_replay_tasks",
+        "msg_isr_size",
+        "msg_replication_lag_records",
     )
 )
 """瞬时值指标（可增可减）。"""
@@ -120,7 +122,9 @@ METRIC_HELP: ConcurrentStableDict[str, str] = ConcurrentStableDict(
         "msg_rate_limit_rejected_total": "限流拒绝次数（按级别 / 租户 / 主题）。",
         "msg_dlq_total": "当前死信存量。",
         "msg_dlq_growth_total": "累计转入死信条数。",
-        "msg_isr_shrink_total": "ISR 收缩次数（02-5 交付前恒 0）。",
+        "msg_isr_shrink_total": "ISR 收缩次数（02-4 起为真实计数）。",
+        "msg_isr_size": "分区当前 ISR 大小（含 leader；标签 topic_id 为数值主键）。",
+        "msg_replication_lag_records": "分区副本延迟条数（leader LEO 与 ISR follower LEO 的差值）。",
         "msg_disk_used_ratio": "磁盘使用率（多卷取最大值）。",
         "msg_storage_rejected_total": "存储水位拒绝次数（按原因）。",
         "msg_delay_pending": "延迟区待投条数（按租户）。",

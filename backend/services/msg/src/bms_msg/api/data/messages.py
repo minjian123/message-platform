@@ -56,6 +56,7 @@ from bms_msg.api.deps import (
     PartitionDirectoryDep,
     QuotaServiceDep,
     RateLimiterDep,
+    ReplicationDep,
     RetentionThrottleDep,
     StorageGateDep,
     TopicAclServiceDep,
@@ -74,6 +75,7 @@ from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.retention import RetentionService, RetentionThrottle
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.scheduler import DelayScheduler
@@ -139,10 +141,11 @@ PUBLISH_ERROR_CODES = ConcurrentStableList(
         int(MsgErrorCode.DELAY_QUOTA_EXCEEDED),
         int(MsgErrorCode.PAYLOAD_TOO_LARGE),
         int(MsgErrorCode.STORAGE_WATERMARK_EXCEEDED),
+        int(MsgErrorCode.INSUFFICIENT_REPLICAS),
     ]
 )
 """发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`，03-2 追加超限 `350006`，
-02-6 追加存储水位拒绝 `350022`）。"""
+02-6 追加存储水位拒绝 `350022`，02-4 追加 ISR 不足 / 提交超时 `350032`）。"""
 
 CONSUME_ERROR_CODES = ConcurrentStableList(
     [
@@ -246,6 +249,7 @@ def delivery_service(
     directory: PartitionDirectory | None = None,
     gate: StorageGate | None = None,
     counter: DeliveryCounter | None = None,
+    replication: ReplicationView | None = None,
 ) -> DeliveryService:
     """组装投递服务（请求级主题仓储 + 进程级存储 / 位点 / 死信 / 投递状态 / 背压参数）。
 
@@ -264,6 +268,7 @@ def delivery_service(
         directory: 分区目录登记表（02-1）。
         gate: 存储水位闸门（02-6；None 表示不判，内存实现直连与既有用例不受影响）。
         counter: 今日投递计数（05-2；None 表示不计数）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭、不夹取）。
 
     Returns:
         DeliveryService: 投递服务。
@@ -278,6 +283,7 @@ def delivery_service(
         waiter=waiter,
         gate=gate,
         counter=counter,
+        replication=replication,
     )
 
 
@@ -718,6 +724,7 @@ async def publish(
     usage: UsageSnapshotDep,
     counter: DeliveryCounterDep,
     acl: TopicAclServiceDep,
+    replication: ReplicationDep,
 ) -> ApiResponse[PublishResult]:
     """发布一条消息（缺省立即入日志；带 `delay_level` 则先进延迟区、到期才入日志）。
 
@@ -804,6 +811,7 @@ async def publish(
         directory=directory,
         gate=gate,
         counter=counter,
+        replication=replication,
     ).publish(tenant=tenant, request=req)
     _log_published(
         request=req,
@@ -875,6 +883,7 @@ async def consume(
     usage: UsageSnapshotDep,
     counter: DeliveryCounterDep,
     acl: TopicAclServiceDep,
+    replication: ReplicationDep,
 ) -> ApiResponse[ConsumeResult]:
     """拉取一批消息（成员制 + 分区内停等 + 长轮询 + inflight 双阈值）。
 
@@ -937,6 +946,7 @@ async def consume(
             waiter=waiter,
             directory=directory,
             counter=counter,
+            replication=replication,
         ).consume(tenant=tenant, request=req)
         measured = state.usage(state_key)
         metrics.observe_inflight(tenant=tenant.code, topic=req.topic, usage=measured)

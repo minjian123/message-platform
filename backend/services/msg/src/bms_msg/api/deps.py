@@ -32,6 +32,7 @@ from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetEnumerator, OffsetPurger, OffsetResetter, OffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayRunner, UowFactory
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
@@ -79,6 +80,7 @@ __all__ = [
     "QuotaServiceDep",
     "RateLimiterDep",
     "ReplayRunnerDep",
+    "ReplicationDep",
     "RetentionThrottleDep",
     "RpcRegistryDep",
     "StorageGateDep",
@@ -578,6 +580,25 @@ def get_storage_gate(request: Request) -> StorageGate | None:
 
 StorageGateDep = Annotated[StorageGate | None, Depends(get_storage_gate)]
 """路由参数写法：`gate: StorageGateDep`（存储水位闸门；None 表示不判）。"""
+
+
+def get_replication(request: Request) -> ReplicationView | None:
+    """取复制运行态视图（进程级单例；02-4）。
+
+    **缺省 None 是设计**：最小测试应用与「内存实现直连」场景没有复制组件，此时按既有行为
+    读取 `[start, LEO)`；生产装配总会注入 `ReplicationCoordinator`。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        ReplicationView | None: 复制视图；未装配返回 None。
+    """
+    return cast("ReplicationView | None", getattr(request.app.state, "replication", None))
+
+
+ReplicationDep = Annotated[ReplicationView | None, Depends(get_replication)]
+"""路由参数写法：`replication: ReplicationDep`（None 表示复制关闭、不夹取）。"""
 
 
 def get_rpc_registry(request: Request) -> RpcRegistry:

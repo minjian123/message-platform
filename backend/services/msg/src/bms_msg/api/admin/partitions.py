@@ -21,9 +21,11 @@ from bms_msg.api.deps import (
     GroupStoreDep,
     MessageStoreDep,
     OffsetStoreDep,
+    ReplicationDep,
     TopicAclServiceDep,
 )
 from bms_msg.broker.admin_view import PartitionInspector
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.router import TopicRouter
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
@@ -59,6 +61,7 @@ def _inspector(
     messages: MessageStoreDep,
     offsets: OffsetStoreDep,
     groups: GroupStoreDep,
+    replication: ReplicationView | None = None,
 ) -> PartitionInspector:
     """组装分区只读投影。
 
@@ -67,6 +70,7 @@ def _inspector(
         messages: 消息存储。
         offsets: 位点存储。
         groups: 组存储。
+        replication: 复制运行态视图（02-4；None 表示复制组件未装配）。
 
     Returns:
         PartitionInspector: 只读投影。
@@ -78,6 +82,7 @@ def _inspector(
         offsets=offsets,
         groups=groups,
         partitions=PartitionRepository(session),
+        replication=replication,
     )
 
 
@@ -89,6 +94,7 @@ async def list_partitions(
     offsets: OffsetStoreDep,
     groups: GroupStoreDep,
     acl: TopicAclServiceDep,
+    replication: ReplicationDep,
     namespace: Annotated[str, Query(max_length=64, description="命名空间")],
     topic: Annotated[str, Query(max_length=200, description="主题名")],
     partition: Annotated[int | None, Query(description="分区号过滤（缺省全部）")] = None,
@@ -99,7 +105,7 @@ async def list_partitions(
     命名空间非法 350010，主题不存在 350001，分区越界 350009，组不存在 350013。
     """
     await acl.authorize(tenant_id=int(tenant.tenant_id), namespace=namespace, topic=topic, action=ACL_ACTION_DESCRIBE)
-    detail = await _inspector(uow, messages, offsets, groups).describe(
+    detail = await _inspector(uow, messages, offsets, groups, replication).describe(
         tenant=tenant,
         namespace=namespace,
         topic=topic,
@@ -111,8 +117,8 @@ async def list_partitions(
             partition=view.partition_no,
             leader=view.leader,
             leo=view.leo,
-            hw=None,
-            isr=ConcurrentStableList(),
+            hw=view.hw,
+            isr=view.isr,
             committed=view.committed,
             lag=view.lag,
             owner=view.owner,

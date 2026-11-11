@@ -2949,6 +2949,16 @@
         "additionalProperties": false,
         "description": "发布请求（`tenant` 不在请求体：由数据面解析链注入，防客户端自报冒充）。",
         "properties": {
+          "acks": {
+            "default": "1",
+            "description": "写入确认档位：1 = leader 本地落盘即返回；all = ISR 确认并推进 HW 后返回（复制关闭时与 1 等价）",
+            "enum": [
+              "1",
+              "all"
+            ],
+            "title": "Acks",
+            "type": "string"
+          },
           "compression": {
             "anyOf": [
               {
@@ -9568,7 +9578,8 @@
           350012,
           350015,
           350006,
-          350022
+          350022,
+          350032
         ]
       }
     },
@@ -10533,7 +10544,8 @@
           350012,
           350015,
           350006,
-          350022
+          350022,
+          350032
         ]
       }
     },

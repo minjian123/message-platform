@@ -65,6 +65,7 @@ from bms_msg.api.deps import (
     MessageStoreDep,
     OffsetStoreDep,
     PartitionDirectoryDep,
+    ReplicationDep,
     RetentionThrottleDep,
     StreamRegistryDep,
     StreamTuningDep,
@@ -91,6 +92,7 @@ from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.replay import UowFactory
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.broker.transport import (
@@ -257,6 +259,7 @@ async def _pull(
     backpressure: BackpressureTuning,
     cache: TopicCache,
     directory: PartitionDirectory | None = None,
+    replication: ReplicationView | None = None,
 ) -> ConcurrentStableList[MessageItem]:
     """开一个短会话拉一批（每轮现开现关，不占请求会话）。
 
@@ -276,6 +279,7 @@ async def _pull(
         backpressure: inflight 双阈值。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用，命中不查库）。
         directory: 分区目录登记表（02-1）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
     Returns:
         ConcurrentStableList[MessageItem]: 本批消息（可能为空）。
@@ -298,6 +302,7 @@ async def _pull(
             backpressure=backpressure,
             waiter=waiter,
             directory=directory,
+            replication=replication,
         ).consume(tenant=tenant, request=request)
     return ConcurrentStableList(
         message_item(delivery.message, request.topic, delivery.delivery_count) for delivery in delivered
@@ -345,6 +350,7 @@ async def _stream_core(
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
+    replication: ReplicationView | None = None,
 ) -> AsyncGenerator[StreamEvent]:
     """长驻流核心：等待 / 背压 / 预取 / 指标只在这里写一遍（SSE 与帧流只做编码）。
 
@@ -371,6 +377,7 @@ async def _stream_core(
         directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
     Yields:
         StreamEvent: 流事件（编码由调用方决定）。
@@ -438,6 +445,7 @@ async def _stream_core(
                         backpressure=backpressure,
                         cache=cache,
                         directory=directory,
+                        replication=replication,
                     )
             except MsgError as exc:
                 reason = "member_lost" if exc.code in _MEMBER_LOST_CODES else "error"
@@ -462,6 +470,7 @@ async def _stream_core(
                             backpressure=backpressure,
                             cache=cache,
                             directory=directory,
+                            replication=replication,
                         )
                     )
                 mark = time.monotonic()
@@ -521,6 +530,7 @@ async def stream_events(
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
+    replication: ReplicationView | None = None,
 ) -> AsyncGenerator[bytes]:
     """SSE 编码器（`text/event-stream`；核心见 `_stream_core`）。
 
@@ -544,6 +554,7 @@ async def stream_events(
         directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
     Yields:
         bytes: SSE 事件（`event: <名>\\ndata: <单行 JSON>\\n\\n`）或注释行。
@@ -568,6 +579,7 @@ async def stream_events(
         directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
+        replication=replication,
     )
     try:
         async for event in core:
@@ -621,6 +633,7 @@ async def stream_frames(
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
+    replication: ReplicationView | None = None,
 ) -> AsyncGenerator[bytes]:
     """帧流编码器（`application/x-msg-frame`；核心见 `_stream_core`）。
 
@@ -672,6 +685,7 @@ async def stream_frames(
         directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
+        replication=replication,
     )
     try:
         async for event in core:
@@ -774,6 +788,7 @@ async def subscribe(
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
     acl: TopicAclServiceDep,
+    replication: ReplicationDep,
 ) -> StreamingResponse:
     """订阅一条分区（SSE 长驻流，server streaming）。
 
@@ -829,6 +844,7 @@ async def subscribe(
             cache=cache,
             topic_id=topic_id,
             partition_no=partition_no,
+            replication=replication,
         ),
         media_type="text/event-stream",
         headers=_STREAM_HEADERS,
@@ -905,6 +921,7 @@ async def subscribe_frames(
     throttle: RetentionThrottleDep,
     directory: PartitionDirectoryDep,
     acl: TopicAclServiceDep,
+    replication: ReplicationDep,
 ) -> StreamingResponse:
     """订阅一条分区（帧流形态，`application/x-msg-frame`）。
 
@@ -981,6 +998,7 @@ async def subscribe_frames(
             directory=directory,
             topic_id=topic_id,
             partition_no=partition_no,
+            replication=replication,
         ),
         media_type=FRAME_MEDIA_TYPE,
         headers=_STREAM_HEADERS,

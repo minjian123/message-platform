@@ -18,6 +18,12 @@ from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.offset import FileOffsetStore
+from bms_msg.broker.replication import (
+    InProcessReplicaTransport,
+    ReplicatedMessageStore,
+    ReplicationCoordinator,
+    ReplicationMetrics,
+)
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import NotifyingMessageStore
@@ -138,10 +144,12 @@ def test_application_assembles_data_plane_state() -> None:
             "/msg/subscribe",
             "/msg/connection",
         } <= paths
-        # 03-5 起存储外面包了一层「写入即唤醒」；02-1 起内层换成文件段实现（端口与行为不变）。
-        # **顺序是硬约束**：通知包装必须最外层，装反了不报错、只是长轮询退化为「等到超时」。
+        # 03-5 起存储外面包了一层「写入即唤醒」；02-4 在内层再包一层复制推进；02-1 最内层是文件段实现。
+        # **顺序是硬约束**：通知包装必须最外层、复制推进在它内层——先更新 HW，再唤醒长轮询。
         assert isinstance(app.state.message_store, NotifyingMessageStore)
-        assert isinstance(app.state.message_store.inner, FileMessageStore)
+        assert isinstance(app.state.message_store.inner, ReplicatedMessageStore)
+        assert isinstance(app.state.message_store.inner.inner, FileMessageStore)
+        assert isinstance(app.state.replication, ReplicationCoordinator)
         assert isinstance(app.state.partition_directory, PartitionDirectory)
         # 02-3 起位点换成文件实现（单文件双槽 + 内存为准 + 后台刷盘），端口与注入点不变。
         assert isinstance(app.state.offset_store, FileOffsetStore)
@@ -159,4 +167,26 @@ def test_application_assembles_data_plane_state() -> None:
         assert callable(app.state.uow_factory), "长驻流每轮拉取用的工作单元工厂须在装配期注入"
     finally:
         # 解除构建冻结，避免后续用例因「注册表已构建」无法登记
+        registry.reset()
+
+
+@pytest.mark.kiwi_id(2484)
+def test_application_assembles_replication_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-4：开启复制时按环境变量装配协调器（多节点走进程内传输并告警提示 02-8）。"""
+    monkeypatch.setenv("MSG_REPLICATION_ENABLED", "true")
+    monkeypatch.setenv("MSG_REPLICATION_NODE_ID", "n1")
+    monkeypatch.setenv("MSG_REPLICATION_NODES", "n1,n2")
+    monkeypatch.setenv("MSG_REPLICATION_FACTOR", "2")
+    monkeypatch.setenv("MSG_REPLICATION_MIN_INSYNC", "2")
+    registry = default_plugin_registry()
+    registry.reset()
+    try:
+        app = ApplicationFactory().create(None)
+        assert isinstance(app.state.replication, ReplicationCoordinator)
+        assert app.state.replication.enabled is True
+        assert app.state.replication.config.replication_factor == 2
+        assert list(app.state.replication.config.nodes) == ["n1", "n2"]
+        assert isinstance(app.state.replication_metrics, ReplicationMetrics)
+        assert isinstance(app.state.replication_transport, InProcessReplicaTransport)
+    finally:
         registry.reset()

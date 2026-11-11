@@ -19,6 +19,7 @@ from prometheus_client.metrics_core import (
     Metric,
 )
 
+from bms_msg.broker.replication import ReplicationMetrics, ReplicationMetricsSnapshot
 from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.metrics.names import LATENCY_BUCKETS_MS, METRIC_HELP
 from bms_msg.metrics.traffic import PAIR_SEPARATOR, TrafficMetrics
@@ -56,6 +57,7 @@ class MsgMetricsCollector:
         backpressure: SnapshotSource,
         lifecycle: SnapshotSource,
         purge: SnapshotSource,
+        replication: ReplicationMetrics | None = None,
     ) -> None:
         """初始化。
 
@@ -68,6 +70,7 @@ class MsgMetricsCollector:
             backpressure: 背压采集器。
             lifecycle: 租户生命周期计数。
             purge: 租户到期清理计数。
+            replication: 复制指标采集点（02-4；None 表示复制组件未装配）。
         """
         self._service = service
         self._traffic = traffic
@@ -77,6 +80,7 @@ class MsgMetricsCollector:
         self._backpressure = backpressure
         self._lifecycle = lifecycle
         self._purge = purge
+        self._replication = replication
 
     def describe(self) -> ConcurrentStableList[Metric]:
         """产出指标名集合（注册期冲突检测；只读、无副作用）。
@@ -103,6 +107,7 @@ class MsgMetricsCollector:
         self._collect_counters(families, name="msg_tenant_lifecycle_events_total", source=self._lifecycle)
         self._collect_counters(families, name="msg_tenant_purge_total", source=self._purge)
         families.add(self._isr_family())
+        self._collect_replication(families)
         return families
 
     def _collect_traffic(self, families: ConcurrentStableList[Metric]) -> None:
@@ -283,10 +288,35 @@ class MsgMetricsCollector:
             families.add(family)
 
     def _isr_family(self) -> Metric:
-        """ISR 收缩计数（02-5 交付前恒 0，规则先就位）。"""
+        """ISR 收缩计数（02-4 起读真实计数；未装配复制时为 0）。"""
         family = CounterMetricFamily("msg_isr_shrink_total", _help("msg_isr_shrink_total"), labels=["service"])
-        family.add_metric([self._service], 0.0)
+        total = 0 if self._replication is None else self._replication.shrink_total
+        family.add_metric([self._service], float(total))
         return family
+
+    def _collect_replication(self, families: ConcurrentStableList[Metric]) -> None:
+        """ISR 大小与副本延迟（02-4；按 `topic_id` + `partition` 分键）。
+
+        Args:
+            families: 指标家族收集列表（原地追加）。
+        """
+        if self._replication is None:
+            return
+        snapshot: ReplicationMetricsSnapshot = self._replication.snapshot()
+        if not snapshot.rows:  # pragma: no cover - 无分区时无可输出行
+            return
+        isr = GaugeMetricFamily("msg_isr_size", _help("msg_isr_size"), labels=["service", "topic_id", "partition"])
+        lag = GaugeMetricFamily(
+            "msg_replication_lag_records",
+            _help("msg_replication_lag_records"),
+            labels=["service", "topic_id", "partition"],
+        )
+        for row in snapshot.rows:
+            labels = [self._service, str(row.topic_id), str(row.partition_no)]
+            isr.add_metric(labels, float(row.isr_size))
+            lag.add_metric(labels, float(row.lag_records))
+        families.add(isr)
+        families.add(lag)
 
     def _decode_key(self, key: str) -> ConcurrentStableList[str]:
         """把事件点采集器的内部键还原成业务标签值列表。

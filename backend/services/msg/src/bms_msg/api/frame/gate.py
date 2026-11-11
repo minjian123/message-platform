@@ -64,6 +64,7 @@ from bms_msg.api.deps import (
     PartitionDirectoryDep,
     QuotaServiceDep,
     RateLimiterDep,
+    ReplicationDep,
     RetentionThrottleDep,
     StorageGateDep,
     TopicAclServiceDep,
@@ -82,6 +83,7 @@ from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import OffsetStore
+from bms_msg.broker.replication import ReplicationView
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.topic_cache import TopicCache
@@ -389,6 +391,7 @@ async def _invoke(
     usage: UsageSnapshotService,
     counter: DeliveryCounter,
     acl: TopicAclService,
+    replication: ReplicationView | None,
 ) -> object:
     """按帧类型调用数据面同一批函数（业务语义的唯一出处）。
 
@@ -412,6 +415,7 @@ async def _invoke(
         throttle: 保留清理节流窗口表（01-7）。
         directory: 分区目录登记表（02-1）。
         gate: 存储水位闸门（02-6；None 表示未装配，不判）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
     Returns:
         object: 结果模型。
@@ -440,6 +444,7 @@ async def _invoke(
             usage=usage,
             counter=counter,
             acl=acl,
+            replication=replication,
         )
     elif frame_type == int(FrameType.CONSUME):
         response = await consume(
@@ -461,6 +466,7 @@ async def _invoke(
             usage=usage,
             counter=counter,
             acl=acl,
+            replication=replication,
         )
     elif frame_type == int(FrameType.ACK):
         response = await ack(
@@ -525,6 +531,7 @@ async def _handle_frame(
     usage: UsageSnapshotService,
     counter: DeliveryCounter,
     acl: TopicAclService,
+    replication: ReplicationView | None,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -551,6 +558,7 @@ async def _handle_frame(
         throttle: 保留清理节流窗口表（01-7）。
         directory: 分区目录登记表（02-1）。
         gate: 存储水位闸门（02-6；None 表示未装配，不判）。
+        replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -628,6 +636,7 @@ async def _handle_frame(
             usage=usage,
             counter=counter,
             acl=acl,
+            replication=replication,
         )
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -681,6 +690,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
         usage: UsageSnapshotDep,
         counter: DeliveryCounterDep,
         topic_acl: TopicAclServiceDep,
+        replication: ReplicationDep,
     ) -> None:
         """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
 
@@ -703,6 +713,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             throttle: 保留清理节流窗口表（01-7）。
             directory: 分区目录登记表（02-1）。
             gate: 存储水位闸门（02-6；None 表示未装配，不判）。
+            replication: 复制运行态视图（02-4；None 表示复制关闭）。
 
         Raises:
             FrameHandled: 帧请求已处理完毕（携带响应）。
@@ -737,6 +748,7 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             usage=usage,
             counter=counter,
             acl=topic_acl,
+            replication=replication,
         )
         raise FrameHandled(response)
 

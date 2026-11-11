@@ -198,6 +198,7 @@ class NotifyingMessageStore(MessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """追加一条消息并唤醒该分区（参数与返回值原样透传）。
 
@@ -214,6 +215,7 @@ class NotifyingMessageStore(MessageStore):
             content_type: 消息体内容类型。
             compression: 压缩算法。
             uncompressed_len: 解压后字节数（生产者可选声明）。
+            epoch: leader 任期（02-4；原样透传）。
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
@@ -231,6 +233,7 @@ class NotifyingMessageStore(MessageStore):
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
         self._waiter.notify((topic_id, partition_no))
         return message

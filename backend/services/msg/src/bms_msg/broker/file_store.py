@@ -442,6 +442,7 @@ class _PartitionLog:
         content_type: str,
         compression: str,
         uncompressed_len: int | None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """追加一条消息并分配 offset（调用方须持锁）。
 
@@ -459,6 +460,7 @@ class _PartitionLog:
             content_type: 内容类型。
             compression: 压缩算法。
             uncompressed_len: 解压后字节数（可空）。
+            epoch: leader 任期（02-4；follower 复制落盘时沿用 leader 值）。
 
         Returns:
             StoredMessage: 含分配到的 offset 的完整记录。
@@ -478,6 +480,7 @@ class _PartitionLog:
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
         blob = encode_record(header=header, payload=payload)
         self._ensure_directory()
@@ -505,6 +508,7 @@ class _PartitionLog:
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
 
     def read(self, *, from_offset: int, max_messages: int) -> ConcurrentStableList[StoredMessage]:
@@ -1141,6 +1145,7 @@ def _to_message(parsed: ParsedRecord, *, offset: int) -> StoredMessage:
         content_type=header.content_type or DEFAULT_CONTENT_TYPE,
         compression=header.compression or COMPRESSION_NONE,
         uncompressed_len=header.uncompressed_len,
+        epoch=header.epoch,
     )
 
 
@@ -1222,6 +1227,7 @@ class FileMessageStore(MessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """追加一条消息并分配 offset。
 
@@ -1238,6 +1244,7 @@ class FileMessageStore(MessageStore):
             content_type: 内容类型。
             compression: 压缩算法。
             uncompressed_len: 解压后字节数（可空）。
+            epoch: leader 任期（02-4；follower 复制落盘时沿用 leader 值）。
 
         Returns:
             StoredMessage: 含分配到的 offset 的完整记录。
@@ -1262,6 +1269,7 @@ class FileMessageStore(MessageStore):
                 content_type=content_type,
                 compression=compression,
                 uncompressed_len=uncompressed_len,
+                epoch=epoch,
             )
         self._remember_log_id(
             log_id=log_id, topic_id=int(topic_id), partition_no=int(partition_no), offset=message.offset

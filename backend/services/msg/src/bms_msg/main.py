@@ -75,6 +75,13 @@ from bms_msg.broker.lifecycle import DelayCloser, OffsetFlusher, StorageCloser, 
 from bms_msg.broker.metrics import BackpressureMetrics
 from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
+from bms_msg.broker.replication import (
+    InProcessReplicaTransport,
+    ReplicaConfig,
+    ReplicatedMessageStore,
+    ReplicationCoordinator,
+    ReplicationMetrics,
+)
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
 from bms_msg.broker.topic_cache import TopicCache
@@ -91,6 +98,7 @@ from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.services.replication_topology import DbReplicaTopologyLoader
 from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
 from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
@@ -242,7 +250,36 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 02-3：双向依赖只能后绑——store 构造时要 realigner，位点判越界时要 store 的 LEO。
         offset_store.bind_ceiling(file_store)
         app.state.file_store = file_store
-        app.state.message_store = NotifyingMessageStore(file_store, waiter)
+        # 02-4：复制运行态（协调器 + 指标 + 拓扑加载器 + 进程内传输）。
+        # **store 传未包装的 file_store**：协调器内 follower 落盘直连存储，避免「包装器再通知自己」递归。
+        replica_config = ReplicaConfig.from_env()
+        replication_metrics = ReplicationMetrics()
+        replication_transport = InProcessReplicaTransport()
+        replication = ReplicationCoordinator(
+            config=replica_config,
+            store=file_store,
+            transport=replication_transport,
+            topology_loader=DbReplicaTopologyLoader(
+                uow_factory=platform_uow_factory(app),
+                ttl_ms=replica_config.topology_ttl_ms,
+            ),
+            waiter=waiter,
+            metrics=replication_metrics,
+        )
+        replication_transport.register(replica_config.node_id, replication)
+        app.state.replication = replication
+        app.state.replication_metrics = replication_metrics
+        app.state.replication_transport = replication_transport
+        if replica_config.enabled and len(replica_config.nodes) > 1:
+            _LOGGER.warning(
+                "msg_replication_transport_inprocess",
+                nodes=len(replica_config.nodes),
+                detail="当前只有进程内传输；跨实例复制需 02-8 的网络实现，启用前请确认部署形态",
+            )
+        # **包装顺序硬约束**：复制推进在内层、唤醒在外层（先更新 HW，再唤醒长轮询）。
+        app.state.message_store = NotifyingMessageStore(
+            ReplicatedMessageStore(file_store, replication=replication), waiter
+        )
         # 02-7：延迟区换成**文件实现**（`.delay` 独立序号段），端口签名不变；
         # 去重源与耐久点都指向同一个 `file_store`（不另建实例，避免读到两份段状态）。
         app.state.delay_metrics = DelayMetrics()
@@ -385,6 +422,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             backpressure=app.state.backpressure_metrics,
             lifecycle=get_tenant_lifecycle_metrics(),
             purge=get_tenant_purge_metrics(),
+            replication=getattr(app.state, "replication_metrics", None),
         )
         registered = app.state.metrics.register_collector(collector)
         if not registered:

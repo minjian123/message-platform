@@ -29,3 +29,6 @@ class MsgPartition(BaseModel):
     checkpoint_leo: Mapped[int] = mapped_column(BigInteger, default=0, comment="检查点 LEO（周期落库；实时值在内存）")
     checkpoint_hw: Mapped[int] = mapped_column(BigInteger, default=0, comment="检查点 HW（提交位点）")
     epoch: Mapped[int] = mapped_column(Integer, default=0, comment="领导者任期（8B_05 防脑裂；本阶段预留）")
+    min_insync_replicas: Mapped[int] = mapped_column(
+        Integer, default=0, comment="acks=all 的最小同步副本数（0 = 继承全局；02-4）"
+    )

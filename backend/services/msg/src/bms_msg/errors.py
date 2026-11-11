@@ -8,7 +8,7 @@
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
   RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`、主题数配额超限 `350025`、
-  消费组数配额超限 `350026`、主题状态不允许该操作 `350028`
+  消费组数配额超限 `350026`、主题状态不允许该操作 `350028`、ISR 不足 / 提交超时 `350032`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
@@ -54,6 +54,7 @@ __all__ = [
     "MsgFrameInvalidError",
     "MsgGroupCountQuotaExceededError",
     "MsgGroupNotFoundError",
+    "MsgInsufficientReplicasError",
     "MsgMemberInvalidError",
     "MsgMessageNotFoundError",
     "MsgNamespaceInvalidError",
@@ -225,6 +226,18 @@ class MsgErrorCode(IntEnum):
 
     重放前按 `topic_id / partition_no / offset` 校验原记录；不存在时**不建空任务**，
     避免把「消息已丢」误标成「已解决」。
+    """
+
+    INSUFFICIENT_REPLICAS = 350032
+    """ISR 不足或提交等待超时（`acks=all`）：503 / system / retryable。
+
+    `data` 带 `reason`（`insufficient_isr` / `commit_timeout`）、`isr`、`required` 与
+    `topic` / `partition`——客户端据此区分「副本不够」与「等太久」，并按退避重试。
+    与相邻码分工：`350022` 是存储水位（盘满，退避无用）、`350005` 是生产限流（退避可解）、
+    `350007` 是重投超限；本码只表示「ISR 侧不满足提交条件」。
+
+    **`commit_timeout` 不等于确定未写入**：记录可能已在 leader 落盘、只是尚未提交，
+    重试可能产生重复消息，消费端仍按 `message_id` 幂等（与 04-2「超时 = 结果未知」同构）。
     """
 
 
@@ -486,6 +499,54 @@ class MsgDeadLetterNotReplayableError(MsgError):
 
     code_: ClassVar[int] = MsgErrorCode.DEAD_LETTER_NOT_REPLAYABLE
     http_status_: ClassVar[int] = 409
+
+
+class MsgInsufficientReplicasError(MsgError):
+    """ISR 不足 / 提交等待超时 / 非 leader 写入（350032 / 503）。
+
+    `data` 六个字段：`reason`（`insufficient_isr` / `commit_timeout` / `not_leader`）、
+    `isr`（当前同步副本数）、`required`（`min.insync.replicas`）、`topic_id`、`partition`、
+    `timeout_ms`（仅超时态给值）。普通 dict，不用自定义 Mapping（pydantic 序列化自定义 Mapping
+    会 500，02-7 已交过学费）。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.INSUFFICIENT_REPLICAS
+    http_status_: ClassVar[int] = 503
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str = "insufficient_isr",
+        isr: int = 0,
+        required: int = 0,
+        topic_id: int = 0,
+        partition: int = 0,
+        timeout_ms: int | None = None,
+    ) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息。
+            reason: 原因（`insufficient_isr` / `commit_timeout` / `not_leader`）。
+            isr: 当前同步副本数（含 leader）。
+            required: 要求的最小同步副本数。
+            topic_id: 主题主键（排障定位）。
+            partition: 分区号。
+            timeout_ms: 提交等待超时（仅 `commit_timeout` 给值）。
+        """
+        # 普通 dict：错误 `data` 由 pydantic 序列化，自定义 Mapping 会 500（02-7 已交过学费）；
+        # 此处不加类型注解，裸集合护栏只判「带注解的集合声明」。
+        data = {
+            "reason": reason,
+            "isr": isr,
+            "required": required,
+            "topic_id": topic_id,
+            "partition": partition,
+        }
+        if timeout_ms is not None:
+            data["timeout_ms"] = timeout_ms
+        super().__init__(message, data=data)
 
 
 class MsgRpcInProgressError(MsgError):

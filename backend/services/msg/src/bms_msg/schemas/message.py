@@ -18,7 +18,7 @@ offset（消息尚未进入 offset 空间），故 `offset` 放宽为可空、�
 import base64
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
@@ -33,6 +33,7 @@ from pydantic import Field, PrivateAttr, field_serializer
 from bms_msg.core.config import (
     ACKS_AT_LEAST_ONCE,
     ACKS_FIRE_AND_FORGET,
+    ACKS_PUBLISH_LOCAL,
     DEFAULT_FETCH_MESSAGES,
     MAX_FETCH_MESSAGES,
     MESSAGE_KEY_MAX_LENGTH,
@@ -157,6 +158,10 @@ class PublishRequest(BaseSchema):
     )
     uncompressed_len: int | None = Field(
         default=None, ge=0, description="解压后字节数（可选声明；broker 只透传，不参与上限判定）"
+    )
+    acks: Literal["1", "all"] = Field(
+        default=ACKS_PUBLISH_LOCAL,
+        description="写入确认档位：1 = leader 本地落盘即返回；all = ISR 确认并推进 HW 后返回（复制关闭时与 1 等价）",
     )
 
     _raw_payload: bytes | None = PrivateAttr(default=None)

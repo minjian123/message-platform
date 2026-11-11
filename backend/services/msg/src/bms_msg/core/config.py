@@ -334,6 +334,91 @@ RECONNECT_JITTER_RATIO = 0.2
 """重连抖动比例（±20%）：防「同一时刻断开的客户端同时重连」形成脉冲。"""
 
 # ---------------------------------------------------------------------------
+# 02-4 副本与 ISR 复制：开关 / 节点 / 提交 / ISR 阈值 / 拉取
+# ---------------------------------------------------------------------------
+
+REPLICATION_ENABLED_ENV = "MSG_REPLICATION_ENABLED"
+"""复制总开关环境变量（缺省关闭：单实例行为与 8B_02 完全一致）。"""
+
+REPLICATION_NODE_ID_ENV = "MSG_REPLICATION_NODE_ID"
+"""本节点标识环境变量（缺省 `local`）。"""
+
+REPLICATION_NODES_ENV = "MSG_REPLICATION_NODES"
+"""集群节点标识列表环境变量（逗号分隔；开启复制时必填）。"""
+
+REPLICATION_FACTOR_ENV = "MSG_REPLICATION_FACTOR"
+"""配置兜底的副本数环境变量（缺省 1）。"""
+
+REPLICATION_MIN_INSYNC_ENV = "MSG_REPLICATION_MIN_INSYNC"
+"""全局最小同步副本数环境变量（缺省 1）。"""
+
+REPLICATION_LAG_TIME_MS_ENV = "MSG_REPLICATION_LAG_TIME_MS"
+"""ISR 时间阈值环境变量（缺省 10s）。"""
+
+REPLICATION_LAG_RECORDS_ENV = "MSG_REPLICATION_LAG_RECORDS"
+"""ISR 条数阈值环境变量（缺省 10 000）。"""
+
+REPLICATION_FETCH_INTERVAL_MS_ENV = "MSG_REPLICATION_FETCH_INTERVAL_MS"
+"""follower 拉取周期环境变量（缺省 200ms）。"""
+
+REPLICATION_FETCH_BATCH_ENV = "MSG_REPLICATION_FETCH_BATCH"
+"""单次拉取条数上限环境变量（缺省 100）。"""
+
+REPLICATION_COMMIT_TIMEOUT_MS_ENV = "MSG_REPLICATION_COMMIT_TIMEOUT_MS"
+"""`acks=all` 提交等待超时环境变量（缺省 5000ms）。"""
+
+REPLICATION_SCAN_INTERVAL_MS_ENV = "MSG_REPLICATION_SCAN_INTERVAL_MS"
+"""leader ISR 扫描周期环境变量（缺省 1000ms）。"""
+
+REPLICATION_TOPOLOGY_TTL_MS_ENV = "MSG_REPLICATION_TOPOLOGY_TTL_MS"
+"""分区拓扑缓存 TTL 环境变量（缺省 5000ms）。"""
+
+DEFAULT_REPLICATION_NODE_ID = "local"
+"""单实例缺省节点标识（管理面 `isr=[local]` 与关闭态一致）。"""
+
+DEFAULT_REPLICATION_FACTOR = 1
+"""配置兜底副本数缺省值。"""
+
+DEFAULT_REPLICATION_MIN_INSYNC = 1
+"""全局最小同步副本数缺省值。"""
+
+DEFAULT_REPLICATION_LAG_TIME_MS = 10_000
+"""ISR 时间阈值缺省值：距最近一次成功拉取超过该值即踢出。"""
+
+DEFAULT_REPLICATION_LAG_RECORDS = 10_000
+"""ISR 条数阈值缺省值：`leader_leo - follower_leo` 超过该值即踢出。"""
+
+DEFAULT_REPLICATION_FETCH_INTERVAL_MS = 200
+"""follower 拉取周期缺省值（毫秒）。"""
+
+DEFAULT_REPLICATION_FETCH_BATCH = 100
+"""单次拉取条数上限缺省值。"""
+
+DEFAULT_REPLICATION_COMMIT_TIMEOUT_MS = 5_000
+"""`acks=all` 提交等待超时缺省值（毫秒）。"""
+
+DEFAULT_REPLICATION_SCAN_INTERVAL_MS = 1_000
+"""leader ISR 扫描周期缺省值（毫秒）。"""
+
+DEFAULT_REPLICATION_TOPOLOGY_TTL_MS = 5_000
+"""分区拓扑缓存 TTL 缺省值（毫秒）：热路径不查库与分配可变的折中。"""
+
+REPLICATION_METRICS_PARTITION_LIMIT = 500
+"""复制指标的分区基数上限：超出不输出并记一次 warning（防指标爆炸）。"""
+
+REPLICATION_FETCH_BACKOFF_CAP_MS = 5_000
+"""follower 拉取失败的退避上限（毫秒）：指数增长到此封顶。"""
+
+ACKS_PUBLISH_LOCAL = "1"
+"""发布确认档位：leader 本地落盘即返回（缺省，与既有行为一致）。"""
+
+ACKS_PUBLISH_ALL = "all"
+"""发布确认档位：ISR 确认并推进 HW 后返回（要求 `|ISR| >= min.insync.replicas`）。"""
+
+REPLICATION_ACKS_VALUES = (ACKS_PUBLISH_LOCAL, ACKS_PUBLISH_ALL)
+"""发布确认档位的合法取值（契约层校验）。"""
+
+# ---------------------------------------------------------------------------
 # 02-1 分区追加日志（文件段）：数据根 / 记录格式 / 段与索引 / fsync / log_id 索引
 # ---------------------------------------------------------------------------
 

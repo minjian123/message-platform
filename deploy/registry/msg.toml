@@ -427,6 +427,13 @@ message_key = "msg.error.dead_letter_not_replayable"
 severity = "warning"
 description = "原消息不可重放（超出保留期或记录不存在）；不建空任务，避免误标已解决"
 
+[[errcodes]]
+code = 350032
+domain = "msg"
+http_status = 503
+message_key = "msg.error.insufficient_replicas"
+severity = "error"
+description = "ISR 不足 / 提交等待超时（acks=all）；data.reason 区分 insufficient_isr / commit_timeout，客户端应退避重试（提交超时）"
 
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
