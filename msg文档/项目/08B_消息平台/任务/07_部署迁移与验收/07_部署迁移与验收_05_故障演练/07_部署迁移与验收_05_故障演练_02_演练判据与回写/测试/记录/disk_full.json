@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "task": "07-6-1",
+  "scenario": "disk_full",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4",
+    "config_digest": "db98dbb5294657b3630a562b621a96e3b8d1a0bd09344e4bfd2438708d32cd51"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T05:51:25.319835+00:00",
+  "finished_at": "2026-11-11T05:51:39.301640+00:00",
+  "injection": {
+    "method": "fill_volume",
+    "detail": "填充 1527 MiB 至 fill/volume.bin，拒绝水位收紧至 0.3574",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill-final\\fill\\volume.bin",
+    "artifact_rel": "fill/volume.bin"
+  },
+  "commands": [
+    {
+      "seq": "1",
+      "action": "POST /api/v1/msg/admin/topics",
+      "detail": "topic=drill.disk_full partitions=1"
+    },
+    {
+      "seq": "2",
+      "action": "POST /api/v1/msg/join",
+      "detail": "topic=drill.disk_full group=drill-group-drill.disk_full"
+    },
+    {
+      "seq": "3",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.disk_full bytes=11"
+    },
+    {
+      "seq": "4",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.disk_full bytes=11"
+    },
+    {
+      "seq": "5",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.disk_full bytes=10"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "var",
+      "role": "data_root",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "path": "instance.log",
+      "role": "log",
+      "bytes": 2379,
+      "sha256": "1b08da15d49be44c65b73c30f7bcfe806eeb049e2457cb29eb53503a7573d276"
+    },
+    {
+      "path": "slowdisk/pressure.bin",
+      "role": "slowdisk",
+      "bytes": 134217728,
+      "sha256": "254bcc3fc4f27172636df4bf32de9f107f620d559b20d760197e452b97453917"
+    }
+  ],
+  "logs": {
+    "path": "instance.log",
+    "lines": 8,
+    "bytes": 2379,
+    "sha256": "1b08da15d49be44c65b73c30f7bcfe806eeb049e2457cb29eb53503a7573d276",
+    "excerpt": "sion=0.1.0 ts=2026-11-11T13:51:34.695934+08:00\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=29.86 method=POST path=/api/v1/msg/admin/topics request_id=bd17919bd5a246409a6c8142d92bc339 service=msg service_version=0.1.0 status=200 trace_id=bd17919bd5a246409a6c8142d92bc339 ts=2026-11-11T13:51:34.914540+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=12.75 method=POST path=/api/v1/msg/join request_id=bd9c9d5201fa46f3ad435b720af67c3e service=msg service_version=0.1.0 status=200 trace_id=bd9c9d5201fa46f3ad435b720af67c3e ts=2026-11-11T13:51:34.928518+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=16.95 method=POST path=/api/v1/msg/publish request_id=165d4614dfb848c48163136fd8839266 service=msg service_version=0.1.0 status=200 trace_id=165d4614dfb848c48163136fd8839266 ts=2026-11-11T13:51:34.946598+08:00 unit_key=msg\n[warning  ] msg_storage_watermark_enter    [bms_msg.watermark] client_ip=127.0.0.1 free_bytes=2570919931904 request_id=3bc3cc67f2b847f68dccb1fe22d4d368 service=msg service_version=0.1.0 threshold=0.3574 trace_id=3bc3cc67f2b847f68dccb1fe22d4d368 ts=2026-11-11T13:51:37.970439+08:00 used_ratio=0.3574 volume=D:\\Develop\\bizs\\msg\\tmp\\drill-final\\var\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=4.93 method=POST path=/api/v1/msg/publish request_id=ab527c836f044b738d89d1d209735c68 service=msg service_version=0.1.0 status=507 trace_id=ab527c836f044b738d89d1d209735c68 ts=2026-11-11T13:51:37.981517+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=9.28 method=POST path=/api/v1/msg/publish request_id=165e03d4ebd04c27a3e27eae7d96f042 service=msg service_version=0.1.0 status=200 trace_id=165e03d4ebd04c27a3e27eae7d96f042 ts=2026-11-11T13:51:39.300649+08:00 unit_key=msg\n"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T05:51:34.952674+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.357,
+        "msg_storage_rejected_total": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T05:51:37.974921+00:00",
+      "readyz_status": 503,
+      "readyz_ok": false,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.3574,
+        "msg_storage_rejected_total": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"down\",\"checks\":{\"msg_storage\":{\"ok\":false,\"error\":\"MsgStorageWatermarkExceededError\"},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "after": {
+      "captured_at": "2026-11-11T05:51:39.289287+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.357,
+        "msg_storage_rejected_total": 1.0,
+        "msg_publish_errors_total": 1.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "publish_rejected",
+      "expect": "满盘期发布被拒（HTTP 507 + 业务码 350022）",
+      "actual": "HTTP 507、业务码 350022",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "readyz_degraded",
+      "expect": "满盘期 /readyz 转 503（不摘实例但不再接写）",
+      "actual": "/readyz=503",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "ratio_risen",
+      "expect": "`msg_disk_used_ratio` 随填充上升",
+      "actual": "0.3570 → 0.3574",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "process_alive",
+      "expect": "进程存活（/healthz 仍 200，磁盘满不致死）",
+      "actual": "/healthz=200",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "recovered",
+      "expect": "清理填充后恢复可写、/readyz 回 200",
+      "actual": "发布 HTTP 200、/readyz=200",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rto_within_budget",
+      "expect": "恢复耗时在预算内",
+      "actual": "4346 ms（预算 240000 ms）",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 4346,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "rerun": {
+    "attempt": "3",
+    "previous_started_at": "2026-11-11T05:03:38.890304+00:00",
+    "previous_conclusion": "通过",
+    "reason": "07-6-2 最终取证复跑（判据拆分 + 记录增强）"
+  },
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "本机无可配额卷：用「收紧拒绝水位 + 受控填充」等价「临时卷被填满」，容器通道为 tmpfs 限额卷",
+    "填充文件落在演练工作根（与数据根同卷），清理即删除，不触碰其他目录"
+  ],
+  "issues": [],
+  "leftovers": []
+}

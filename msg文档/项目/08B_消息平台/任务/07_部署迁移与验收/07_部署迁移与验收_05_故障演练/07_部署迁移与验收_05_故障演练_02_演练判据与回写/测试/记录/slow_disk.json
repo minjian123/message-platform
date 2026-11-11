@@ -1,0 +1,381 @@
+{
+  "schema_version": 2,
+  "task": "07-6-1",
+  "scenario": "slow_disk",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4",
+    "config_digest": "ebe8246a2537cc04c2e181244950b1d4e10f7fae0866d8b3eff43c35cb5331ef"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T05:51:39.398880+00:00",
+  "finished_at": "2026-11-11T05:51:50.314487+00:00",
+  "injection": {
+    "method": "controlled_write",
+    "detail": "后台线程循环写 128 MiB 至 slowdisk/pressure.bin 并 fsync",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill-final\\slowdisk\\pressure.bin",
+    "artifact_rel": "slowdisk/pressure.bin",
+    "artifact_sha256": "254bcc3fc4f27172636df4bf32de9f107f620d559b20d760197e452b97453917"
+  },
+  "commands": [
+    {
+      "seq": "1",
+      "action": "POST /api/v1/msg/admin/topics",
+      "detail": "topic=drill.slow_disk partitions=1"
+    },
+    {
+      "seq": "2",
+      "action": "POST /api/v1/msg/join",
+      "detail": "topic=drill.slow_disk group=drill-group-drill.slow_disk"
+    },
+    {
+      "seq": "3",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "4",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "5",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "6",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "7",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "8",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "9",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "10",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "11",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "12",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=6"
+    },
+    {
+      "seq": "13",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "14",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "15",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "16",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "17",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "18",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "19",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "20",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "21",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "22",
+      "action": "POST /api/v1/msg/publish",
+      "detail": "topic=drill.slow_disk bytes=7"
+    },
+    {
+      "seq": "23",
+      "action": "POST /api/v1/msg/consume",
+      "detail": "topic=drill.slow_disk max=20"
+    },
+    {
+      "seq": "24",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=0"
+    },
+    {
+      "seq": "25",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=1"
+    },
+    {
+      "seq": "26",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=2"
+    },
+    {
+      "seq": "27",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=3"
+    },
+    {
+      "seq": "28",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=4"
+    },
+    {
+      "seq": "29",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=5"
+    },
+    {
+      "seq": "30",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=6"
+    },
+    {
+      "seq": "31",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=7"
+    },
+    {
+      "seq": "32",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=8"
+    },
+    {
+      "seq": "33",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=9"
+    },
+    {
+      "seq": "34",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=10"
+    },
+    {
+      "seq": "35",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=11"
+    },
+    {
+      "seq": "36",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=12"
+    },
+    {
+      "seq": "37",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=13"
+    },
+    {
+      "seq": "38",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=14"
+    },
+    {
+      "seq": "39",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=15"
+    },
+    {
+      "seq": "40",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=16"
+    },
+    {
+      "seq": "41",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=17"
+    },
+    {
+      "seq": "42",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=18"
+    },
+    {
+      "seq": "43",
+      "action": "POST /api/v1/msg/ack",
+      "detail": "topic=drill.slow_disk offset=19"
+    },
+    {
+      "seq": "44",
+      "action": "POST /api/v1/msg/consume",
+      "detail": "topic=drill.slow_disk max=20"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "var",
+      "role": "data_root",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "path": "instance.log",
+      "role": "log",
+      "bytes": 14857,
+      "sha256": "62927e830435b8c4831f8b0438a9ee9a4e7c90faa4c7044893e4c407302465cd"
+    },
+    {
+      "path": "slowdisk/pressure.bin",
+      "role": "slowdisk",
+      "bytes": 134217728,
+      "sha256": "254bcc3fc4f27172636df4bf32de9f107f620d559b20d760197e452b97453917"
+    }
+  ],
+  "logs": {
+    "path": "instance.log",
+    "lines": 46,
+    "bytes": 14857,
+    "sha256": "62927e830435b8c4831f8b0438a9ee9a4e7c90faa4c7044893e4c407302465cd",
+    "excerpt": "ace_id=aa97343bcc764ba190d94e86076b65e4 ts=2026-11-11T13:51:49.225941+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=3.32 method=POST path=/api/v1/msg/ack request_id=980635a5cd4f4fa09aa851e255f799a5 service=msg service_version=0.1.0 status=200 trace_id=980635a5cd4f4fa09aa851e255f799a5 ts=2026-11-11T13:51:49.230175+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=3.44 method=POST path=/api/v1/msg/ack request_id=49fa7227230c4e7e862943ba6d449e7f service=msg service_version=0.1.0 status=200 trace_id=49fa7227230c4e7e862943ba6d449e7f ts=2026-11-11T13:51:49.234535+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=3.86 method=POST path=/api/v1/msg/ack request_id=9f409a578b234cdcadb307b877d59401 service=msg service_version=0.1.0 status=200 trace_id=9f409a578b234cdcadb307b877d59401 ts=2026-11-11T13:51:49.239324+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=3.57 method=POST path=/api/v1/msg/ack request_id=11d2593fedda4e27987d08a2ee2c4d83 service=msg service_version=0.1.0 status=200 trace_id=11d2593fedda4e27987d08a2ee2c4d83 ts=2026-11-11T13:51:49.243821+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=4.8 method=POST path=/api/v1/msg/ack request_id=7f1af8c38ce74ffd95b35531cfea7109 service=msg service_version=0.1.0 status=200 trace_id=7f1af8c38ce74ffd95b35531cfea7109 ts=2026-11-11T13:51:49.249534+08:00 unit_key=msg\n[warning  ] request_domain_unknown         [app.request] client_ip=127.0.0.1 domain_key=unknown duration_ms=5.78 method=POST path=/api/v1/msg/consume request_id=dbf95bcb74274978a890314972949d7c service=msg service_version=0.1.0 status=200 trace_id=dbf95bcb74274978a890314972949d7c ts=2026-11-11T13:51:50.313583+08:00 unit_key=msg\n"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T05:51:49.020742+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_fsync_duration_ms": 0.0,
+        "msg_publish_latency_ms": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T05:51:49.255826+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_fsync_duration_ms": 0.0,
+        "msg_publish_latency_ms": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "after": {
+      "captured_at": "2026-11-11T05:51:50.305844+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_fsync_duration_ms": 0.0,
+        "msg_publish_latency_ms": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "no_fake_ack",
+      "expect": "无假确认（已确认消息停压后不再投递）",
+      "actual": "停压后重投 0 条（期望 0）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "offset_within_leo",
+      "expect": "位点不越尾（已确认条数 = 发布条数）",
+      "actual": "发布 20 条、确认 20 条",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "lag_drained",
+      "expect": "停压后积压归零（可拉取为空且无在途）",
+      "actual": "拉取 0 条、/readyz=200",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "latency_visible",
+      "expect": "`msg_fsync_duration_ms` / 发布延迟相对基线上涨（方向性；绝对阈值归部署阶段）",
+      "actual": "fsync 0.00 → 0.00 ms；publish 0.00 → 0.00 ms（基线为 0：该指标本次无样本，无法比较）",
+      "result": "degraded",
+      "passed": false
+    },
+    {
+      "key": "pressure_written",
+      "expect": "受控写入确实执行（压测线程无 I/O 错误）",
+      "actual": "写入 128 MiB，错误=无",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 1285,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "rerun": {
+    "attempt": "3",
+    "previous_started_at": "2026-11-11T05:03:52.900719+00:00",
+    "previous_conclusion": "降级通过",
+    "reason": "07-6-2 最终取证复跑（判据拆分 + 记录增强）"
+  },
+  "conclusion": {
+    "result": "降级通过",
+    "exit_code": 2,
+    "reasons": [
+      "latency_visible：fsync 0.00 → 0.00 ms；publish 0.00 → 0.00 ms（基线为 0：该指标本次无样本，无法比较）"
+    ]
+  },
+  "deviations": [
+    "慢盘由「受控写入 + fsync 争抢同卷」等价实现，未使用 dm-delay（需 root 与设备操作）",
+    "本机 SSD 上 I/O 争抢可能不足以抬升 fsync 延迟：该项判「降级」而非「失败」"
+  ],
+  "issues": [],
+  "leftovers": [
+    {
+      "item": "慢盘延迟绝对阈值未取证（本机 SSD 无样本）",
+      "owner": "07-6 部署阶段（真盘 I/O 延迟注入，8B_08）"
+    }
+  ]
+}
