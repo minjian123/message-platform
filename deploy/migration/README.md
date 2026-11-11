@@ -24,7 +24,7 @@ python -m ops.rollback drill --env test      # 切 msg → 三类注入 → 回�
 
 - 两条 `drill` 都只允许 `test` / `dev`（`prod` / `production` 直接拒绝，无覆盖开关）；
 - 缺省路径：`deploy/migration/preconditions.toml`、`deploy/migration/switch_matrix.toml`、`deploy/migration/rollback_scenarios.toml`；
-- 记录落 `tmp/migration/` 与 `tmp/rollback/`（已忽略），JSON 是机器对接契约、Markdown 供人阅读。
+- 记录落工作区根 `tmp/msg/migration/` 与 `tmp/msg/rollback/`（已忽略），JSON 是机器对接契约、Markdown 供人阅读；仓内 `tmp/` 不是合法临时落点（工作区卫生规范只放行工作区根 `tmp/` 与各仓 `.cache/`）。
 
 ## 2. 前置清单（`preconditions.toml`）
 

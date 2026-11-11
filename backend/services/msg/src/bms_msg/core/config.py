@@ -797,8 +797,23 @@ RECOVERY_SAMPLE_PER_PARTITION = 20
 RECOVERY_SAMPLE_LIMIT = 200
 """抽样总量缺省上限：避免分区多时把演练拖成全量扫描。"""
 
-RECOVERY_REPORT_DIR = "tmp/recovery"
-"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+# ---------------------------------------------------------------------------
+# 工作区临时落点（2026-11-11 口径修正）
+# ---------------------------------------------------------------------------
+
+WORKSPACE_TMP_DIR = "../tmp/msg"
+"""工作区根 `tmp/msg/` 相对仓根的写法（本仓是工作区根的平级子目录）。
+
+工作区卫生规范只允许临时 / 日志产物落在**工作区根 `tmp/`** 与各仓 `.cache/`，仓内 `tmp/` 不放行；
+原先各 `*_REPORT_DIR` 以仓内 `tmp/` 为缺省，演练记录与命令输出因此被判违规。按产品分目录，
+避免与 bms / mdm 等平级仓的产物混放。单仓克隆（无工作区根）时须用 `--report` / 环境变量显式指定。
+"""
+
+RECOVERY_REPORT_DIR = f"{WORKSPACE_TMP_DIR}/recovery"
+"""演练记录缺省落点（相对仓根，实际落工作区根 `tmp/msg/recovery/`；不进库）。"""
+
+RECOVERY_WORK_DIR = f"{WORKSPACE_TMP_DIR}/recovery-work"
+"""演练副本工作根缺省落点（相对仓根；与记录同处工作区根临时目录）。"""
 
 RECOVERY_REPORT_SCHEMA_VERSION = 1
 """演练记录格式版本（后续只增字段，不删不改语义）。"""
@@ -825,8 +840,8 @@ MIGRATION_PRECONDITIONS_PATH = "deploy/migration/preconditions.toml"
 MIGRATION_MATRIX_PATH = "deploy/migration/switch_matrix.toml"
 """切换矩阵相对仓根的缺省路径（机器可读单源；文档表由渲染结果粘贴）。"""
 
-MIGRATION_REPORT_DIR = "tmp/migration"
-"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+MIGRATION_REPORT_DIR = f"{WORKSPACE_TMP_DIR}/migration"
+"""演练记录缺省落点（相对仓根，实际落工作区根 `tmp/msg/migration/`；不进库）。"""
 
 MIGRATION_RECORD_SCHEMA_VERSION = 1
 """演练记录格式版本（后续只增字段，不删不改语义）。"""
@@ -868,8 +883,8 @@ MIGRATION_DEFAULT_TENANT = "demo"
 ROLLBACK_SCENARIOS_PATH = "deploy/migration/rollback_scenarios.toml"
 """回滚场景相对仓根的缺省路径（注入方式 / 判据锚点 / 阈值占位 / 恢复预算唯一来源）。"""
 
-ROLLBACK_REPORT_DIR = "tmp/rollback"
-"""回滚演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+ROLLBACK_REPORT_DIR = f"{WORKSPACE_TMP_DIR}/rollback"
+"""回滚演练记录缺省落点（相对仓根，实际落工作区根 `tmp/msg/rollback/`；不进库）。"""
 
 ROLLBACK_RECORD_SCHEMA_VERSION = 1
 """回滚演练记录格式版本（后续只增字段，不删不改语义）。"""
@@ -915,13 +930,13 @@ DRILL_REPORT_DIR_ENV = "MSG_DRILL_REPORT_DIR"
 """演练记录落点的环境变量名（相对仓根）。"""
 
 DRILL_EVIDENCE_DIR_ENV = "MSG_DRILL_EVIDENCE_DIR"
-"""验收矩阵落点的环境变量名（相对仓根；缺省 `tmp/drill/evidence`）。"""
+"""验收矩阵落点的环境变量名（相对仓根；缺省工作区根 `tmp/msg/drill/evidence`）。"""
 
 DRILL_SCENARIOS_PATH = "deploy/drill/scenarios.toml"
 """场景单源相对仓根的缺省路径（注入方式 / 观测指标 / 判据锚点 / 预算唯一来源）。"""
 
-DRILL_REPORT_DIR = "tmp/drill"
-"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+DRILL_REPORT_DIR = f"{WORKSPACE_TMP_DIR}/drill"
+"""演练记录缺省落点（相对仓根，实际落工作区根 `tmp/msg/drill/`；不进库）。"""
 
 DRILL_SCENARIO_SCHEMA_VERSION = 2
 """场景单源格式版本（判据结构化后升 2；记录格式版本单独维护）。"""
@@ -932,8 +947,8 @@ DRILL_RECORD_SCHEMA_VERSION = 2
 DRILL_EVIDENCE_SCHEMA_VERSION = 1
 """验收矩阵（场景 × 判据 × 证据）格式版本。"""
 
-DRILL_EVIDENCE_DIR = "tmp/drill/evidence"
-"""验收矩阵缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+DRILL_EVIDENCE_DIR = f"{WORKSPACE_TMP_DIR}/drill/evidence"
+"""验收矩阵缺省落点（相对仓根，实际落工作区根 `tmp/msg/drill/evidence/`；不进库）。"""
 
 DRILL_CHECKLIST_PATH = "deploy/drill/RELEASE_CHECKLIST.md"
 """发版前检查清单（生成物）相对仓根的路径。"""

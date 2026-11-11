@@ -23,7 +23,7 @@ from bms_core.core.concurrent import (
     ConcurrentStableFrozenList,
 )
 
-from bms_msg.core.config import DRILL_REJECT_RATIO
+from bms_msg.core.config import DRILL_REJECT_RATIO, DRILL_REPORT_DIR
 from ops.drill import engine, record, runtime
 from ops.drill.context import (
     as_mapping,
@@ -169,7 +169,7 @@ def test_load_config_defaults(tmp_path: Path) -> None:
 
     assert config.env == "test"
     assert config.base_port == 18_080
-    assert config.report_dir == (REPO_ROOT / "tmp" / "drill").resolve()
+    assert config.report_dir == (REPO_ROOT / DRILL_REPORT_DIR).resolve()
     assert config.reject_ratio == DRILL_REJECT_RATIO
 
 

@@ -76,7 +76,9 @@ conclusion{result,exit_code,reasons} / deviations[] / issues[] / leftovers[]
 
 ```bash
 cd backend
-export MSG_DRILL_WORK_DIR=../tmp/drill MSG_DRILL_REPORT_DIR=tmp/drill/reports
+# 工作区根 tmp/msg/ 是唯一合法临时落点；两个变量的相对基准不同，勿混用
+export MSG_DRILL_WORK_DIR=../../tmp/msg/drill          # 相对 cwd（backend/）解析
+export MSG_DRILL_REPORT_DIR=../tmp/msg/drill/reports   # 相对仓根（msg/）解析
 python -m ops.drill checklist --check            # 清单未漂移
 python -m ops.drill release --confirm release    # 六类全跑 → 记录 → 矩阵 → release.json
 ```

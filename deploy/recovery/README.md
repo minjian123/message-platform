@@ -55,7 +55,7 @@ python -m ops.recovery --mode live --yes --work-dir <工作根>
 └── run-<备份标识>-<UTC 时间>/
     ├── backup/       # 演练前自动备份（drill 结束删除；live 恒保留为回退点）
     └── target/       # drill 的数据根副本（结束删除；--keep 保留）
-<仓根>/tmp/recovery/<备份标识>-<模式>-<UTC 时间>.json   # 记录（同目录同名 .md）
+<工作区根>/tmp/msg/recovery/<备份标识>-<模式>-<UTC 时间>.json   # 记录（同目录同名 .md）
 ```
 
 - 记录固定字段：环境、服务与契约版本、备份时 / 当前配置摘要、备份标识与时间、恢复起止、RTO / RPO、步骤表、七块校验结论、结论与原因、失败注入、问题与处置、遗留与归口。

@@ -73,6 +73,7 @@ from bms_msg.core.config import (
     RECOVERY_STOP_CMD_ENV,
     RECOVERY_TIMEOUT_SEC_ENV,
     RECOVERY_WORK_BACKUP_SUBDIR,
+    RECOVERY_WORK_DIR,
     RECOVERY_WORK_DIR_ENV,
     RECOVERY_WORK_TARGET_SUBDIR,
 )
@@ -2244,7 +2245,7 @@ def _build_config(args: argparse.Namespace, env: ConcurrentStableDict[str, str])
         source_data_root=Path(data_raw),
         backup_root=Path(backup_raw),
         platform_dump_dir=Path(dump_raw) if dump_raw else repo_root,
-        work_root=Path(work_raw) if work_raw else repo_root / "tmp" / "recovery-work",
+        work_root=Path(work_raw) if work_raw else repo_root / RECOVERY_WORK_DIR,
         report_path=report,
         mode=mode,
         backup_id=cast("str | None", args.backup_id),
