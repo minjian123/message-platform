@@ -10,6 +10,8 @@
 
 import asyncio
 import json
+import struct
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -281,6 +283,41 @@ async def test_file_layout_and_identity(tmp_path: Path) -> None:
     assert readout.persisted is not None
     assert readout.persisted.offset == 7
     assert len(raw) == OFFSET_HEADER_FIXED_BYTES + len(GROUP.encode()) + 2 * OFFSET_SLOT_BYTES
+
+
+def test_huge_snowflake_topic_id_round_trips() -> None:
+    """O1b：126 位雪花 `topic_id` 可写入并原值解回（v2 头用定宽 ASCII）。
+
+    基座雪花是 48+40+38 位；v1 头按 `>q` 打包必然 `struct.error`，表现为「刷盘每轮失败、
+    位点永不落盘」（07-6-1 故障演练实测）。
+    """
+    huge = (1 << 125) + 13
+    slots = (
+        OffsetSlot(seq=2, offset=42, updated_at_us=1_700_000_000_000_001),
+        OffsetSlot(seq=1, offset=41, updated_at_us=1_700_000_000_000_000),
+    )
+
+    raw = encode_offset_file(group=GROUP, topic_id=huge, partition_no=3, slots=slots)
+    readout = decode_offset_file(raw, group=GROUP, topic_id=huge, partition_no=3)
+
+    assert readout.reason == OFFSET_REASON_OK
+    assert (readout.topic_id, readout.partition_no) == (huge, 3)
+    assert readout.persisted is not None and readout.persisted.offset == 42
+
+
+def test_v1_offset_file_still_readable() -> None:
+    """O1c：v1 头（int64 topic_id）仍可读——存量文件不因抬版本失效。"""
+    group_bytes = GROUP.encode()
+    header = OFFSET_FILE_MAGIC + struct.pack(">HB", 1, len(group_bytes)) + group_bytes + struct.pack(">qi", TOPIC_ID, 0)
+    raw = header
+    for seq, offset in ((1, 16), (2, 17)):
+        payload = struct.pack(">IQq", seq, offset, 1_700_000_000_000_000)
+        raw += payload + struct.pack(">I", zlib.crc32(header + payload))
+
+    readout = decode_offset_file(raw, group=GROUP, topic_id=TOPIC_ID, partition_no=0)
+
+    assert readout.reason == OFFSET_REASON_OK
+    assert readout.persisted is not None and readout.persisted.offset == 17
 
 
 async def test_dual_slot_seq_increases(tmp_path: Path) -> None:

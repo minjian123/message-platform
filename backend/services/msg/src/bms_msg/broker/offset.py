@@ -55,8 +55,10 @@ from bms_msg.core.config import (
     OFFSET_GROUP_DIR_MAX_CHARS,
     OFFSET_GROUP_HASH_CHARS,
     OFFSET_HEADER_FIXED_BYTES,
+    OFFSET_HEADER_FIXED_BYTES_V1,
     OFFSET_MAX_GROUP_BYTES,
     OFFSET_SLOT_BYTES,
+    OFFSET_TOPIC_ID_ASCII_BYTES,
     OFFSETS_SUBDIR,
 )
 
@@ -155,6 +157,10 @@ _HEADER_PREFIX: Final = struct.Struct(">HB")
 """文件头前缀：`format_version` u16 + `group_len` u8。"""
 
 _HEADER_SUFFIX: Final = struct.Struct(">qi")
+"""v1 头尾：`topic_id`（int64）+ 分区号（int32）。"""
+
+_HEADER_PARTITION: Final = struct.Struct(">i")
+"""v2 头尾的分区号（`topic_id` 已改为定宽 ASCII，只剩分区号）。"""
 """文件头后缀：`topic_id` i64 + `partition_no` i32。"""
 
 _USABLE_REASONS: Final = frozenset({OFFSET_REASON_OK, OFFSET_REASON_PARTIAL})
@@ -538,11 +544,13 @@ def encode_offset_file(*, group: str, topic_id: int, partition_no: int, slots: t
     group_bytes = group.encode("utf-8")
     if not 0 < len(group_bytes) <= OFFSET_MAX_GROUP_BYTES:
         raise ValueError(f"组名长度非法：{len(group_bytes)} 字节（上限 {OFFSET_MAX_GROUP_BYTES}）")
+    topic_ascii = str(int(topic_id)).encode("ascii").rjust(OFFSET_TOPIC_ID_ASCII_BYTES, b" ")
     header = (
         OFFSET_FILE_MAGIC
         + _HEADER_PREFIX.pack(OFFSET_FILE_FORMAT_VERSION, len(group_bytes))
         + group_bytes
-        + _HEADER_SUFFIX.pack(int(topic_id), int(partition_no))
+        + topic_ascii
+        + _HEADER_PARTITION.pack(int(partition_no))
     )
     parts = [header]
     for slot in slots:
@@ -565,7 +573,7 @@ def decode_offset_file(
     Returns:
         OffsetFileReadout: 解析结论（`reason` 为 `OFFSET_REASON_*`）。
     """
-    if len(raw) < OFFSET_HEADER_FIXED_BYTES:
+    if len(raw) < OFFSET_HEADER_FIXED_BYTES_V1:
         return OffsetFileReadout(reason=OFFSET_REASON_TRUNCATED)
     if raw[:4] != OFFSET_FILE_MAGIC:
         return OffsetFileReadout(reason=OFFSET_REASON_HEADER)
@@ -574,12 +582,17 @@ def decode_offset_file(
         return OffsetFileReadout(reason=OFFSET_REASON_VERSION)
     if not 0 < group_len <= OFFSET_MAX_GROUP_BYTES:
         return OffsetFileReadout(reason=OFFSET_REASON_HEADER)
-    header_len = OFFSET_HEADER_FIXED_BYTES + group_len
+    fixed = OFFSET_HEADER_FIXED_BYTES if version >= 2 else OFFSET_HEADER_FIXED_BYTES_V1
+    header_len = fixed + group_len
     if len(raw) < header_len + 2 * OFFSET_SLOT_BYTES:
         return OffsetFileReadout(reason=OFFSET_REASON_TRUNCATED)
     file_group = raw[7 : 7 + group_len].decode("utf-8", errors="replace")
-    file_topic = struct.unpack_from(">q", raw, 7 + group_len)[0]
-    file_partition = struct.unpack_from(">i", raw, 7 + group_len + 8)[0]
+    if version >= 2:
+        raw_topic = raw[7 + group_len : 7 + group_len + OFFSET_TOPIC_ID_ASCII_BYTES]
+        file_topic = int(raw_topic.decode("ascii", errors="replace").strip() or "0")
+        file_partition = _HEADER_PARTITION.unpack_from(raw, 7 + group_len + OFFSET_TOPIC_ID_ASCII_BYTES)[0]
+    else:
+        file_topic, file_partition = _HEADER_SUFFIX.unpack_from(raw, 7 + group_len)
     identity = OffsetFileReadout(
         reason=OFFSET_REASON_OK,
         group=file_group,

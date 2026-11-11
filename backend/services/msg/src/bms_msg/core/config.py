@@ -460,11 +460,21 @@ OFFSET_FILE_TEMP_SUFFIX = ".tmp"
 OFFSET_FILE_MAGIC = b"MOFS"
 """位点文件魔数（msg offset file store）：前 4 字节不符即判「不是位点文件」。"""
 
-OFFSET_FILE_FORMAT_VERSION = 1
+OFFSET_FILE_FORMAT_VERSION = 2
 """位点文件格式版本（读到更高版本即拒绝加载，与记录 / 恢复点同口径）。"""
 
-OFFSET_HEADER_FIXED_BYTES = 19
+OFFSET_HEADER_FIXED_BYTES = 51
 """文件头定长部分：magic 4 + version 2 + group_len 1 + topic_id 8 + partition_no 4（组名变长另计）。"""
+
+OFFSET_HEADER_FIXED_BYTES_V1 = 19
+"""v1 文件头的固定字节数（读旧文件用）：magic 4 + 版本 2 + 组名长 1 + topic_id 8 + 分区 4。
+
+v2 把 `topic_id` 从 int64 换成 40 字节 ASCII：基座雪花是 126 位（48+40+38），按 `>q` 写入必然
+`struct.error: 'q' format requires ...`（07-6-1 故障演练实测：刷盘每轮失败、位点永不落盘）。
+"""
+
+OFFSET_TOPIC_ID_ASCII_BYTES = 40
+"""v2 头里 `topic_id` 的 ASCII 定宽（十进制、右对齐空格填充；126 位雪花最多 38 位十进制）。"""
 
 OFFSET_SLOT_BYTES = 24
 """单槽字节数：`seq` 4 + `offset` 8 + `updated_at_us` 8 + `crc` 4。"""
@@ -875,3 +885,94 @@ ROLLBACK_LATENCY_THRESHOLD_MS = 200.0
 
 ROLLBACK_DEFAULT_SAMPLES = 20
 """错误率场景缺省采样次数（够算出百分比，又不把演练拖长）。"""
+
+# ---------------------------------------------------------------------------
+# 07-6-1 六类故障注入：演练工作根 / 场景单源 / 预算 / 判定阈值（不进 Settings）
+# ---------------------------------------------------------------------------
+
+DRILL_WORK_DIR_ENV = "MSG_DRILL_WORK_DIR"
+"""演练工作根的环境变量名（必填；临时数据根、填充文件与实例日志都在其下）。"""
+
+DRILL_INSTANCE_PORT_ENV = "MSG_DRILL_INSTANCE_PORT"
+"""隔离实例端口的环境变量名（父进程选空闲端口后传给 `ops.drill.instance`）。"""
+
+DRILL_INSTANCE_ROOT_ENV = "MSG_DRILL_INSTANCE_DATA_ROOT"
+"""隔离实例工作根的环境变量名（父进程传给 `ops.drill.instance`）。"""
+
+DRILL_BASE_PORT_ENV = "MSG_DRILL_BASE_PORT"
+"""隔离实例起始端口的环境变量名（占用则递增探测）。"""
+
+DRILL_FILL_MB_ENV = "MSG_DRILL_FILL_MB"
+"""磁盘满场景受控填充量的环境变量名（MiB）。"""
+
+DRILL_SLOW_WRITE_MB_ENV = "MSG_DRILL_SLOW_WRITE_MB"
+"""慢盘场景受控写入量的环境变量名（MiB）。"""
+
+DRILL_REJECT_RATIO_ENV = "MSG_DRILL_REJECT_RATIO"
+"""磁盘满场景拒绝水位的环境变量名（0~1）。"""
+
+DRILL_REPORT_DIR_ENV = "MSG_DRILL_REPORT_DIR"
+"""演练记录落点的环境变量名（相对仓根）。"""
+
+DRILL_SCENARIOS_PATH = "deploy/drill/scenarios.toml"
+"""场景单源相对仓根的缺省路径（注入方式 / 观测指标 / 判据锚点 / 预算唯一来源）。"""
+
+DRILL_REPORT_DIR = "tmp/drill"
+"""演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+
+DRILL_SCHEMA_VERSION = 1
+"""场景单源与记录格式版本（后续只增字段，不删不改语义）。"""
+
+DRILL_DEFAULT_ENV = "test"
+"""演练缺省环境（隔离实例）；生产环境一律拒绝，无逃生开关。"""
+
+DRILL_PROD_ENVS = ("prod", "production")
+"""禁止执行注入的环境名：生产演练走人工流程，不提供覆盖开关。"""
+
+DRILL_RECOVERY_BUDGET_MS = 240_000
+"""单场景恢复预算缺省值（毫秒）：覆盖「重启实例 + 等可见性超时后重投」的最长路径。"""
+
+DRILL_FILL_MB = 64
+"""磁盘满场景受控填充量缺省值（MiB）：够触发水位判定，又不把本机盘写满。"""
+
+DRILL_SLOW_WRITE_MB = 128
+"""慢盘场景受控写入量缺省值（MiB）。"""
+
+DRILL_REJECT_RATIO = 0.0001
+"""磁盘满场景拒绝水位缺省值：本机无隔离卷配额时，用极低水位等价「卷将满」。"""
+
+DRILL_BASE_PORT = 18_080
+"""隔离实例起始端口缺省值（只绑 127.0.0.1）。"""
+
+DRILL_READY_TIMEOUT_SEC = 60
+"""实例就绪轮询超时（秒）：真装配含建表与插件装配，冷启动比探针慢。"""
+
+DRILL_PROBE_INTERVAL_MS = 500
+"""探针轮询间隔（毫秒）。"""
+
+DRILL_HTTP_TIMEOUT_SEC = 10
+"""演练 HTTP 调用超时（秒）。"""
+
+DRILL_NAMESPACE = "msg"
+"""演练用命名空间（须为已启用 module_key）。"""
+
+DRILL_TOPIC_PREFIX = "drill."
+"""演练主题名前缀（与业务主题隔离，便于清理识别）。"""
+
+DRILL_GROUP_PREFIX = "drill-group-"
+"""演练消费组名前缀（与业务组隔离，避免污染真实位点）。"""
+
+DRILL_CONSUMER_PREFIX = "drill-consumer-"
+"""演练成员标识前缀（按主题唯一：同一进程内多主题演练不会互相判死）。"""
+
+DRILL_TENANT_CODE = "demo"
+"""演练租户口径（隔离实例的租户源替身固定返回该编码）。"""
+
+DRILL_TENANT_ID = 7001
+"""演练租户主键（隔离实例替身固定值；与 bms 演示租户夹具同口径）。"""
+
+DRILL_OUTPUT_TAIL_CHARS = 2_048
+"""实例日志摘要保留的末尾字符数（只做排障线索，不作判据）。"""
+
+DRILL_PARTITION_NO = 0
+"""演练默认分区号（单分区主题，避免分区分配噪声）。"""

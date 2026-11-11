@@ -1,0 +1,99 @@
+# 六类故障演练场景单源（任务 07-6-1）
+#
+# 唯一事实源：注入方式、观测指标、判据锚点、恢复预算都只在这里写一次；
+# `python -m ops.drill plan` 用它渲染表（设计文档与本文件的表由用例对照，防漂移），
+# 记录消费方 07-6-2 按 `name` / `criterion` 组「场景 × 判据 × 证据」对照表。
+#
+# 校验规则（`ops.drill.env.validate_scenarios`）：六类必须齐备、`inject` 落在闭集、
+# `observe` / `criterion` 非空、`name` 唯一、`schema_version = 1`。
+
+schema_version = 1
+
+[meta]
+updated_at = "2026-11-11"
+owner = "msg 服务端"
+
+[[scenarios]]
+name = "process_crash"
+title = "进程崩溃（SIGKILL / SIGTERM 两档）"
+inject = "sigkill_sigterm"
+observe = ["msg_messages_in_total", "msg_consumer_lag", "msg_publish_errors_total"]
+criterion = [
+  "已确认消息不回退（恢复后不重投已确认 offset）",
+  "未确认消息重新投递（至少一次语义）",
+  "重启不重排 offset（新消息 offset 连续）",
+  "实例确实被信号终止且恢复耗时在预算内",
+]
+recovery_budget_ms = 240000
+expect = "两档各一轮：杀进程后以同一数据根重启，已确认不丢、未确认重投、offset 连续"
+
+[[scenarios]]
+name = "disk_full"
+title = "磁盘满（受控填充 + 收紧拒绝水位）"
+inject = "fill_volume"
+observe = ["msg_disk_used_ratio", "msg_storage_rejected_total", "msg_publish_errors_total"]
+criterion = [
+  "满盘期发布被拒（HTTP 507 + 业务码 350022）",
+  "满盘期 /readyz 转 503",
+  "用量指标随填充上升且进程存活",
+  "清理填充后恢复可写、/readyz 回 200",
+]
+recovery_budget_ms = 240000
+expect = "注入期拒绝写且就绪转 503，清理后自动恢复；进程全程不退出"
+
+[[scenarios]]
+name = "slow_disk"
+title = "慢盘（受控写入压同一卷）"
+inject = "controlled_write"
+observe = ["msg_fsync_duration_ms", "msg_publish_latency_ms", "msg_consumer_lag"]
+criterion = [
+  "无假确认（已确认消息停压后不再投递）",
+  "位点不越尾（已确认位点与发布条数一致）",
+  "停压后积压归零",
+  "fsync / 发布延迟相对基线上涨（方向性）",
+]
+recovery_budget_ms = 240000
+expect = "压测写入期间发布确认仍正确；延迟上升只作方向性判定，绝对阈值归部署阶段"
+
+[[scenarios]]
+name = "network_partition"
+title = "网络分区（客户端侧 TCP 代理）"
+inject = "tcp_proxy"
+observe = ["msg_publish_errors_total", "msg_rpc_duration_ms", "msg_consumer_lag"]
+criterion = [
+  "断连档发布失败（客户端可见的连接错误）",
+  "断连期实例本身健康（故障只在链路）",
+  "恢复后客户端可重连并发布成功",
+  "已确认消息不重复投递、积压追平",
+]
+recovery_budget_ms = 240000
+expect = "代理切 drop 后发布失败、切回 pass 后成功；实例自身探针全程正常"
+
+[[scenarios]]
+name = "stuck_consumer"
+title = "消费者卡死（只拉不确认填满 inflight）"
+inject = "unacked_inflight"
+observe = ["msg_inflight_messages", "msg_inflight_bytes", "msg_consumer_lag"]
+criterion = [
+  "在途填满后 consume 返回 paused=true（背压生效）",
+  "在途条数不超过上限（内存有界）",
+  "积压可观测（msg_consumer_lag 上升）",
+  "确认后恢复消费、积压归零且不重复",
+]
+recovery_budget_ms = 240000
+expect = "在途达上限即暂停推送；逐条确认后立即恢复，offset 唯一"
+
+[[scenarios]]
+name = "poison_message"
+title = "毒消息（入口拒绝 / 重投超限 / 主动拒绝）"
+inject = "invalid_and_exhausted"
+observe = ["msg_dlq_total", "msg_consume_errors_total", "msg_consumer_lag"]
+criterion = [
+  "非法载荷被入口拒绝（4xx，不进日志）",
+  "重投次数不超过上限",
+  "重投超限后进死信且管理面可查",
+  "毒消息终结后同分区后续消息可消费",
+  "主动 nack 即时转死信且可查",
+]
+recovery_budget_ms = 300000
+expect = "三段分别取证：入口拒绝、重投有界转死信、主动拒绝即时终结；均不阻塞后续"

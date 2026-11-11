@@ -44,7 +44,7 @@ typeCheckingMode = "strict"
 pythonVersion = "3.14"
 include = ["services"]
 ignore = ["alembic"]
-extraPaths = ["services/msg/src"]
+extraPaths = ["services/msg/src", "."]
 reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
