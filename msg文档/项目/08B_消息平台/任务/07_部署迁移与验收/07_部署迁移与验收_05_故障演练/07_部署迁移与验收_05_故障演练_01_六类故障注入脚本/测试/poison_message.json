@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "task": "07-6-1",
+  "scenario": "poison_message",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T02:54:10.320571+00:00",
+  "finished_at": "2026-11-11T02:58:01.925971+00:00",
+  "injection": {
+    "method": "invalid_and_exhausted",
+    "detail": "非法载荷 + 重投超限（上限 5）+ 主动 nack",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T02:54:20.285161+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_dlq_total": 0.0,
+        "msg_consume_errors_total": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T02:54:20.375211+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_dlq_total": 0.0,
+        "msg_consume_errors_total": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "after": {
+      "captured_at": "2026-11-11T02:58:01.922657+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_dlq_total": 2.0,
+        "msg_consume_errors_total": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "invalid_payload_rejected",
+      "expect": "非法载荷被入口拒绝（HTTP 4xx 或业务码非 0）",
+      "actual": "HTTP 200、业务码 10001",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "redelivery_bounded",
+      "expect": "重投次数不超过上限（5）",
+      "actual": "最大 delivery_count=5",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "dead_letter_created",
+      "expect": "重投超限后进死信且管理面可查",
+      "actual": "死信列表不可查（HTTP 500，{\"code\":10000,\"message\":\"error.10000\",\"data\":null}）",
+      "result": "degraded",
+      "passed": false
+    },
+    {
+      "key": "not_blocking_followers",
+      "expect": "毒消息终结后同分区后续消息可消费（不阻塞）",
+      "actual": "毒消息在 220s 内未终结（重投已达 5 次），后续消息按停等被阻塞",
+      "result": "degraded",
+      "passed": false
+    },
+    {
+      "key": "nack_to_dlq",
+      "expect": "主动拒绝即时转死信且可查",
+      "actual": "nack HTTP 200；死信列表不可查（HTTP 500，{\"code\":10000,\"message\":\"error.10000\",\"data\":null}）",
+      "result": "degraded",
+      "passed": false
+    }
+  ],
+  "rto_ms": 221632,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "conclusion": {
+    "result": "降级通过",
+    "exit_code": 2,
+    "reasons": [
+      "dead_letter_created：死信列表不可查（HTTP 500，{\"code\":10000,\"message\":\"error.10000\",\"data\":null}）",
+      "not_blocking_followers：毒消息在 220s 内未终结（重投已达 5 次），后续消息按停等被阻塞",
+      "nack_to_dlq：nack HTTP 200；死信列表不可查（HTTP 500，{\"code\":10000,\"message\":\"error.10000\",\"data\":null}）"
+    ]
+  },
+  "deviations": [
+    "可见性超时为常量 30s、重投上限 5 次，本场景按预算等待；提速需 02-2/02-3 开放旋钮",
+    "死信库为 SQLite（隔离实例），元数据结构与生产一致"
+  ],
+  "issues": [],
+  "leftovers": [
+    {
+      "item": "管理面死信列表在隔离实例返回 500（MissingGreenlet：ACL 释放后读 ORM 属性）",
+      "owner": "06-4 死信管理（生产同样触发，需 ACL 释放与 ORM 过期解耦后复验本场景）"
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "task": "07-6-1",
+  "scenario": "stuck_consumer",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T00:02:18.721485+00:00",
+  "finished_at": "2026-11-11T00:02:30.735465+00:00",
+  "injection": {
+    "method": "unacked_inflight",
+    "detail": "发布 105 条后只拉不确认，填满在途上限 100",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T00:02:29.472096+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_inflight_messages": 0.0,
+        "msg_inflight_bytes": 0.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T00:02:30.194850+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_inflight_messages": 100.0,
+        "msg_inflight_bytes": 790.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "after": {
+      "captured_at": "2026-11-11T00:02:30.726942+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_inflight_messages": 5.0,
+        "msg_inflight_bytes": 45.0,
+        "msg_consumer_lag": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "backpressure_applied",
+      "expect": "在途填满后 consume 返回 `paused=true`（背压生效）",
+      "actual": "paused=True、inflight_messages=100（上限 100）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "inflight_bounded",
+      "expect": "在途条数不超过上限（内存有界）",
+      "actual": "inflight_messages=100 ≤ 100",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "backlog_visible",
+      "expect": "积压可观测（在途条数 > 0 或 `msg_consumer_lag` 上升）",
+      "actual": "在途 100 条、lag 0 → 0",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "resumed_after_ack",
+      "expect": "确认后恢复消费且积压归零（不重复消费）",
+      "actual": "确认 105 条，残留 0 条",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "no_duplicate",
+      "expect": "恢复期投递不重复（offset 唯一且单调）",
+      "actual": "投出 100 条，唯一 100 条",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 0,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "单分区单消费者（多成员分配与再平衡不在本类判据内）"
+  ],
+  "issues": [],
+  "leftovers": []
+}

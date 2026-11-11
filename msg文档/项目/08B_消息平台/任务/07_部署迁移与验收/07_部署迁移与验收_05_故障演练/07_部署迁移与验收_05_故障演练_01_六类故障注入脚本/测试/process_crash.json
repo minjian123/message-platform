@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "task": "07-6-1",
+  "scenario": "process_crash",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T02:43:56.703542+00:00",
+  "finished_at": "2026-11-11T02:44:39.126462+00:00",
+  "injection": {
+    "method": "sigkill_sigterm",
+    "detail": "两档各发布 6 条、确认 4 条后杀进程并以同一数据根重启",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T02:44:25.138175+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_messages_in_total": 1.0,
+        "msg_consumer_lag": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T02:44:27.179374+00:00",
+      "readyz_status": 0,
+      "readyz_ok": false,
+      "healthz_ok": false,
+      "metrics": {
+        "msg_messages_in_total": 0.0,
+        "msg_consumer_lag": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "ReadError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。"
+    },
+    "after": {
+      "captured_at": "2026-11-11T02:44:39.091967+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_messages_in_total": 0.0,
+        "msg_consumer_lag": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "SIGKILL.confirmed_not_rewound",
+      "expect": "已确认消息不回退（恢复后不重投 offset < 已确认位点）",
+      "actual": "已确认 4 条，恢复后投出 [4, 5]",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGKILL.unacked_redelivered",
+      "expect": "未确认 2 条重新投递（至少一次语义）",
+      "actual": "恢复后投出 [4, 5]，期望含 [4, 5]",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGKILL.leo_not_rewound",
+      "expect": "重启不重排 offset（新消息 offset 连续）",
+      "actual": "新消息 offset=6，期望 6",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGKILL.killed_by_signal",
+      "expect": "实例确实被信号终止（非正常退出）",
+      "actual": "信号 SIGKILL，退出码 1",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGKILL.rto_within_budget",
+      "expect": "恢复耗时在预算内",
+      "actual": "14024 ms（预算 240000 ms）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGTERM.confirmed_not_rewound",
+      "expect": "已确认消息不回退（恢复后不重投 offset < 已确认位点）",
+      "actual": "已确认 4 条，恢复后投出 [4, 5]",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGTERM.unacked_redelivered",
+      "expect": "未确认 2 条重新投递（至少一次语义）",
+      "actual": "恢复后投出 [4, 5]，期望含 [4, 5]",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGTERM.leo_not_rewound",
+      "expect": "重启不重排 offset（新消息 offset 连续）",
+      "actual": "新消息 offset=6，期望 6",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGTERM.killed_by_signal",
+      "expect": "实例确实被信号终止（非正常退出）",
+      "actual": "信号 SIGTERM，退出码 1",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "SIGTERM.rto_within_budget",
+      "expect": "恢复耗时在预算内",
+      "actual": "13984 ms（预算 240000 ms）",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 14024,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "位点提交是「标脏 + 定期落盘」，确认后等一个刷盘窗口再杀进程（否则脏页丢失会整段重投）",
+    "在途状态为进程内存，重启后 delivery_count 从 1 重新计；未确认消息靠位点重投保证不丢",
+    "成员会话同为进程内存：重启后脚本按客户端真实动作重新 join，未沿用旧会话",
+    "元数据库用 SQLite（生产为平台 MySQL），数据面与文件存储为真实现"
+  ],
+  "issues": [],
+  "leftovers": []
+}

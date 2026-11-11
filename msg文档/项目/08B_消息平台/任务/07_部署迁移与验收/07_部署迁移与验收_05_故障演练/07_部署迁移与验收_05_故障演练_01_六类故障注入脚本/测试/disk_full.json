@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "task": "07-6-1",
+  "scenario": "disk_full",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "local",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-11T00:03:23.430453+00:00",
+  "finished_at": "2026-11-11T00:03:37.528325+00:00",
+  "injection": {
+    "method": "fill_volume",
+    "detail": "填充 1527 MiB 至 fill/volume.bin，拒绝水位收紧至 0.3573",
+    "artifact": "D:\\Develop\\bizs\\msg\\tmp\\drill\\fill\\volume.bin"
+  },
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-11T00:03:33.089483+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.3569,
+        "msg_storage_rejected_total": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "during": {
+      "captured_at": "2026-11-11T00:03:36.180465+00:00",
+      "readyz_status": 503,
+      "readyz_ok": false,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.3573,
+        "msg_storage_rejected_total": 0.0,
+        "msg_publish_errors_total": 0.0
+      },
+      "detail": "{\"status\":\"down\",\"checks\":{\"msg_storage\":{\"ok\":false,\"error\":\"MsgStorageWatermarkExceededError\"},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    },
+    "after": {
+      "captured_at": "2026-11-11T00:03:37.505398+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_disk_used_ratio": 0.3569,
+        "msg_storage_rejected_total": 1.0,
+        "msg_publish_errors_total": 1.0
+      },
+      "detail": "{\"status\":\"ok\",\"checks\":{\"msg_storage\":{\"ok\":true,\"error\":null},\"msg_recovery\":{\"ok\":true,\"error\":null},\"database\":{\"ok\":true,\"error\":null}},\"service\":\"msg\",\"version\":\"0.1.0\"}"
+    }
+  },
+  "criteria": [
+    {
+      "key": "publish_rejected",
+      "expect": "满盘期发布被拒（HTTP 507 + 业务码 350022）",
+      "actual": "HTTP 507、业务码 350022",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "readyz_degraded",
+      "expect": "满盘期 /readyz 转 503（不摘实例但不再接写）",
+      "actual": "/readyz=503",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "ratio_risen",
+      "expect": "`msg_disk_used_ratio` 随填充上升",
+      "actual": "0.3569 → 0.3573",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "process_alive",
+      "expect": "进程存活（/healthz 仍 200，磁盘满不致死）",
+      "actual": "/healthz=200",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "recovered",
+      "expect": "清理填充后恢复可写、/readyz 回 200",
+      "actual": "发布 HTTP 200、/readyz=200",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rto_within_budget",
+      "expect": "恢复耗时在预算内",
+      "actual": "4436 ms（预算 240000 ms）",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 4436,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据"
+  },
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "本机无可配额卷：用「收紧拒绝水位 + 受控填充」等价「临时卷被填满」，容器通道为 tmpfs 限额卷",
+    "填充文件落在演练工作根（与数据根同卷），清理即删除，不触碰其他目录"
+  ],
+  "issues": [],
+  "leftovers": []
+}
