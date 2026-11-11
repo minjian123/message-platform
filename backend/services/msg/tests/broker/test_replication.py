@@ -342,6 +342,8 @@ async def test_acks_all_waits_until_commit() -> None:
     await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     await asyncio.wait_for(waiter, timeout=1)
+    # ISR 充足时 acks=all 的预检直接通过（不抛 350032）。
+    await cluster.leader.ensure_writable(topic_id=TOPIC_ID, partition_no=PARTITION_NO, acks="all")
 
 
 async def test_insufficient_isr_rejects_acks_all_but_allows_local() -> None:
@@ -533,11 +535,12 @@ async def test_topology_min_insync_clamped_to_replicas() -> None:
 
 
 def test_metrics_partition_limit() -> None:
-    """指标基数上限：超出部分不进入快照。"""
+    """指标基数上限：超出部分不进入快照（只告警一次，后续溢出静默丢弃）。"""
     metrics = ReplicationMetrics(partition_limit=2)
     metrics.update(topic_id=1, partition_no=0, isr_size=1, lag_records=0)
     metrics.update(topic_id=1, partition_no=1, isr_size=1, lag_records=0)
     metrics.update(topic_id=1, partition_no=2, isr_size=1, lag_records=0)
+    metrics.update(topic_id=1, partition_no=3, isr_size=1, lag_records=0)
     assert len(metrics.snapshot().rows) == 2
 
 

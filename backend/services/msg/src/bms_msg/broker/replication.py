@@ -1087,13 +1087,11 @@ class ReplicationCoordinator(ReplicationView):
         if computed <= state.hw:
             self._update_metrics(state)
             return
+        # 走到这里必有推进（上方已判 `computed > state.hw`）：唤醒提交等待与长轮询。
         async with state.condition:
-            before = state.hw
             state.hw = max(state.hw, computed)
-            advanced = state.hw > before
-            if advanced:
-                state.condition.notify_all()
-        if advanced and self._waiter is not None:
+            state.condition.notify_all()
+        if self._waiter is not None:
             self._waiter.notify((state.topic_id, state.partition_no))
         self._update_metrics(state)
 
@@ -1199,11 +1197,9 @@ class ReplicationCoordinator(ReplicationView):
         visible = min(result.high_watermark, state.local_leo)
         if visible > state.hw:
             async with state.condition:
-                before = state.hw
                 state.hw = max(state.hw, visible)
-                if state.hw > before:
-                    state.condition.notify_all()
-            if state.hw > before and self._waiter is not None:
+                state.condition.notify_all()
+            if self._waiter is not None:
                 self._waiter.notify((state.topic_id, state.partition_no))
         state.last_reported_leader_hw = result.high_watermark
         self._update_metrics(state)
@@ -1235,9 +1231,9 @@ class ReplicationCoordinator(ReplicationView):
             await self._scan_partition(state)
 
     async def _pull_loop(self) -> None:
-        """follower 周期拉取（异常隔离，指数退避封顶）。"""
+        """follower 周期拉取（异常隔离，指数退避封顶；由 `aclose` 取消）。"""
         interval = self._config.fetch_interval_ms / MS_PER_SECOND
-        while not self._stopped:
+        while True:
             await asyncio.sleep(interval)
             keys = ConcurrentStableList(self._partitions.keys())
             for key in keys:
@@ -1281,9 +1277,9 @@ class ReplicationCoordinator(ReplicationView):
         )
 
     async def _scan_loop(self) -> None:
-        """leader 周期扫描 ISR（收缩 / 重入）。"""
+        """leader 周期扫描 ISR（收缩 / 重入；由 `aclose` 取消）。"""
         interval = self._config.scan_interval_ms / MS_PER_SECOND
-        while not self._stopped:
+        while True:
             await asyncio.sleep(interval)
             await self.scan_isr_once()
 
