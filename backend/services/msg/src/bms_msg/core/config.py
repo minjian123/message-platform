@@ -914,14 +914,32 @@ DRILL_REJECT_RATIO_ENV = "MSG_DRILL_REJECT_RATIO"
 DRILL_REPORT_DIR_ENV = "MSG_DRILL_REPORT_DIR"
 """演练记录落点的环境变量名（相对仓根）。"""
 
+DRILL_EVIDENCE_DIR_ENV = "MSG_DRILL_EVIDENCE_DIR"
+"""验收矩阵落点的环境变量名（相对仓根；缺省 `tmp/drill/evidence`）。"""
+
 DRILL_SCENARIOS_PATH = "deploy/drill/scenarios.toml"
 """场景单源相对仓根的缺省路径（注入方式 / 观测指标 / 判据锚点 / 预算唯一来源）。"""
 
 DRILL_REPORT_DIR = "tmp/drill"
 """演练记录缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
 
-DRILL_SCHEMA_VERSION = 1
-"""场景单源与记录格式版本（后续只增字段，不删不改语义）。"""
+DRILL_SCENARIO_SCHEMA_VERSION = 2
+"""场景单源格式版本（判据结构化后升 2；记录格式版本单独维护）。"""
+
+DRILL_RECORD_SCHEMA_VERSION = 2
+"""演练记录格式版本（只增字段；v1 记录仍可判读，缺增强字段记降级）。"""
+
+DRILL_EVIDENCE_SCHEMA_VERSION = 1
+"""验收矩阵（场景 × 判据 × 证据）格式版本。"""
+
+DRILL_EVIDENCE_DIR = "tmp/drill/evidence"
+"""验收矩阵缺省落点（相对仓根；`tmp/` 已忽略，不进库）。"""
+
+DRILL_CHECKLIST_PATH = "deploy/drill/RELEASE_CHECKLIST.md"
+"""发版前检查清单（生成物）相对仓根的路径。"""
+
+DRILL_COMMAND_LIMIT = 200
+"""记录 `commands[]` 的动作条数上限（超出保留首尾并标 `truncated`）。"""
 
 DRILL_DEFAULT_ENV = "test"
 """演练缺省环境（隔离实例）；生产环境一律拒绝，无逃生开关。"""

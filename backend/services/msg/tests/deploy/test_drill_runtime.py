@@ -15,7 +15,7 @@ import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import httpx
 import pytest
@@ -448,6 +448,8 @@ def test_execute_returns_report_and_cleans_up(tmp_path: Path, monkeypatch: pytes
             closed.append("instance")
 
     class _Http:
+        commands: ClassVar[list[object]] = []
+
         def close(self) -> None:
             closed.append("http")
 
@@ -478,6 +480,8 @@ def test_execute_turns_drill_error_into_failed_report(tmp_path: Path, monkeypatc
             pass
 
     class _Http:
+        commands: ClassVar[list[object]] = []
+
         def close(self) -> None:
             pass
 
@@ -604,7 +608,7 @@ def test_cli_run_writes_reports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.setenv("MSG_DRILL_REPORT_DIR", str(tmp_path / "reports"))
     seen: dict[str, object] = {}
 
-    def fake_execute(config: DrillConfig, scenario: DrillScenario) -> DrillReport:
+    def fake_execute(config: DrillConfig, scenario: DrillScenario, **_kw: object) -> DrillReport:
         seen["scenario"] = scenario.name
         return _report()
 

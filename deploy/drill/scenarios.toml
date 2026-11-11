@@ -1,13 +1,14 @@
-# 六类故障演练场景单源（任务 07-6-1）
+# 六类故障演练场景单源（任务 07-6-1 起；07-6-2 升 schema 2）
 #
-# 唯一事实源：注入方式、观测指标、判据锚点、恢复预算都只在这里写一次；
-# `python -m ops.drill plan` 用它渲染表（设计文档与本文件的表由用例对照，防漂移），
-# 记录消费方 07-6-2 按 `name` / `criterion` 组「场景 × 判据 × 证据」对照表。
+# 唯一事实源：注入方式、观测指标、判据（原文 / 记录键 / 硬或可降级 / 证据要求）、恢复预算
+# 都只在这里写一次。`python -m ops.drill plan` 渲染场景表，`criteria` 渲染判据表，
+# `checklist` 渲染发版前检查清单；用例断言三处与文档逐行一致，防漂移。
 #
 # 校验规则（`ops.drill.env.validate_scenarios`）：六类必须齐备、`inject` 落在闭集、
-# `observe` / `criterion` 非空、`name` 唯一、`schema_version = 1`。
+# `observe` 非空、判据键场景内唯一、`severity` 落在 hard / degradable、`record_keys`
+# 非空且不与 `aux_record_keys` 相交、`name` 唯一、`schema_version = 2`。
 
-schema_version = 1
+schema_version = 2
 
 [meta]
 updated_at = "2026-11-11"
@@ -18,82 +19,237 @@ name = "process_crash"
 title = "进程崩溃（SIGKILL / SIGTERM 两档）"
 inject = "sigkill_sigterm"
 observe = ["msg_messages_in_total", "msg_consumer_lag", "msg_publish_errors_total"]
-criterion = [
-  "已确认消息不回退（恢复后不重投已确认 offset）",
-  "未确认消息重新投递（至少一次语义）",
-  "重启不重排 offset（新消息 offset 连续）",
-  "实例确实被信号终止且恢复耗时在预算内",
-]
 recovery_budget_ms = 240000
 expect = "两档各一轮：杀进程后以同一数据根重启，已确认不丢、未确认重投、offset 连续"
+
+  [[scenarios.criterion]]
+  key = "confirmed_not_rewound"
+  text = "已确认消息不回退（恢复后不重投已确认 offset）"
+  record_keys = ["SIGKILL.confirmed_not_rewound", "SIGTERM.confirmed_not_rewound"]
+  severity = "hard"
+  evidence = "记录 criteria[] + after 段 offset"
+
+  [[scenarios.criterion]]
+  key = "unacked_redelivered"
+  text = "未确认消息重新投递（至少一次语义）"
+  record_keys = ["SIGKILL.unacked_redelivered", "SIGTERM.unacked_redelivered"]
+  severity = "hard"
+  evidence = "记录 criteria[] + after 段投出 offset"
+
+  [[scenarios.criterion]]
+  key = "leo_not_rewound"
+  text = "重启不重排 offset（新消息 offset 连续）"
+  record_keys = ["SIGKILL.leo_not_rewound", "SIGTERM.leo_not_rewound"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 新消息 offset"
+
+  [[scenarios.criterion]]
+  key = "killed_by_signal"
+  text = "实例确实被信号终止（恢复耗时由 G5 判）"
+  record_keys = ["SIGKILL.killed_by_signal", "SIGTERM.killed_by_signal"]
+  severity = "hard"
+  evidence = "记录 criteria[] + injection.method"
 
 [[scenarios]]
 name = "disk_full"
 title = "磁盘满（受控填充 + 收紧拒绝水位）"
 inject = "fill_volume"
 observe = ["msg_disk_used_ratio", "msg_storage_rejected_total", "msg_publish_errors_total"]
-criterion = [
-  "满盘期发布被拒（HTTP 507 + 业务码 350022）",
-  "满盘期 /readyz 转 503",
-  "用量指标随填充上升且进程存活",
-  "清理填充后恢复可写、/readyz 回 200",
-]
+aux_record_keys = ["rto_within_budget"]
 recovery_budget_ms = 240000
 expect = "注入期拒绝写且就绪转 503，清理后自动恢复；进程全程不退出"
+
+  [[scenarios.criterion]]
+  key = "publish_rejected"
+  text = "满盘期发布被拒（HTTP 507 + 业务码 350022）"
+  record_keys = ["publish_rejected"]
+  severity = "hard"
+  evidence = "记录 criteria[] + during 段 readyz / 指标"
+
+  [[scenarios.criterion]]
+  key = "readyz_degraded"
+  text = "满盘期 /readyz 转 503"
+  record_keys = ["readyz_degraded"]
+  severity = "hard"
+  evidence = "during 段 readyz_status"
+
+  [[scenarios.criterion]]
+  key = "ratio_risen"
+  text = "用量指标随填充上升且进程存活"
+  record_keys = ["ratio_risen", "process_alive"]
+  severity = "hard"
+  evidence = "before / during 段 `msg_disk_used_ratio` + healthz"
+
+  [[scenarios.criterion]]
+  key = "recovered"
+  text = "清理填充后恢复可写、/readyz 回 200"
+  record_keys = ["recovered"]
+  severity = "hard"
+  evidence = "after 段 readyz + 发布结果"
 
 [[scenarios]]
 name = "slow_disk"
 title = "慢盘（受控写入压同一卷）"
 inject = "controlled_write"
 observe = ["msg_fsync_duration_ms", "msg_publish_latency_ms", "msg_consumer_lag"]
-criterion = [
-  "无假确认（已确认消息停压后不再投递）",
-  "位点不越尾（已确认位点与发布条数一致）",
-  "停压后积压归零",
-  "fsync / 发布延迟相对基线上涨（方向性）",
-]
+aux_record_keys = ["pressure_written"]
 recovery_budget_ms = 240000
 expect = "压测写入期间发布确认仍正确；延迟上升只作方向性判定，绝对阈值归部署阶段"
+
+  [[scenarios.criterion]]
+  key = "no_fake_ack"
+  text = "无假确认（已确认消息停压后不再投递）"
+  record_keys = ["no_fake_ack"]
+  severity = "hard"
+  evidence = "记录 criteria[] + after 段投出 offset"
+
+  [[scenarios.criterion]]
+  key = "offset_within_leo"
+  text = "位点不越尾（已确认位点与发布条数一致）"
+  record_keys = ["offset_within_leo"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 位点读数"
+
+  [[scenarios.criterion]]
+  key = "lag_drained"
+  text = "停压后积压归零"
+  record_keys = ["lag_drained"]
+  severity = "hard"
+  evidence = "after 段 `msg_consumer_lag`"
+
+  [[scenarios.criterion]]
+  key = "latency_visible"
+  text = "fsync / 发布延迟相对基线上涨（方向性）"
+  record_keys = ["latency_visible"]
+  severity = "degradable"
+  evidence = "before / during 段 `msg_fsync_duration_ms`、`msg_publish_latency_ms`"
 
 [[scenarios]]
 name = "network_partition"
 title = "网络分区（客户端侧 TCP 代理）"
 inject = "tcp_proxy"
 observe = ["msg_publish_errors_total", "msg_rpc_duration_ms", "msg_consumer_lag"]
-criterion = [
-  "断连档发布失败（客户端可见的连接错误）",
-  "断连期实例本身健康（故障只在链路）",
-  "恢复后客户端可重连并发布成功",
-  "已确认消息不重复投递、积压追平",
-]
+aux_record_keys = ["proxy_passthrough", "modes_switchable"]
 recovery_budget_ms = 240000
 expect = "代理切 drop 后发布失败、切回 pass 后成功；实例自身探针全程正常"
+
+  [[scenarios.criterion]]
+  key = "drop_blocks_publish"
+  text = "断连档发布失败（客户端可见的连接错误）"
+  record_keys = ["drop_blocks_publish"]
+  severity = "hard"
+  evidence = "记录 criteria[] + during 段错误"
+
+  [[scenarios.criterion]]
+  key = "instance_alive_during_partition"
+  text = "断连期实例本身健康（故障只在链路）"
+  record_keys = ["instance_alive_during_partition"]
+  severity = "hard"
+  evidence = "during 段 readyz / healthz"
+
+  [[scenarios.criterion]]
+  key = "reconnected"
+  text = "恢复后客户端可重连并发布成功"
+  record_keys = ["reconnected"]
+  severity = "hard"
+  evidence = "记录 criteria[] + after 段发布结果"
+
+  [[scenarios.criterion]]
+  key = "no_duplicate_delivery"
+  text = "已确认消息不重复投递、积压追平"
+  record_keys = ["no_duplicate_delivery", "lag_drained"]
+  severity = "hard"
+  evidence = "after 段 offset 集合 + `msg_consumer_lag`"
 
 [[scenarios]]
 name = "stuck_consumer"
 title = "消费者卡死（只拉不确认填满 inflight）"
 inject = "unacked_inflight"
 observe = ["msg_inflight_messages", "msg_inflight_bytes", "msg_consumer_lag"]
-criterion = [
-  "在途填满后 consume 返回 paused=true（背压生效）",
-  "在途条数不超过上限（内存有界）",
-  "积压可观测（msg_consumer_lag 上升）",
-  "确认后恢复消费、积压归零且不重复",
-]
 recovery_budget_ms = 240000
 expect = "在途达上限即暂停推送；逐条确认后立即恢复，offset 唯一"
+
+  [[scenarios.criterion]]
+  key = "backpressure_applied"
+  text = "在途填满后 consume 返回 paused=true（背压生效）"
+  record_keys = ["backpressure_applied"]
+  severity = "hard"
+  evidence = "记录 criteria[] + during 段响应"
+
+  [[scenarios.criterion]]
+  key = "inflight_bounded"
+  text = "在途条数不超过上限（内存有界）"
+  record_keys = ["inflight_bounded"]
+  severity = "hard"
+  evidence = "during 段 `msg_inflight_messages`"
+
+  [[scenarios.criterion]]
+  key = "backlog_visible"
+  text = "积压可观测（msg_consumer_lag 上升）"
+  record_keys = ["backlog_visible"]
+  severity = "hard"
+  evidence = "during 段 `msg_consumer_lag`"
+
+  [[scenarios.criterion]]
+  key = "resumed_after_ack"
+  text = "确认后恢复消费、积压归零且不重复"
+  record_keys = ["resumed_after_ack", "no_duplicate"]
+  severity = "hard"
+  evidence = "after 段拉取结果 + offset 集合"
 
 [[scenarios]]
 name = "poison_message"
 title = "毒消息（入口拒绝 / 重投超限 / 主动拒绝）"
 inject = "invalid_and_exhausted"
 observe = ["msg_dlq_total", "msg_consume_errors_total", "msg_consumer_lag"]
-criterion = [
-  "非法载荷被入口拒绝（4xx，不进日志）",
-  "重投次数不超过上限",
-  "重投超限后进死信且管理面可查",
-  "毒消息终结后同分区后续消息可消费",
-  "主动 nack 即时转死信且可查",
-]
 recovery_budget_ms = 300000
 expect = "三段分别取证：入口拒绝、重投有界转死信、主动拒绝即时终结；均不阻塞后续"
+
+  [[scenarios.criterion]]
+  key = "invalid_payload_rejected"
+  text = "非法载荷被入口拒绝（HTTP 4xx 或业务码非 0）"
+  record_keys = ["invalid_payload_rejected"]
+  severity = "hard"
+  evidence = "记录 criteria[] + logs 摘要无载荷"
+
+  [[scenarios.criterion]]
+  key = "redelivery_bounded"
+  text = "重投次数不超过上限（5）"
+  record_keys = ["redelivery_bounded"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 最大 `delivery_count`"
+
+  [[scenarios.criterion]]
+  key = "dead_letter_created"
+  text = "重投超限后进死信（msg_dlq_total 增长）"
+  record_keys = ["dead_letter_created"]
+  severity = "hard"
+  evidence = "`msg_dlq_total` 前后差"
+
+  [[scenarios.criterion]]
+  key = "dead_letter_queryable"
+  text = "死信管理面可查（按 message_id 命中）"
+  record_keys = ["dead_letter_queryable"]
+  severity = "degradable"
+  evidence = "管理面响应"
+
+  [[scenarios.criterion]]
+  key = "not_blocking_followers"
+  text = "毒消息终结后同分区后续消息可消费（不阻塞）"
+  record_keys = ["not_blocking_followers"]
+  severity = "degradable"
+  evidence = "记录 criteria[] + 后续消息 offset"
+
+  [[scenarios.criterion]]
+  key = "nack_to_dlq"
+  text = "主动 nack 即时转死信"
+  record_keys = ["nack_to_dlq"]
+  severity = "hard"
+  evidence = "nack 响应 + `msg_dlq_total` 增量"
+
+  [[scenarios.criterion]]
+  key = "nack_queryable"
+  text = "主动 nack 的死信管理面可查"
+  record_keys = ["nack_queryable"]
+  severity = "degradable"
+  evidence = "管理面响应"

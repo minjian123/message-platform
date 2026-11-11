@@ -51,6 +51,7 @@ from ops.drill.model import (
     RESULT_FAILED,
     RESULT_OK,
     Criterion,
+    DrillCriterionSpec,
     DrillReport,
     DrillScenario,
     PhaseSample,
@@ -60,6 +61,17 @@ pytestmark = pytest.mark.kiwi_id(2479)
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 """仓库根（用于定位场景单源）。"""
+
+
+def _hard_spec(key: str = "c") -> DrillCriterionSpec:
+    """构造一条硬判据声明（用例只关心结构与取值）。"""
+    return DrillCriterionSpec(
+        key=key,
+        text=key,
+        record_keys=ConcurrentStableFrozenList((key,)),
+        severity="hard",
+        evidence="e",
+    )
 
 
 def _sample(phase: str, *, status: int = 200, ok: bool = True) -> PhaseSample:
@@ -221,12 +233,17 @@ def test_load_scenarios_broken_toml(tmp_path: Path) -> None:
 def test_load_scenarios_structure_errors(tmp_path: Path) -> None:
     """场景单源：缺 [[scenarios]] 与条目非表都被指出。"""
     path = tmp_path / "empty.toml"
-    path.write_text('schema_version = 1\n[[scenarios]]\nname = "a"\n', encoding="utf-8")
+    path.write_text(
+        'schema_version = 2\n[[scenarios]]\nname = "a"\n'
+        '[[scenarios.criterion]]\nkey = "c"\ntext = "c"\nrecord_keys = ["c"]\n'
+        'severity = "hard"\nevidence = "e"\n',
+        encoding="utf-8",
+    )
     scenario_set, errors = load_scenarios(path)
     assert not errors
     assert any("inject" in item for item in validate_scenarios(scenario_set, 240_000))
 
-    path.write_text("schema_version = 1\nscenarios = [1]\n", encoding="utf-8")
+    path.write_text("schema_version = 2\nscenarios = [1]\n", encoding="utf-8")
     _, errors = load_scenarios(path)
     assert any("不是表" in item for item in errors)
 
@@ -254,6 +271,7 @@ def test_validate_scenarios_reports_each_problem() -> None:
                     inject="nope",
                     observe=ConcurrentStableFrozenList(),
                     criterion=ConcurrentStableFrozenList(),
+                    aux_record_keys=ConcurrentStableFrozenList(),
                     recovery_budget_ms=0,
                     expect="",
                 ),
@@ -262,7 +280,8 @@ def test_validate_scenarios_reports_each_problem() -> None:
                     title="t",
                     inject="sigkill_sigterm",
                     observe=ConcurrentStableFrozenList(["m"]),
-                    criterion=ConcurrentStableFrozenList(["c"]),
+                    criterion=ConcurrentStableFrozenList((_hard_spec(),)),
+                    aux_record_keys=ConcurrentStableFrozenList(),
                     recovery_budget_ms=10_000_000,
                     expect="e",
                 ),
@@ -271,7 +290,8 @@ def test_validate_scenarios_reports_each_problem() -> None:
                     title="t",
                     inject="sigkill_sigterm",
                     observe=ConcurrentStableFrozenList(["m"]),
-                    criterion=ConcurrentStableFrozenList(["c"]),
+                    criterion=ConcurrentStableFrozenList((_hard_spec(),)),
+                    aux_record_keys=ConcurrentStableFrozenList(),
                     recovery_budget_ms=1000,
                     expect="e",
                 ),

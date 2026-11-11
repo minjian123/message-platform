@@ -23,7 +23,11 @@ __all__ = [
     "RESULT_FAILED",
     "RESULT_OK",
     "RESULT_SKIPPED",
+    "SEVERITIES",
+    "SEVERITY_DEGRADABLE",
+    "SEVERITY_HARD",
     "Criterion",
+    "DrillCriterionSpec",
     "DrillReport",
     "DrillScenario",
     "PhaseSample",
@@ -56,6 +60,35 @@ RESULT_FAILED = "failed"
 RESULT_SKIPPED = "skipped"
 """判据结果：前置不满足未执行（结论降级）。"""
 
+SEVERITY_HARD = "hard"
+"""判据级别：硬判据（任一记录键非 `ok` 即场景不通过）。"""
+
+SEVERITY_DEGRADABLE = "degradable"
+"""判据级别：可降级判据（采不到样本时记降级，不判失败）。"""
+
+SEVERITIES: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList((SEVERITY_HARD, SEVERITY_DEGRADABLE))
+"""判据级别闭集。"""
+
+
+@dataclass(frozen=True)
+class DrillCriterionSpec:
+    """一条判据的声明（`scenarios.toml` 的 `[[scenarios.criterion]]`）。"""
+
+    key: str
+    """判据标识（场景内唯一，小写下划线）。"""
+
+    text: str
+    """人读判据原文（`plan` 的「恢复判据」列即它）。"""
+
+    record_keys: ConcurrentStableFrozenList[str]
+    """该判据在记录 `criteria[]` 中的键（至少一条；双向对账的锚点）。"""
+
+    severity: str
+    """`hard` / `degradable`（闭集见 `SEVERITIES`）。"""
+
+    evidence: str
+    """证据要求（看哪段样本 / 哪个字段 / 哪份记录）。"""
+
 
 @dataclass(frozen=True)
 class DrillScenario:
@@ -73,8 +106,11 @@ class DrillScenario:
     observe: ConcurrentStableFrozenList[str]
     """观测指标名（`msg_*`；缺失时记 0，不判失败）。"""
 
-    criterion: ConcurrentStableFrozenList[str]
-    """判据锚点（逐条可读，记录里按此顺序输出）。"""
+    criterion: ConcurrentStableFrozenList[DrillCriterionSpec]
+    """判据声明（逐条可读；记录里按 `record_keys` 对账）。"""
+
+    aux_record_keys: ConcurrentStableFrozenList[str]
+    """注入前置类记录键（参与孤儿键检查，不构成通过判据）。"""
 
     recovery_budget_ms: int
     """恢复预算（毫秒；超出判失败）。"""
@@ -191,6 +227,25 @@ class DrillReport:
 
     backup: ConcurrentStableFrozenDict[str, str] = field(default_factory=ConcurrentStableFrozenDict[str, str])
     """演练前备份证据：`mode=not_applicable|provided` + 理由（隔离实例不适用，非隔离必须给）。"""
+
+    commands: ConcurrentStableFrozenList[ConcurrentStableFrozenDict[str, str]] = field(
+        default_factory=ConcurrentStableFrozenList[ConcurrentStableFrozenDict[str, str]]
+    )
+    """动作轨迹（方法 + 路径 + 关键参数；不含头部 / 载荷 / 凭据）。"""
+
+    artifacts: ConcurrentStableFrozenList[ConcurrentStableFrozenDict[str, object]] = field(
+        default_factory=ConcurrentStableFrozenList[ConcurrentStableFrozenDict[str, object]]
+    )
+    """原始产物清单（相对工作根；文件给大小与 sha256）。"""
+
+    logs: ConcurrentStableFrozenDict[str, object] = field(default_factory=ConcurrentStableFrozenDict[str, object])
+    """实例日志摘要（总行数 / 字节 / sha256 + 尾部文本）。"""
+
+    config_digest: str = ""
+    """生效配置摘要（跨版本比较用）。"""
+
+    rerun: ConcurrentStableFrozenDict[str, str] = field(default_factory=ConcurrentStableFrozenDict[str, str])
+    """复跑标识（`attempt` / `previous_started_at` / `previous_conclusion` / `reason`）；空表示首跑。"""
 
     @property
     def conclusion(self) -> str:

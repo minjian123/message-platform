@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import cast
 
 import httpx
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenDict
+from bms_core.core.concurrent import (
+    ConcurrentStableDict,
+    ConcurrentStableFrozenDict,
+    ConcurrentStableList,
+)
 
 from bms_msg.core.config import (
     DRILL_HTTP_TIMEOUT_SEC,
@@ -40,6 +44,7 @@ __all__ = [
     "DrillInstance",
     "free_port",
     "now_iso",
+    "parse_metric_sum",
     "parse_metrics",
     "payload_of",
     "sample_phase",
@@ -294,6 +299,20 @@ class DrillHttp:
         """
         self._base = base_url
         self._client = httpx.Client(base_url=base_url, timeout=DRILL_HTTP_TIMEOUT_SEC, trust_env=False)
+        self.commands: ConcurrentStableList[ConcurrentStableFrozenDict[str, str]] = ConcurrentStableList()
+
+    def _record(self, action: str, detail: str = "") -> None:
+        """记录一次有副作用的动作（不含请求头、载荷与凭据；安全上限防失控）。
+
+        Args:
+            action: 方法 + 路径（如 `POST /api/v1/msg/publish`）。
+            detail: 关键参数摘要（可空）。
+        """
+        if len(self.commands) >= 10_000:
+            return
+        self.commands.add(
+            ConcurrentStableFrozenDict({"seq": str(len(self.commands) + 1), "action": action, "detail": detail})
+        )
 
     def close(self) -> None:
         """释放连接。"""
@@ -349,6 +368,7 @@ class DrillHttp:
             "/api/v1/msg/admin/topics",
             json={"namespace": "msg", "name": topic, "partition_count": partitions},
         )
+        self._record("POST /api/v1/msg/admin/topics", f"topic={topic} partitions={partitions}")
         return response.status_code
 
     def join(self, topic: str, group: str, consumer: str) -> int:
@@ -362,10 +382,12 @@ class DrillHttp:
         Returns:
             int: HTTP 状态码。
         """
-        return self._client.post(
+        status = self._client.post(
             "/api/v1/msg/join",
             json={"group": group, "consumer_id": consumer, "namespace": "msg", "topic": topic},
         ).status_code
+        self._record("POST /api/v1/msg/join", f"topic={topic} group={group}")
+        return status
 
     def heartbeat(self, topic: str, group: str, consumer: str) -> int:
         """成员心跳（会话超时 30s，长等待场景必须续活）。
@@ -378,10 +400,12 @@ class DrillHttp:
         Returns:
             int: HTTP 状态码。
         """
-        return self._client.post(
+        status = self._client.post(
             "/api/v1/msg/heartbeat",
             json={"group": group, "consumer_id": consumer, "namespace": "msg", "topic": topic},
         ).status_code
+        self._record("POST /api/v1/msg/heartbeat", f"topic={topic}")
+        return status
 
     def publish(self, topic: str, payload: bytes, key: str | None = None) -> httpx.Response:
         """发布一条消息。
@@ -396,10 +420,12 @@ class DrillHttp:
         """
         import base64
 
-        return self._client.post(
+        response = self._client.post(
             "/api/v1/msg/publish",
             json={"namespace": "msg", "topic": topic, "payload": base64.b64encode(payload).decode(), "key": key},
         )
+        self._record("POST /api/v1/msg/publish", f"topic={topic} bytes={len(payload)}")
+        return response
 
     def consume(
         self, topic: str, group: str, consumer: str, *, max_messages: int = 20, max_wait_ms: int = 0
@@ -416,7 +442,7 @@ class DrillHttp:
         Returns:
             httpx.Response: 响应。
         """
-        return self._client.post(
+        response = self._client.post(
             "/api/v1/msg/consume",
             json={
                 "group": group,
@@ -428,6 +454,8 @@ class DrillHttp:
                 "max_wait_ms": max_wait_ms,
             },
         )
+        self._record("POST /api/v1/msg/consume", f"topic={topic} max={max_messages}")
+        return response
 
     def ack(self, topic: str, group: str, consumer: str, offset: int) -> httpx.Response:
         """确认一条消息。
@@ -441,7 +469,7 @@ class DrillHttp:
         Returns:
             httpx.Response: 响应。
         """
-        return self._client.post(
+        response = self._client.post(
             "/api/v1/msg/ack",
             json={
                 "group": group,
@@ -452,6 +480,8 @@ class DrillHttp:
                 "offset": offset,
             },
         )
+        self._record("POST /api/v1/msg/ack", f"topic={topic} offset={offset}")
+        return response
 
     def nack(self, topic: str, group: str, consumer: str, offset: int) -> httpx.Response:
         """拒绝一条消息（转死信）。
@@ -465,7 +495,7 @@ class DrillHttp:
         Returns:
             httpx.Response: 响应。
         """
-        return self._client.post(
+        response = self._client.post(
             "/api/v1/msg/nack",
             json={
                 "namespace": "msg",
@@ -478,6 +508,8 @@ class DrillHttp:
                 "detail": {"field": "payload"},
             },
         )
+        self._record("POST /api/v1/msg/nack", f"topic={topic} offset={offset}")
+        return response
 
     def publish_invalid(self, topic: str, raw_payload: str) -> httpx.Response:
         """以非法 `payload` 字段发布（毒消息场景：验证入口拒绝，不进日志）。
@@ -489,10 +521,12 @@ class DrillHttp:
         Returns:
             httpx.Response: 响应。
         """
-        return self._client.post(
+        response = self._client.post(
             "/api/v1/msg/publish",
             json={"namespace": "msg", "topic": topic, "payload": raw_payload},
         )
+        self._record("POST /api/v1/msg/publish", f"topic={topic} invalid=1")
+        return response
 
     def dlq(self, topic: str) -> httpx.Response:
         """查死信（管理面只读）。
@@ -503,7 +537,9 @@ class DrillHttp:
         Returns:
             httpx.Response: 响应。
         """
-        return self._client.get("/api/v1/msg/admin/dlq", params={"namespace": "msg", "topic": topic})
+        response = self._client.get("/api/v1/msg/admin/dlq", params={"namespace": "msg", "topic": topic})
+        self._record("GET /api/v1/msg/admin/dlq", f"topic={topic}")
+        return response
 
 
 def parse_metrics(
@@ -548,6 +584,31 @@ def parse_metrics(
             if total is not None and count:
                 values.set(key, total / count)
     return values
+
+
+def parse_metric_sum(text: str, name: str) -> float:
+    """按指标名求和（同名多标签的合计值；死信存量等多主题指标必须求和）。
+
+    Args:
+        text: Prometheus 文本。
+        name: 指标名。
+
+    Returns:
+        float: 合计值（无样本为 0）。
+    """
+    total = 0.0
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        head, _, rest = line.partition(" ")
+        metric = head.partition("{")[0].strip()
+        if metric != name:
+            continue
+        try:
+            total += float(rest.strip().split(" ")[-1])
+        except ValueError:
+            continue
+    return total
 
 
 def sample_phase(phase: str, http: DrillHttp, metrics: tuple[str, ...]) -> PhaseSample:

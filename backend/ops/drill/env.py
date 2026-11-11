@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from bms_core.core.concurrent import (
+    ConcurrentStableFrozenDict,
     ConcurrentStableFrozenList,
     ConcurrentStableList,
     ConcurrentStableSet,
@@ -29,20 +31,22 @@ from bms_msg.core.config import (
     DRILL_REJECT_RATIO_ENV,
     DRILL_REPORT_DIR,
     DRILL_REPORT_DIR_ENV,
-    DRILL_SCHEMA_VERSION,
+    DRILL_SCENARIO_SCHEMA_VERSION,
     DRILL_SLOW_WRITE_MB,
     DRILL_SLOW_WRITE_MB_ENV,
     DRILL_WORK_DIR_ENV,
 )
-from ops.drill.model import DrillScenario, ScenarioSet
+from ops.drill.model import SEVERITIES, SEVERITY_HARD, DrillCriterionSpec, DrillScenario, ScenarioSet
 
 __all__ = [
     "INJECT_METHODS",
     "DrillConfig",
     "DrillError",
+    "backup_evidence",
     "load_config",
     "load_scenarios",
     "normalize_env",
+    "render_criteria_rows",
     "render_scenario_rows",
     "validate_scenarios",
 ]
@@ -51,6 +55,9 @@ INJECT_METHODS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
     ("sigkill_sigterm", "fill_volume", "controlled_write", "tcp_proxy", "unacked_inflight", "invalid_and_exhausted")
 )
 """注入方式闭集：六类场景各一，写错即场景非法（防止「场景名换了、注入没换」）。"""
+
+_ISOLATED_ENVS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(("test", "dev", "local"))
+"""视为隔离环境的标识（演练前备份记 `not_applicable`）。"""
 
 
 class DrillError(RuntimeError):
@@ -195,6 +202,31 @@ def require_confirmation(scenario: str, confirm: str | None) -> None:
         raise DrillError(f"drill.guard 缺少二次确认：请显式传 --confirm {scenario}")
 
 
+def backup_evidence(config: DrillConfig) -> ConcurrentStableFrozenDict[str, str]:
+    """演练前备份的证据口径：隔离实例记不适用，非隔离必须给证据。
+
+    Args:
+        config: 演练配置。
+
+    Returns:
+        ConcurrentStableFrozenDict[str, str]: 备份证据（`mode` / `reason`）。
+
+    Raises:
+        DrillError: 非隔离环境且未给备份证据。
+    """
+    evidence = (os.environ.get("MSG_DRILL_BACKUP_EVIDENCE") or "").strip()
+    if config.env in _ISOLATED_ENVS:
+        return ConcurrentStableFrozenDict(
+            {
+                "mode": "not_applicable",
+                "reason": "隔离演练实例为临时数据根与 SQLite 元数据库，不含真实业务数据",
+            }
+        )
+    if not evidence:
+        raise DrillError(f"drill.guard 非隔离环境（{config.env}）必须给备份证据：MSG_DRILL_BACKUP_EVIDENCE")
+    return ConcurrentStableFrozenDict({"mode": "provided", "reason": evidence})
+
+
 def _frozen(value: object) -> ConcurrentStableFrozenList[str]:
     """把 TOML 字符串数组折成冻结列表（非数组记空，交给校验器报错）。
 
@@ -209,6 +241,40 @@ def _frozen(value: object) -> ConcurrentStableFrozenList[str]:
     items: ConcurrentStableList[str] = ConcurrentStableList()
     for item in cast("list[object]", value):
         items.add(str(item))
+    return ConcurrentStableFrozenList(items)
+
+
+def _criterion_specs(
+    value: object, where: str, errors: ConcurrentStableList[str]
+) -> ConcurrentStableFrozenList[DrillCriterionSpec]:
+    """把 TOML 判据数组解析成结构化条目（类型错误即登记，交给校验器一次列全）。
+
+    Args:
+        value: `criterion` 取值（schema 2 起为表数组）。
+        where: 场景位置（报错用）。
+        errors: 错误收集器。
+
+    Returns:
+        ConcurrentStableFrozenList[DrillCriterionSpec]: 判据声明（非法条目也保留，便于校验器逐项报）。
+    """
+    if not isinstance(value, list):
+        errors.add(f"{where}：criterion 须为 [[scenarios.criterion]] 数组（schema 2 起结构化）")
+        return ConcurrentStableFrozenList()
+    items: ConcurrentStableList[DrillCriterionSpec] = ConcurrentStableList()
+    for index, entry in enumerate(cast("list[object]", value)):
+        if not isinstance(entry, dict):
+            errors.add(f"{where}：criterion[{index}] 不是表")
+            continue
+        table = cast("dict[str, object]", entry)
+        items.add(
+            DrillCriterionSpec(
+                key=str(table.get("key") or ""),
+                text=str(table.get("text") or ""),
+                record_keys=_frozen(table.get("record_keys")),
+                severity=str(table.get("severity") or ""),
+                evidence=str(table.get("evidence") or ""),
+            )
+        )
     return ConcurrentStableFrozenList(items)
 
 
@@ -242,13 +308,15 @@ def load_scenarios(path: Path) -> tuple[ScenarioSet, ConcurrentStableFrozenList[
                 errors.add(f"scenarios[{index}] 不是表")
                 continue
             table = cast("dict[str, object]", entry)
+            name = str(table.get("name") or "")
             items.add(
                 DrillScenario(
-                    name=str(table.get("name") or ""),
+                    name=name,
                     title=str(table.get("title") or ""),
                     inject=str(table.get("inject") or ""),
                     observe=_frozen(table.get("observe")),
-                    criterion=_frozen(table.get("criterion")),
+                    criterion=_criterion_specs(table.get("criterion"), name or f"scenarios[{index}]", errors),
+                    aux_record_keys=_frozen(table.get("aux_record_keys")),
                     recovery_budget_ms=int(cast("int", table.get("recovery_budget_ms") or 0)),
                     expect=str(table.get("expect") or ""),
                 )
@@ -274,8 +342,10 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
         ConcurrentStableFrozenList[str]: 错误列表（空表示通过）。
     """
     errors: ConcurrentStableList[str] = ConcurrentStableList()
-    if scenario_set.schema_version != DRILL_SCHEMA_VERSION:
-        errors.add(f"场景单源 schema_version 非法：{scenario_set.schema_version}（期望 {DRILL_SCHEMA_VERSION}）")
+    if scenario_set.schema_version != DRILL_SCENARIO_SCHEMA_VERSION:
+        errors.add(
+            f"场景单源 schema_version 非法：{scenario_set.schema_version}（期望 {DRILL_SCENARIO_SCHEMA_VERSION}）"
+        )
     if not scenario_set.updated_at:
         errors.add("场景单源缺少 meta.updated_at")
     if not scenario_set.owner:
@@ -299,7 +369,8 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
         if not scenario.observe:
             errors.add(f"{where}：observe 为空（至少一个指标）")
         if not scenario.criterion:
-            errors.add(f"{where}：criterion 为空（至少一条判据锚点）")
+            errors.add(f"{where}：criterion 为空（至少一条判据）")
+        errors.extend(_validate_criteria(scenario, where))
         if not scenario.expect:
             errors.add(f"{where}：expect 为空（写期望观察）")
         if scenario.recovery_budget_ms <= 0:
@@ -311,6 +382,47 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
     for method in INJECT_METHODS:
         if method not in methods:
             errors.add(f"缺少注入方式 {method!r}（六类必须齐备）")
+    return ConcurrentStableFrozenList(errors)
+
+
+def _validate_criteria(scenario: DrillScenario, where: str) -> ConcurrentStableFrozenList[str]:
+    """校验单个场景的判据声明（键唯一、级别闭集、记录键非空且不与前置键相交）。
+
+    Args:
+        scenario: 场景定义。
+        where: 场景位置（报错用）。
+
+    Returns:
+        ConcurrentStableFrozenList[str]: 错误列表。
+    """
+    errors: ConcurrentStableList[str] = ConcurrentStableList()
+    keys: ConcurrentStableSet[str] = ConcurrentStableSet()
+    record_keys: ConcurrentStableSet[str] = ConcurrentStableSet()
+    for index, spec in enumerate(scenario.criterion, start=1):
+        label = f"{where}：criterion[{index}]"
+        if not spec.key:
+            errors.add(f"{label} 缺少 key")
+        elif spec.key in keys:
+            errors.add(f"{label} key 重复：{spec.key}")
+        else:
+            keys.add(spec.key)
+        if not spec.text:
+            errors.add(f"{label}（{spec.key or '?'}）缺少 text")
+        if spec.severity not in SEVERITIES:
+            allowed = " / ".join(SEVERITIES)
+            errors.add(f"{label}（{spec.key or '?'}）severity = {spec.severity!r} 非法（可选 {allowed}）")
+        if not spec.record_keys:
+            errors.add(f"{label}（{spec.key or '?'}）record_keys 为空")
+        for key in spec.record_keys:
+            if key in record_keys:
+                errors.add(f"{label}（{spec.key or '?'}）record_keys 重复：{key}")
+            else:
+                record_keys.add(key)
+        if not spec.evidence:
+            errors.add(f"{label}（{spec.key or '?'}）evidence 为空")
+    for key in scenario.aux_record_keys:
+        if key in record_keys:
+            errors.add(f"{where}：aux_record_keys 与判据记录键重复：{key}")
     return ConcurrentStableFrozenList(errors)
 
 
@@ -328,6 +440,26 @@ def render_scenario_rows(scenario_set: ScenarioSet) -> ConcurrentStableFrozenLis
     rows.add("| --- | --- | --- | --- |")
     for scenario in scenario_set.scenarios:
         observe = "、".join(f"`{item}`" for item in scenario.observe)
-        criterion = "；".join(scenario.criterion)
+        criterion = "；".join(spec.text for spec in scenario.criterion)
         rows.add(f"| `{scenario.name}` | `{scenario.inject}` | {observe} | {criterion} |")
+    return ConcurrentStableFrozenList(rows)
+
+
+def render_criteria_rows(scenario_set: ScenarioSet) -> ConcurrentStableFrozenList[str]:
+    """把判据声明渲染成 Markdown 表行（详细设计 §5 由此粘贴，用例断言两处一致）。
+
+    Args:
+        scenario_set: 已校验场景集。
+
+    Returns:
+        ConcurrentStableFrozenList[str]: 表头 + 分隔行 + 每条判据一行。
+    """
+    rows: ConcurrentStableList[str] = ConcurrentStableList()
+    rows.add("| 场景 | # | 判据 | 级别 | 记录键 | 证据要求 |")
+    rows.add("| --- | --- | --- | --- | --- | --- |")
+    for scenario in scenario_set.scenarios:
+        for index, spec in enumerate(scenario.criterion, start=1):
+            level = "硬" if spec.severity == SEVERITY_HARD else "可降级"
+            keys = "、".join(f"`{key}`" for key in spec.record_keys)
+            rows.add(f"| `{scenario.name}` | {index} | {spec.text} | {level} | {keys} | {spec.evidence} |")
     return ConcurrentStableFrozenList(rows)

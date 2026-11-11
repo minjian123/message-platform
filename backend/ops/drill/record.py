@@ -21,7 +21,7 @@ from bms_core.core.concurrent import (
     ConcurrentStableList,
 )
 
-from bms_msg.core.config import DRILL_SCHEMA_VERSION
+from bms_msg.core.config import DRILL_RECORD_SCHEMA_VERSION
 from ops.drill.model import (
     CONCLUSION_PASS,
     RESULT_OK,
@@ -119,7 +119,7 @@ def build_document(
     reasons: ConcurrentStableList[object] = ConcurrentStableList(report.reasons)
     return ConcurrentStableDict(
         {
-            "schema_version": DRILL_SCHEMA_VERSION,
+            "schema_version": DRILL_RECORD_SCHEMA_VERSION,
             "task": _TASK_ID,
             "scenario": report.scenario,
             "mode": report.mode,
@@ -129,6 +129,7 @@ def build_document(
                     "target": report.target,
                     "os": platform.platform(),
                     "python": platform.python_version(),
+                    "config_digest": report.config_digest,
                 }
             ),
             "service": ConcurrentStableDict(
@@ -137,11 +138,15 @@ def build_document(
             "started_at": _iso(report.started_at),
             "finished_at": _iso(report.finished_at),
             "injection": ConcurrentStableDict(dict(report.injection)),
+            "commands": ConcurrentStableList(dict(item) for item in report.commands),
+            "artifacts": ConcurrentStableList(dict(item) for item in report.artifacts),
+            "logs": ConcurrentStableDict(dict(report.logs)),
             "samples": samples,
             "criteria": criteria,
             "rto_ms": report.rto_ms,
             "data_loss": report.data_loss,
             "backup": ConcurrentStableDict(dict(report.backup)),
+            "rerun": ConcurrentStableDict(dict(report.rerun)),
             "conclusion": ConcurrentStableDict(
                 {"result": report.conclusion, "exit_code": report.exit_code, "reasons": reasons}
             ),
@@ -310,6 +315,34 @@ def render_markdown(report: DrillReport, *, title: str, service_version: str) ->
             rows.append("- " + "；".join(f"{key}={value}" for key, value in item.items()))
     else:
         rows.append("- 无")
+    rows.append("")
+    rows.append("## 7. 复现线索")
+    rows.append("")
+    rows.append(f"- 配置摘要：`{report.config_digest or '未记录'}`")
+    if report.rerun:
+        rows.append(
+            "- 复跑：第 "
+            f"{report.rerun.get('attempt', '?')} 次，前次 `{report.rerun.get('previous_started_at', '无')}`"
+            f"（{report.rerun.get('previous_conclusion', '无')}）；原因：{report.rerun.get('reason', '未记录')}"
+        )
+    else:
+        rows.append("- 复跑：首跑")
+    rows.append(f"- 动作轨迹：{len(report.commands)} 条")
+    if report.artifacts:
+        for item in report.artifacts:
+            rows.append(
+                f"- 产物 `{item.get('path', '')}`（{item.get('role', '')}，"
+                f"{item.get('bytes', '')} 字节，sha256 `{item.get('sha256', '')}`）"
+            )
+    else:
+        rows.append("- 产物：无")
+    if report.logs:
+        rows.append(
+            f"- 日志：`{report.logs.get('path', '')}` 共 {report.logs.get('lines', 0)} 行、"
+            f"{report.logs.get('bytes', 0)} 字节，sha256 `{report.logs.get('sha256', '')}`"
+        )
+    else:
+        rows.append("- 日志：未采集")
     rows.append("")
     return "\n".join(rows)
 

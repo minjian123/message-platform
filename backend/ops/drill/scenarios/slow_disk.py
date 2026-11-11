@@ -194,6 +194,16 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     deviations: ConcurrentStableList[str] = ConcurrentStableList()
     deviations.append("慢盘由「受控写入 + fsync 争抢同卷」等价实现，未使用 dm-delay（需 root 与设备操作）")
     deviations.append("本机 SSD 上 I/O 争抢可能不足以抬升 fsync 延迟：该项判「降级」而非「失败」")
+    leftovers: ConcurrentStableList[ConcurrentStableFrozenDict[str, str]] = ConcurrentStableList()
+    if not (comparable and rose):
+        leftovers.append(
+            ConcurrentStableFrozenDict(
+                {
+                    "item": "慢盘延迟绝对阈值未取证（本机 SSD 无样本）",
+                    "owner": "07-6 部署阶段（真盘 I/O 延迟注入，8B_08）",
+                }
+            )
+        )
     return ScenarioOutcome(
         injection=ConcurrentStableFrozenDict(
             {
@@ -207,4 +217,5 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
         rto_ms=rto_ms,
         data_loss=False,
         deviations=ConcurrentStableFrozenList(deviations),
+        leftovers=ConcurrentStableFrozenList(leftovers),
     )

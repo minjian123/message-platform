@@ -383,6 +383,19 @@ class DrillContext:
         parsed = parse_metrics(self.http.metrics())
         return parsed.get(name, 0.0)
 
+    def metric_sum(self, name: str) -> float:
+        """读指标的同名多标签合计值（死信存量等多主题指标必须求和）。
+
+        Args:
+            name: 指标名。
+
+        Returns:
+            float: 合计值（无样本为 0）。
+        """
+        from ops.drill.runtime import parse_metric_sum
+
+        return parse_metric_sum(self.http.metrics(), name)
+
 
 def result_of(passed: bool) -> str:
     """把布尔判定转成判据结果。

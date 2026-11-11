@@ -10,14 +10,26 @@ import shutil
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 
 from bms_core.core.concurrent import (
+    ConcurrentStableDict,
     ConcurrentStableFrozenDict,
     ConcurrentStableFrozenList,
     ConcurrentStableList,
 )
 
+from ops.drill.capture import (
+    collect_artifacts,
+    command_trail,
+    config_digest,
+    log_snapshot,
+    previous_record,
+    relative_path,
+    rerun_block,
+    sha256_file,
+)
 from ops.drill.context import DrillContext, ScenarioModule, ScenarioOutcome, check
 from ops.drill.env import DrillConfig, DrillError, load_scenarios, validate_scenarios
 from ops.drill.model import RESULT_FAILED, DrillReport, DrillScenario, PhaseSample
@@ -179,8 +191,26 @@ def _prepare(config: DrillConfig, module: ScenarioModule) -> _Prepared:
     return _Prepared(instance=instance, http=http, fill_mb=fill_mb, reject_ratio=ratio or 0.0)
 
 
+def _injection(config: DrillConfig, outcome: ScenarioOutcome) -> ConcurrentStableFrozenDict[str, str]:
+    """把注入明细补上相对路径与产物摘要（旧 `artifact` 保留作兼容）。"""
+    payload: ConcurrentStableDict[str, str] = ConcurrentStableDict(dict(outcome.injection))
+    artifact = outcome.injection.get("artifact") or ""
+    if artifact:
+        path = Path(artifact)
+        payload.set("artifact_rel", relative_path(config.work_dir, path))
+        if path.is_file():
+            payload.set("artifact_sha256", sha256_file(path))
+    return ConcurrentStableFrozenDict(payload)
+
+
 def _report(
-    scenario: DrillScenario, config: DrillConfig, started_at: datetime, outcome: ScenarioOutcome
+    scenario: DrillScenario,
+    config: DrillConfig,
+    started_at: datetime,
+    outcome: ScenarioOutcome,
+    *,
+    http: DrillHttp | None,
+    rerun: ConcurrentStableFrozenDict[str, str],
 ) -> DrillReport:
     """把场景产物装成报告。
 
@@ -189,6 +219,8 @@ def _report(
         config: 演练配置。
         started_at: 开始时刻。
         outcome: 场景产物。
+        http: 演练客户端（未起来时为 None，动作轨迹为空）。
+        rerun: 复跑标识（首跑为空）。
 
     Returns:
         DrillReport: 演练报告。
@@ -200,7 +232,7 @@ def _report(
         target="local",
         started_at=started_at,
         finished_at=datetime.now(UTC),
-        injection=outcome.injection,
+        injection=_injection(config, outcome),
         samples=outcome.samples,
         criteria=outcome.criteria,
         rto_ms=outcome.rto_ms,
@@ -208,21 +240,30 @@ def _report(
         deviations=outcome.deviations,
         issues=outcome.issues,
         leftovers=outcome.leftovers,
+        commands=command_trail(http)
+        if http is not None
+        else ConcurrentStableFrozenList[ConcurrentStableFrozenDict[str, str]](),
+        artifacts=collect_artifacts(config),
+        logs=log_snapshot(config),
+        config_digest=config_digest(config, scenario.name),
+        rerun=rerun,
     )
 
 
-def execute(config: DrillConfig, scenario: DrillScenario) -> DrillReport:
+def execute(config: DrillConfig, scenario: DrillScenario, *, rerun_reason: str = "") -> DrillReport:
     """执行一个场景并返回报告（实例总会停掉，失败也返回报告）。
 
     Args:
         config: 演练配置。
         scenario: 场景定义（来自场景单源）。
+        rerun_reason: 复跑原因（写入记录 `rerun.reason`；首跑忽略）。
 
     Returns:
         DrillReport: 演练报告。
     """
     module = load_module(scenario.name)
     started_at = datetime.now(UTC)
+    rerun = rerun_block(previous_record(config, scenario.name), rerun_reason)
     prepared: _Prepared | None = None
     ctx: DrillContext | None = None
     outcome: ScenarioOutcome | None = None
@@ -245,7 +286,14 @@ def execute(config: DrillConfig, scenario: DrillScenario) -> DrillReport:
             prepared.http.close()
             prepared.instance.stop()
     assert outcome is not None
-    return _report(scenario, config, started_at, outcome)
+    return _report(
+        scenario,
+        config,
+        started_at,
+        outcome,
+        http=prepared.http if prepared is not None else None,
+        rerun=rerun,
+    )
 
 
 def plan_lines(config: DrillConfig, scenario: DrillScenario) -> ConcurrentStableList[str]:

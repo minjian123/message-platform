@@ -123,6 +123,46 @@ def _find_in_dlq(ctx: DrillContext, topic: str, message_id: str) -> tuple[bool, 
     return False, f"未在死信列表找到（HTTP 200，总数 {data.get('total')}）"
 
 
+def _consume_one(ctx: DrillContext, topic: str, timeout_sec: float = 10.0) -> int | None:
+    """拉取一条消息（短轮询，确保 nack 有真实在途消息）。
+
+    Args:
+        ctx: 执行上下文。
+        topic: 主题名。
+        timeout_sec: 等待上限（秒）。
+
+    Returns:
+        int | None: 分区内序号（未拉到为 None）。
+    """
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        batch = items_of(ctx.consume(topic, max_messages=1))
+        if batch:
+            return offset_of(batch[0])
+        ctx.heartbeat(topic)
+        time.sleep(0.2)
+    return None
+
+
+def _wait_dlq_growth(ctx: DrillContext, baseline: float, timeout_sec: float = 20.0) -> float:
+    """等待死信总数增长（采样周期 15s，超时返回当前值）。
+
+    Args:
+        ctx: 执行上下文。
+        baseline: 基线值。
+        timeout_sec: 等待上限（秒）。
+
+    Returns:
+        float: 当前 `msg_dlq_total`。
+    """
+    deadline = time.monotonic() + timeout_sec
+    current = ctx.metric_sum("msg_dlq_total")
+    while current <= baseline and time.monotonic() < deadline:
+        time.sleep(0.2)
+        current = ctx.metric_sum("msg_dlq_total")
+    return current
+
+
 def run(ctx: DrillContext) -> ScenarioOutcome:
     """执行毒消息三类注入并验证死信闭环。
 
@@ -135,6 +175,7 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     topic = ctx.topic()
     ctx.prepare_topic(topic)
     ctx.sample("before")
+    dlq_before = ctx.metric_sum("msg_dlq_total")
 
     injected_at = time.monotonic()
     invalid = ctx.http.publish_invalid(topic, _INVALID_PAYLOAD)
@@ -144,14 +185,20 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     require_ok(ctx.publish(topic, b"normal-after-poison"), "发布后续正常消息")
 
     max_delivery, follow = _wait_dead_letter(ctx, topic, poison_offset)
+    dlq_after_wait = ctx.metric_sum("msg_dlq_total")
     found, found_detail = _find_in_dlq(ctx, topic, poison_id)
 
     nack_topic = ctx.topic("nack")
     ctx.prepare_topic(nack_topic)
+    dlq_before_nack = ctx.metric_sum("msg_dlq_total")
     nacked = require_ok(ctx.publish(nack_topic, b"nack-me"), "发布待拒绝消息")
-    ctx.consume(nack_topic, max_messages=1)
-    nack_offset = offset_of(nacked)
-    nack_response = ctx.http.nack(nack_topic, ctx.group(), ctx.consumer(), nack_offset)
+    nack_offset = _consume_one(ctx, nack_topic)
+    if nack_offset is None:
+        nack_response = None
+        dlq_after_nack = dlq_before_nack
+    else:
+        nack_response = ctx.http.nack(nack_topic, ctx.group(), ctx.consumer(), nack_offset)
+        dlq_after_nack = _wait_dlq_growth(ctx, dlq_before_nack)
     nack_found, nack_detail = _find_in_dlq(ctx, nack_topic, str(nacked.get("message_id") or ""))
     ctx.sample("after")
     rto_ms = int((time.monotonic() - injected_at) * 1000)
@@ -178,7 +225,15 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     criteria.append(
         check(
             "dead_letter_created",
-            "重投超限后进死信且管理面可查",
+            "重投超限后进死信（msg_dlq_total 增长）",
+            f"msg_dlq_total {dlq_before:.0f} → {dlq_after_wait:.0f}",
+            result_of(dlq_after_wait > dlq_before),
+        )
+    )
+    criteria.append(
+        check(
+            "dead_letter_queryable",
+            "死信管理面可查（按 message_id 命中）",
             found_detail,
             RESULT_OK if found else (RESULT_DEGRADED if "不可查" in found_detail else RESULT_FAILED),
         )
@@ -198,12 +253,34 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     criteria.append(
         check(
             "nack_to_dlq",
-            "主动拒绝即时转死信且可查",
-            f"nack HTTP {nack_response.status_code}；{nack_detail}",
-            RESULT_OK
-            if 200 <= nack_response.status_code < 300 and nack_found
+            "主动 nack 即时转死信",
+            (
+                "未在 10s 内拉到待拒绝消息，nack 未取证"
+                if nack_response is None
+                else (
+                    f"nack HTTP {nack_response.status_code}；msg_dlq_total {dlq_before_nack:.0f} → {dlq_after_nack:.0f}"
+                )
+            ),
+            RESULT_DEGRADED
+            if nack_response is None
+            else result_of(200 <= nack_response.status_code < 300 and dlq_after_nack > dlq_before_nack),
+        )
+    )
+    criteria.append(
+        check(
+            "nack_queryable",
+            "主动 nack 的死信管理面可查",
+            "未在 10s 内拉到待拒绝消息，nack 未取证" if nack_response is None else f"{nack_detail}",
+            RESULT_DEGRADED
+            if nack_response is None
             else (
-                RESULT_DEGRADED if 200 <= nack_response.status_code < 300 and "不可查" in nack_detail else RESULT_FAILED
+                RESULT_OK
+                if 200 <= nack_response.status_code < 300 and nack_found
+                else (
+                    RESULT_DEGRADED
+                    if 200 <= nack_response.status_code < 300 and "不可查" in nack_detail
+                    else RESULT_FAILED
+                )
             ),
         )
     )
@@ -215,8 +292,16 @@ def run(ctx: DrillContext) -> ScenarioOutcome:
     leftovers.append(
         ConcurrentStableFrozenDict(
             {
-                "item": "管理面死信列表在隔离实例返回 500（MissingGreenlet：ACL 释放后读 ORM 属性）",
-                "owner": "06-4 死信管理（生产同样触发，需 ACL 释放与 ORM 过期解耦后复验本场景）",
+                "item": "管理面死信列表在有死信行时返回 500（MissingGreenlet：ACL 释放后读 ORM 属性）",
+                "owner": "06-5 死信管理（生产同样触发，需 ACL 释放与 ORM 过期解耦后复验本场景）",
+            }
+        )
+    )
+    leftovers.append(
+        ConcurrentStableFrozenDict(
+            {
+                "item": "毒消息终结后同分区后续消息未在预算内证明可消费（停等阻塞）",
+                "owner": "02-3 消费位点管理 / 02-2 崩溃恢复（定位位点推进与死信转移的先后）",
             }
         )
     )

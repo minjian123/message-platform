@@ -71,6 +71,7 @@ class FakeHttp:
         self.dlq_response = httpx.Response(200, json={"code": 0, "data": {"items": [], "total": 0}})
         self.nack_status = 200
         self.heartbeats = 0
+        self.dlq_total = 0.0
 
     def create_topic(self, topic: str, partitions: int = 1) -> int:
         """建主题。"""
@@ -98,6 +99,8 @@ class FakeHttp:
     ) -> httpx.Response:
         """拉取（按预设批次回放，耗尽后返回空批）。"""
         batch = self.consumed.pop(0) if self.consumed else []
+        if batch and all(item.get("offset") != 0 for item in batch):
+            self.dlq_total += 1.0
         return _ok({"messages": batch, "paused": False, "inflight_messages": len(batch), "inflight_bytes": 1})
 
     def ack(self, topic: str, group: str, consumer: str, offset: int) -> httpx.Response:
@@ -107,6 +110,7 @@ class FakeHttp:
 
     def nack(self, topic: str, group: str, consumer: str, offset: int) -> httpx.Response:
         """拒绝。"""
+        self.dlq_total += 1.0
         return httpx.Response(self.nack_status, json={"code": 0, "data": {"committed_offset": offset + 1}})
 
     def dlq(self, topic: str) -> httpx.Response:
@@ -121,7 +125,8 @@ class FakeHttp:
     def metrics(self) -> str:
         """指标文本。"""
         return (
-            "msg_consumer_lag 3\nmsg_disk_used_ratio 0.5\nmsg_fsync_duration_ms_sum 10\nmsg_fsync_duration_ms_count 2\n"
+            "msg_consumer_lag 3\nmsg_disk_used_ratio 0.5\nmsg_fsync_duration_ms_sum 10\n"
+            f'msg_fsync_duration_ms_count 2\nmsg_dlq_total{{topic="a"}} {self.dlq_total}\n'
         )
 
     def readyz(self) -> tuple[int, bool, str]:
@@ -204,12 +209,25 @@ def _scenario(name: str, inject: str, observe: tuple[str, ...] = ("msg_consumer_
     """
     from bms_core.core.concurrent import ConcurrentStableFrozenList
 
+    from ops.drill.model import DrillCriterionSpec
+
     return DrillScenario(
         name=name,
         title=name,
         inject=inject,
         observe=ConcurrentStableFrozenList(observe),
-        criterion=ConcurrentStableFrozenList(["c"]),
+        criterion=ConcurrentStableFrozenList(
+            (
+                DrillCriterionSpec(
+                    key="c",
+                    text="c",
+                    record_keys=ConcurrentStableFrozenList(("c",)),
+                    severity="hard",
+                    evidence="e",
+                ),
+            )
+        ),
+        aux_record_keys=ConcurrentStableFrozenList(),
         recovery_budget_ms=240_000,
         expect="e",
     )
@@ -397,5 +415,61 @@ def test_poison_message_run_degrades_when_dlq_unavailable(tmp_path: Path) -> Non
     results = {item.key: item.result for item in outcome.criteria}
     assert results["invalid_payload_rejected"] == RESULT_OK
     assert results["redelivery_bounded"] == RESULT_OK
-    assert results["dead_letter_created"] == RESULT_DEGRADED
+    assert results["dead_letter_created"] == RESULT_OK
+    assert results["dead_letter_queryable"] == RESULT_DEGRADED
+    assert results["nack_to_dlq"] == RESULT_OK
+    assert results["nack_queryable"] == RESULT_DEGRADED
     assert list(outcome.leftovers)
+
+
+def test_poison_message_nack_not_consumed_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """毒消息：未拉到待拒绝消息时 nack 两项降级（不判失败）。"""
+    http = FakeHttp(
+        consumed=[
+            [{"offset": 0, "delivery_count": 1}],
+            [{"offset": 0, "delivery_count": 5}],
+            [{"offset": 1}],
+        ]
+    )
+    ctx = _ctx(tmp_path, _scenario("poison_message", "invalid_and_exhausted"), http)
+    monkeypatch.setattr(poison_message, "_consume_one", lambda *_args, **_kwargs: None)
+
+    outcome = poison_message.run(ctx)
+
+    results = {item.key: item.result for item in outcome.criteria}
+    assert results["nack_to_dlq"] == RESULT_DEGRADED
+    assert results["nack_queryable"] == RESULT_DEGRADED
+
+
+def test_slow_disk_latency_visible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """慢盘：延迟相对上涨成立时不产生遗留（方向性判据通过）。"""
+    http = FakeHttp(consumed=[[{"offset": i} for i in range(20)], []])
+    ctx = _ctx(
+        tmp_path,
+        _scenario(
+            "slow_disk",
+            "controlled_write",
+            observe=("msg_fsync_duration_ms", "msg_publish_latency_ms", "msg_consumer_lag"),
+        ),
+        http,
+    )
+
+    def sample(phase: str, _http: FakeHttp, metrics: tuple[str, ...]) -> PhaseSample:
+        value = 1.0 if phase == "before" else 10.0
+        return PhaseSample(
+            phase=phase,
+            captured_at="2026-11-11T00:00:00+00:00",
+            readyz_status=200,
+            readyz_ok=True,
+            healthz_ok=True,
+            metrics=ConcurrentStableFrozenDict({name: value for name in metrics}),
+            detail="{}",
+        )
+
+    monkeypatch.setattr(context_mod, "sample_phase", sample)
+
+    outcome = slow_disk.run(ctx)
+
+    results = {item.key: item.result for item in outcome.criteria}
+    assert results["latency_visible"] == RESULT_OK
+    assert not outcome.leftovers

@@ -36,6 +36,7 @@ from ops.drill.model import (
     RESULT_DEGRADED,
     RESULT_OK,
     Criterion,
+    DrillCriterionSpec,
     DrillReport,
     DrillScenario,
     PhaseSample,
@@ -85,7 +86,18 @@ def _scenario(name: str = "process_crash") -> DrillScenario:
         title="进程崩溃",
         inject="sigkill_sigterm",
         observe=ConcurrentStableFrozenList(("msg_fsync_duration_ms",)),
-        criterion=ConcurrentStableFrozenList(("no_loss",)),
+        criterion=ConcurrentStableFrozenList(
+            (
+                DrillCriterionSpec(
+                    key="no_loss",
+                    text="已确认消息不回退",
+                    record_keys=ConcurrentStableFrozenList(("no_loss",)),
+                    severity="hard",
+                    evidence="记录 criteria[]",
+                ),
+            )
+        ),
+        aux_record_keys=ConcurrentStableFrozenList(),
         recovery_budget_ms=240_000,
         expect="已确认不回退、未确认重投",
     )
@@ -823,7 +835,7 @@ def test_run_prints_reasons_and_returns_exit_code(
     report = _report(degraded=True)
     written: list[Path] = []
 
-    monkeypatch.setattr(drill_cli, "execute", lambda _config, _scenario: report)
+    monkeypatch.setattr(drill_cli, "execute", lambda _config, _scenario, **_kw: report)
 
     def write(_report: DrillReport, directory: Path, **_kw: object) -> tuple[Path, Path]:
         """记录落点（不真写盘，只证明目录被传对）。"""
@@ -844,7 +856,7 @@ def test_plan_reports_validation_failure(tmp_path: Path, monkeypatch: pytest.Mon
     """命令行：场景单源校验失败时逐条打 FAIL 并退 1（不启动任何实例）。"""
     monkeypatch.setenv("MSG_DRILL_WORK_DIR", str(tmp_path))
     scenario_set = ScenarioSet(
-        schema_version=1,
+        schema_version=2,
         updated_at="2026-11-11",
         owner="平台组",
         scenarios=ConcurrentStableFrozenList(),
