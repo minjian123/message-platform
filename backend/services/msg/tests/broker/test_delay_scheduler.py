@@ -135,6 +135,7 @@ class _FailingMessageStore(MessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """转调真实实现（`fail_next` 为真时抛错，模拟主题停用 / 存储故障）。
 
@@ -171,6 +172,7 @@ class _FailingMessageStore(MessageStore):
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
 
     async def fetch(

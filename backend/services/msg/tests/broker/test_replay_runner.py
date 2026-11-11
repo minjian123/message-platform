@@ -91,6 +91,7 @@ class RecordingStore(InMemoryMessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """写入前按开关抛异常。
 
@@ -126,6 +127,7 @@ class RecordingStore(InMemoryMessageStore):
             content_type=content_type,
             compression=compression,
             uncompressed_len=uncompressed_len,
+            epoch=epoch,
         )
 
 

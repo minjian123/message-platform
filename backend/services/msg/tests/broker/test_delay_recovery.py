@@ -329,6 +329,7 @@ class _FailingMessages(InMemoryMessageStore):
         content_type: str = DEFAULT_CONTENT_TYPE,
         compression: str = COMPRESSION_NONE,
         uncompressed_len: int | None = None,
+        epoch: int = 0,
     ) -> StoredMessage:
         """恒抛 `OSError`（ENOSPC）。
 
@@ -350,7 +351,7 @@ class _FailingMessages(InMemoryMessageStore):
             OSError: 恒抛（磁盘满）。
         """
         del topic_id, partition_no, message_id, log_id, key, payload, headers, trace, published_at
-        del content_type, compression, uncompressed_len
+        del content_type, compression, uncompressed_len, epoch
         raise OSError(28, "No space left on device")
 
 
