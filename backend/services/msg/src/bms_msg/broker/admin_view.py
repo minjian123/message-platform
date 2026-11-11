@@ -67,6 +67,7 @@ class PartitionView(BaseValueObject):
     owner: str | None
     hw: int | None = None
     isr: ConcurrentStableList[str] = field(default_factory=lambda: ConcurrentStableList[str]())
+    epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -243,8 +244,10 @@ class PartitionInspector(BaseFrameworkObject):
                 raise MsgGroupNotFoundError(f"消费组不存在：{group}")
         rows = await self._partitions.list_by_topic(topic_id)
         leaders: ConcurrentStableDict[int, str] = ConcurrentStableDict()
+        epochs: ConcurrentStableDict[int, int] = ConcurrentStableDict()
         for row in rows:
             leaders.set(int(row.partition_no), str(row.leader))
+            epochs.set(int(row.partition_no), int(getattr(row, "epoch", 0) or 0))
         result: ConcurrentStableList[PartitionView] = ConcurrentStableList()
         for number in range(int(resolved.partition_count)):
             if partition is not None and number != partition:
@@ -272,6 +275,7 @@ class PartitionInspector(BaseFrameworkObject):
                     owner=owner,
                     hw=snapshot.hw if snapshot is not None else None,
                     isr=ConcurrentStableList(snapshot.isr) if snapshot is not None else ConcurrentStableList(),
+                    epoch=snapshot.epoch if snapshot is not None else epochs.get(number, 0),
                 )
             )
         return PartitionDetailView(partition_count=int(resolved.partition_count), items=result)

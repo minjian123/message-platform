@@ -69,6 +69,7 @@ from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.election import InProcessLeaderControlTransport, LeaderSwitchService
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.lifecycle import DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
@@ -98,6 +99,7 @@ from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.services.leader_switch import DbLeaderSwitchStore
 from bms_msg.services.replication_topology import DbReplicaTopologyLoader
 from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
@@ -267,6 +269,19 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             metrics=replication_metrics,
         )
         replication_transport.register(replica_config.node_id, replication)
+        # 02-5：切换控制通道（进程内；02-8 换网络实现）与手动切主领域服务。
+        # 服务只依赖 LeaderSwitchStore / LeaderControlTransport 两个协议，管理端点在 06-2 接入。
+        leader_control = InProcessLeaderControlTransport()
+        leader_control.register(replica_config.node_id, replication)
+        app.state.leader_control = leader_control
+        app.state.leader_switch = LeaderSwitchService(
+            enabled=replica_config.enabled,
+            store=DbLeaderSwitchStore(uow_factory=platform_uow_factory(app)),
+            control=leader_control,
+            audit=sink,
+            grace_ms=replica_config.switch_grace_ms,
+            follower_fresh_ms=replica_config.lag_time_max_ms,
+        )
         app.state.replication = replication
         app.state.replication_metrics = replication_metrics
         app.state.replication_transport = replication_transport

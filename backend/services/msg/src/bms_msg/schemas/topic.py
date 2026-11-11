@@ -42,6 +42,12 @@ class PartitionItem(BaseSchema):
     checkpoint_leo: int = Field(description="检查点 LEO")
     checkpoint_hw: int = Field(description="检查点 HW")
     epoch: int = Field(description="领导者任期（复制阶段使用）")
+    switch_state: str = Field(default="idle", description="切换状态（idle / switching；02-5）")
+    last_switch_at: datetime | None = Field(default=None, description="最近一次成功切换时刻（UTC）")
+    last_switch_by: str | None = Field(default=None, description="最近一次切换触发人")
+    last_switch_epoch: int | None = Field(default=None, description="最近一次切换后的 epoch")
+    last_switch_result: str | None = Field(default=None, description="最近一次切换结果（truncated / retained / noop）")
+    last_truncate_to: int | None = Field(default=None, description="最近一次切换截断后的 LEO；null = 未截断")
 
 
 class TopicItem(BaseSchema):
@@ -76,6 +82,7 @@ class CleanupProgress(BaseSchema):
 class TopicDetail(TopicItem):
     """主题详情（含分区列表；`deleting` 时含清理进度）。"""
 
+    metadata_version: int = Field(default=0, description="元数据版本（= max(partition.epoch)）；客户端刷新判据")
     partitions: Annotated[ConcurrentStableList[PartitionItem], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_LIST, description="分区明细（按分区号升序）"
     )

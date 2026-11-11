@@ -48,17 +48,18 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader):
         self._clock = clock if clock is not None else _monotonic_ms
         self._rows: ConcurrentStableDict[int, tuple[float, ConcurrentStableList[MsgPartition]]] = ConcurrentStableDict()
 
-    async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology | None:
+    async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology | None:
         """加载分区拓扑（行缺失返回 None，由协调器走配置兜底）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
+            force: 是否绕过缓存（02-5 刷新循环要求秒级收敛）。
 
         Returns:
             PartitionTopology | None: 拓扑；行不存在返回 None。
         """
-        rows = await self._topic_rows(topic_id=int(topic_id))
+        rows = await self._topic_rows(topic_id=int(topic_id), force=force)
         for row in rows:
             if int(row.partition_no) != int(partition_no):
                 continue
@@ -66,6 +67,8 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader):
                 replicas=ConcurrentStableFrozenList(str(item) for item in row.replicas),
                 min_insync_replicas=int(getattr(row, "min_insync_replicas", 0) or 0),
                 epoch=int(row.epoch or 0),
+                leader=str(getattr(row, "leader", "") or ""),
+                switch_state=str(getattr(row, "switch_state", "") or "idle"),
             )
         return None
 
@@ -77,18 +80,19 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader):
         """
         self._rows.pop(int(topic_id), None)
 
-    async def _topic_rows(self, *, topic_id: int) -> ConcurrentStableList[MsgPartition]:
-        """取某主题的分区行（缓存命中且未过期即复用）。
+    async def _topic_rows(self, *, topic_id: int, force: bool = False) -> ConcurrentStableList[MsgPartition]:
+        """取某主题的分区行（缓存命中且未过期即复用；`force` 绕过缓存）。
 
         Args:
             topic_id: 主题主键。
+            force: 是否强制重载（02-5 刷新循环）。
 
         Returns:
             ConcurrentStableList[MsgPartition]: 分区行（按分区号升序）。
         """
         cached = self._rows.get(topic_id)
         now = self._clock()
-        if cached is not None and now - cached[0] <= self._ttl_ms:
+        if not force and cached is not None and now - cached[0] <= self._ttl_ms:
             return cached[1]
         async with self._uow_factory() as uow:
             rows = await PartitionRepository(cast("DbSession", uow.session)).list_by_topic(topic_id)

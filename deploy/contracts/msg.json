@@ -4034,6 +4034,12 @@
             "title": "Id",
             "type": "string"
           },
+          "metadata_version": {
+            "default": 0,
+            "description": "元数据版本（= max(partition.epoch)）；客户端刷新判据",
+            "title": "Metadata Version",
+            "type": "integer"
+          },
           "name": {
             "description": "主题名",
             "title": "Name",
@@ -4441,6 +4447,12 @@
             "description": "已提交位点；未指定消费组时为 null",
             "title": "Committed"
           },
+          "epoch": {
+            "default": 0,
+            "description": "领导者任期（复制快照优先；复制关闭时取元数据行）",
+            "title": "Epoch",
+            "type": "integer"
+          },
           "hw": {
             "anyOf": [
               {
@@ -4690,6 +4702,67 @@
             "title": "Epoch",
             "type": "integer"
           },
+          "last_switch_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次成功切换时刻（UTC）",
+            "title": "Last Switch At"
+          },
+          "last_switch_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次切换触发人",
+            "title": "Last Switch By"
+          },
+          "last_switch_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次切换后的 epoch",
+            "title": "Last Switch Epoch"
+          },
+          "last_switch_result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次切换结果（truncated / retained / noop）",
+            "title": "Last Switch Result"
+          },
+          "last_truncate_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近一次切换截断后的 LEO；null = 未截断",
+            "title": "Last Truncate To"
+          },
           "leader": {
             "description": "当前 leader 标识",
             "title": "Leader",
@@ -4699,6 +4772,12 @@
             "description": "分区号（0 起）",
             "title": "Partition No",
             "type": "integer"
+          },
+          "switch_state": {
+            "default": "idle",
+            "description": "切换状态（idle / switching；02-5）",
+            "title": "Switch State",
+            "type": "string"
           }
         },
         "required": [
@@ -9579,7 +9658,8 @@
           350015,
           350006,
           350022,
-          350032
+          350032,
+          350033
         ]
       }
     },
@@ -10545,7 +10625,8 @@
           350015,
           350006,
           350022,
-          350032
+          350032,
+          350033
         ]
       }
     },

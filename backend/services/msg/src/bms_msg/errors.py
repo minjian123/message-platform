@@ -8,7 +8,8 @@
   帧或消息体过大 `350006`、帧格式非法 `350018`、协议版本不支持 `350019`、
   连接数超限 `350020`、单连接长驻流超限 `350021`、生产限流 `350005`、存储水位拒绝 `350022`、
   RPC 方法未注册 `350023`、RPC 流空闲超时 `350024`、主题数配额超限 `350025`、
-  消费组数配额超限 `350026`、主题状态不允许该操作 `350028`、ISR 不足 / 提交超时 `350032`
+  消费组数配额超限 `350026`、主题状态不允许该操作 `350028`、ISR 不足 / 提交超时 `350032`、
+  非 leader / 过期任期写入 `350033`
   （设计原文 5 位 `35010` / `35011` / `35012` 已在 01-1 详细设计「对齐记录」回写；
   `350004` 由 04-2 按「RPC 预算耗尽」启用（business / 不重试 / 504），`350005` 由 03-5 按「生产限流」启用；
   `350006` 由 03-2 按「上限 1 MiB」启用；`350020` / `350021` 由 03-4 按「连接数 / 单连接长驻流」启用；
@@ -58,6 +59,7 @@ __all__ = [
     "MsgMemberInvalidError",
     "MsgMessageNotFoundError",
     "MsgNamespaceInvalidError",
+    "MsgNotLeaderError",
     "MsgOffsetInvalidError",
     "MsgPartitionCountInvalidError",
     "MsgPayloadTooLargeError",
@@ -234,10 +236,17 @@ class MsgErrorCode(IntEnum):
     `data` 带 `reason`（`insufficient_isr` / `commit_timeout`）、`isr`、`required` 与
     `topic` / `partition`——客户端据此区分「副本不够」与「等太久」，并按退避重试。
     与相邻码分工：`350022` 是存储水位（盘满，退避无用）、`350005` 是生产限流（退避可解）、
-    `350007` 是重投超限；本码只表示「ISR 侧不满足提交条件」。
+    `350007` 是重投超限、`350033` 是写错节点 / 任期；本码只表示「ISR 侧不满足提交条件」。
 
     **`commit_timeout` 不等于确定未写入**：记录可能已在 leader 落盘、只是尚未提交，
     重试可能产生重复消息，消费端仍按 `message_id` 幂等（与 04-2「超时 = 结果未知」同构）。
+    """
+
+    NOT_LEADER = 350033
+    """非 leader / 过期任期 / 切换中 / 租约过期写入：503 / system / retryable。
+
+    与 `350032` 分工：那个是「ISR 不满足提交条件」，本码是「你写错了节点或任期」——客户端
+    应先用 `data.leader` / `data.epoch` 刷新元数据，再改投新 leader；不是「确定未写入」。
     """
 
 
@@ -502,12 +511,12 @@ class MsgDeadLetterNotReplayableError(MsgError):
 
 
 class MsgInsufficientReplicasError(MsgError):
-    """ISR 不足 / 提交等待超时 / 非 leader 写入（350032 / 503）。
+    """ISR 不足 / 提交等待超时（350032 / 503）。
 
-    `data` 六个字段：`reason`（`insufficient_isr` / `commit_timeout` / `not_leader`）、
+    `data` 六个字段：`reason`（`insufficient_isr` / `commit_timeout`）、
     `isr`（当前同步副本数）、`required`（`min.insync.replicas`）、`topic_id`、`partition`、
     `timeout_ms`（仅超时态给值）。普通 dict，不用自定义 Mapping（pydantic 序列化自定义 Mapping
-    会 500，02-7 已交过学费）。
+    会 500，02-7 已交过学费）。非 leader / 过期任期改用 `MsgNotLeaderError`（350033）。
     """
 
     code_: ClassVar[int] = MsgErrorCode.INSUFFICIENT_REPLICAS
@@ -528,7 +537,7 @@ class MsgInsufficientReplicasError(MsgError):
 
         Args:
             message: 提示信息。
-            reason: 原因（`insufficient_isr` / `commit_timeout` / `not_leader`）。
+            reason: 原因（`insufficient_isr` / `commit_timeout`）。
             isr: 当前同步副本数（含 leader）。
             required: 要求的最小同步副本数。
             topic_id: 主题主键（排障定位）。
@@ -546,6 +555,48 @@ class MsgInsufficientReplicasError(MsgError):
         }
         if timeout_ms is not None:
             data["timeout_ms"] = timeout_ms
+        super().__init__(message, data=data)
+
+
+class MsgNotLeaderError(MsgError):
+    """非 leader / 过期任期 / 切换中 / 租约过期写入（350033 / 503）。
+
+    `data` 五个字段：`reason`（`not_leader` / `stale_epoch` / `switching` / `lease_expired`）、
+    `topic_id`、`partition`、`leader`、`epoch`。客户端据此刷新元数据并改投新 leader；
+    `retryable=true` 但**不是「确定未写入」**（与 `350032(commit_timeout)` 同构）。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.NOT_LEADER
+    http_status_: ClassVar[int] = 503
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str = "not_leader",
+        topic_id: int = 0,
+        partition: int = 0,
+        leader: str = "",
+        epoch: int = 0,
+    ) -> None:
+        """初始化。
+
+        Args:
+            message: 提示信息。
+            reason: 原因（`not_leader` / `stale_epoch` / `switching` / `lease_expired`）。
+            topic_id: 主题主键（排障定位）。
+            partition: 分区号。
+            leader: 当前 leader 节点标识（客户端刷新用）。
+            epoch: 当前 leader 任期。
+        """
+        # 普通 dict 理由同 `MsgInsufficientReplicasError`：自定义 Mapping 会在 HTTP 路径 500。
+        data = {
+            "reason": reason,
+            "topic_id": topic_id,
+            "partition": partition,
+            "leader": leader,
+            "epoch": epoch,
+        }
         super().__init__(message, data=data)
 
 

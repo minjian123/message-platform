@@ -26,6 +26,7 @@ from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, conn
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.election import LeaderSwitchService
 from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore, InMemoryGroupStore
 from bms_msg.broker.log import MessageStore
@@ -69,6 +70,7 @@ __all__ = [
     "DeliveryStateDep",
     "GroupStoreDep",
     "IdempotencyStoreDep",
+    "LeaderSwitchDep",
     "MessageStoreDep",
     "MetricsSnapshotsDep",
     "OffsetEnumeratorDep",
@@ -107,6 +109,7 @@ __all__ = [
     "get_delivery_state",
     "get_group_store",
     "get_idempotency_store",
+    "get_leader_switch",
     "get_message_store",
     "get_metrics_snapshots",
     "get_offset_enumerator",
@@ -599,6 +602,25 @@ def get_replication(request: Request) -> ReplicationView | None:
 
 ReplicationDep = Annotated[ReplicationView | None, Depends(get_replication)]
 """路由参数写法：`replication: ReplicationDep`（None 表示复制关闭、不夹取）。"""
+
+
+def get_leader_switch(request: Request) -> LeaderSwitchService | None:
+    """取手动切主领域服务（02-5；管理端点与二次确认归 06-2）。
+
+    **缺省 None 是设计**：最小测试应用与「内存实现直连」场景没有切换服务；
+    生产装配总会注入 `LeaderSwitchService`。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        LeaderSwitchService | None: 切换服务；未装配返回 None。
+    """
+    return cast("LeaderSwitchService | None", getattr(request.app.state, "leader_switch", None))
+
+
+LeaderSwitchDep = Annotated[LeaderSwitchService | None, Depends(get_leader_switch)]
+"""路由参数写法：`switch: LeaderSwitchDep`（None 表示未装配切换服务）。"""
 
 
 def get_rpc_registry(request: Request) -> RpcRegistry:

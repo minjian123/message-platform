@@ -168,6 +168,8 @@ def test_error_frame_without_request_id() -> None:
         (350015, ErrorCategory.TRANSIENT, "business", True),
         (350005, ErrorCategory.TRANSIENT, "business", True),
         (350022, ErrorCategory.TRANSIENT, "system", True),
+        (350032, ErrorCategory.TRANSIENT, "system", True),
+        (350033, ErrorCategory.TRANSIENT, "system", True),
         (10006, ErrorCategory.TRANSIENT, "system", True),
         (10007, ErrorCategory.TRANSIENT, "system", True),
         (99999, ErrorCategory.SERVER_BUG, "system", False),

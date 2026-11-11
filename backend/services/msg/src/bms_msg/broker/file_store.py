@@ -617,6 +617,80 @@ class _PartitionLog:
         )
         return target
 
+    def truncate_to(self, *, offset: int) -> int:
+        """截掉 `offset` 及之后的记录（02-5 切换截断；调用方须持分区锁）。
+
+        实现复用 02-2 的段级截断：定位 offset 所在段与字节位置 → `SegmentFile.truncate`
+        截字节并裁剪越界索引 → 删除后续段 → 回写恢复点。不保留被截字节副本（有意截断，不是损坏）。
+
+        Args:
+            offset: 保留到的位置（不含；目标 LEO）。
+
+        Returns:
+            int: 截断后的 LEO。
+
+        Raises:
+            ParamError: `offset < start`（10001）。
+        """
+        if offset < self._start:
+            raise ParamError(f"截断位置早于起点：{offset} < {self._start}")
+        if offset >= self._leo:
+            return self._leo
+        ends = self.segment_ends()
+        keep_index: int | None = None
+        for index, segment in enumerate(self._segments):
+            if segment.base_offset <= offset < ends[index]:
+                keep_index = index
+                break
+        if keep_index is None:  # pragma: no cover - offset 在 [start, leo) 内必落在某段
+            return self._leo
+        keep = self._segments[keep_index]
+        if offset == keep.base_offset:
+            removed = self._segments[keep_index:]
+            self._segments = self._segments[:keep_index]
+        else:
+            target_position = self._record_position(segment=keep, offset=offset)
+            keep.truncate(size=target_position, max_relative_offset=offset - keep.base_offset - 1)
+            self._stamps.pop(keep.base_offset, None)
+            removed = self._segments[keep_index + 1 :]
+            self._segments = self._segments[: keep_index + 1]
+        for segment in removed:
+            self._stamps.pop(segment.base_offset, None)
+            segment.delete()
+        self._leo = offset
+        self._unflushed = 0
+        if not self._segments:
+            self._open_segment(base_offset=offset)
+        self.persist_recovery_point()
+        _LOGGER.warning(
+            "msg_partition_tail_truncated",
+            partition_path=str(self._directory),
+            to_offset=offset,
+            files=len(removed) * 3,
+        )
+        return offset
+
+    def _record_position(self, *, segment: SegmentFile, offset: int) -> int:
+        """取某条记录在段内的起始字节位置。
+
+        Args:
+            segment: 段。
+            offset: 分区内序号（须在段内）。
+
+        Returns:
+            int: 记录起始字节位置。
+
+        Raises:
+            ParamError: offset 不在段内（调用方已按段区间筛选）。
+        """
+        position, relative = segment.position_of(offset=offset)
+        current = segment.base_offset + relative
+        for frame_position, _total, _header_len in segment.iter_frames(from_position=position):
+            if current == offset:
+                return frame_position
+            current += 1
+        raise ParamError(f"记录位置不存在：{offset}")  # pragma: no cover - 调用方已保证段内
+
     def locate(self, *, offset: int) -> FileSlice | None:
         """取一条记录的坐标（不读载荷）。
 
@@ -1368,6 +1442,32 @@ class FileMessageStore(MessageStore):
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         async with partition.lock:
             return partition.truncate_before(offset=offset)
+
+    async def truncate_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """截掉 `offset` 及之后的记录（02-5 切换截断）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 保留到的位置（不含）。
+
+        Returns:
+            int: 截断后的 LEO。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+            ParamError: `offset < start`（10001）。
+        """
+        self._require_location(topic_id)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        async with partition.lock:
+            target = partition.truncate_to(offset=offset)
+        key = (int(topic_id), int(partition_no))
+        self._pending_alignment.pop(key, None)
+        for log_id, (owner, part, cached_offset) in list(self._log_ids.items()):
+            if owner == int(topic_id) and part == int(partition_no) and cached_offset >= target:
+                self._log_ids.pop(log_id, None)
+        return target
 
     async def locate(self, *, topic_id: int, partition_no: int, offset: int) -> FileSlice | None:
         """取一条记录的坐标（段文件 + 偏移 + 长度；不读载荷）。

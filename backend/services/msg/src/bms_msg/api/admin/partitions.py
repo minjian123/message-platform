@@ -116,6 +116,7 @@ async def list_partitions(
         PartitionItem(
             partition=view.partition_no,
             leader=view.leader,
+            epoch=view.epoch,
             leo=view.leo,
             hw=view.hw,
             isr=view.isr,

@@ -142,10 +142,12 @@ PUBLISH_ERROR_CODES = ConcurrentStableList(
         int(MsgErrorCode.PAYLOAD_TOO_LARGE),
         int(MsgErrorCode.STORAGE_WATERMARK_EXCEEDED),
         int(MsgErrorCode.INSUFFICIENT_REPLICAS),
+        int(MsgErrorCode.NOT_LEADER),
     ]
 )
 """发布端点声明的错误码（`x-error-codes`；01-5 追加延迟区已满 `350015`，03-2 追加超限 `350006`，
-02-6 追加存储水位拒绝 `350022`，02-4 追加 ISR 不足 / 提交超时 `350032`）。"""
+02-6 追加存储水位拒绝 `350022`，02-4 追加 ISR 不足 / 提交超时 `350032`，
+02-5 追加非 leader / 过期任期 `350033`）。"""
 
 CONSUME_ERROR_CODES = ConcurrentStableList(
     [

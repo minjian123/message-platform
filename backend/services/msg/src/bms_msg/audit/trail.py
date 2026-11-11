@@ -41,6 +41,7 @@ __all__ = [
     "DLQ_ARCHIVE_ACTION",
     "DLQ_IGNORE_ACTION",
     "DLQ_REPLAY_ACTION",
+    "LEADER_SWITCH_ACTION",
     "MESSAGE_DELETE_ACTION",
     "MESSAGE_REF_TYPE",
     "MODULE",
@@ -121,6 +122,9 @@ MESSAGE_DELETE_ACTION = "msg:message.delete"
 ACCESS_DENIED_ACTION = "msg:access.denied"
 """访问异常（普通审计；失败只告警）。"""
 
+LEADER_SWITCH_ACTION = "msg:partition.failover"
+"""分区切主（配置变更 / 敏感操作，强审计；02-5）。"""
+
 ACCESS_AUDIT_CLASS = "access"
 """访问异常类别键（非基座缺省类别，由 msg 自定义）。"""
 
@@ -153,6 +157,7 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         DLQ_IGNORE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信忽略"),
         DLQ_ARCHIVE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信归档"),
         MESSAGE_DELETE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="删消息"),
+        LEADER_SWITCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区切主"),
         ACCESS_DENIED_ACTION: AuditClass(ACCESS_AUDIT_CLASS, strong=False, label="访问异常"),
     }
 )

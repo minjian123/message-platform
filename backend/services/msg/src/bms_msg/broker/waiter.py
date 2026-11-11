@@ -305,6 +305,19 @@ class NotifyingMessageStore(MessageStore):
         """
         return await self._inner.truncate_before(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
+    async def truncate_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """截掉末端记录（原样委托；切换截断用）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 保留到的位置（不含）。
+
+        Returns:
+            int: 截断后的 LEO。
+        """
+        return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取只读头视图（原样委托）。
 

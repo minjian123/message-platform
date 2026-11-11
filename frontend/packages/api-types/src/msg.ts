@@ -3828,6 +3828,12 @@ export interface components {
              */
             id: string;
             /**
+             * Metadata Version
+             * @description 元数据版本（= max(partition.epoch)）；客户端刷新判据
+             * @default 0
+             */
+            metadata_version: number;
+            /**
              * Name
              * @description 主题名
              */
@@ -4087,6 +4093,12 @@ export interface components {
              */
             committed: number | null;
             /**
+             * Epoch
+             * @description 领导者任期（复制快照优先；复制关闭时取元数据行）
+             * @default 0
+             */
+            epoch: number;
+            /**
              * Hw
              * @description 高水位；02-4 交付前恒 null，不伪造单副本数值
              */
@@ -4234,6 +4246,31 @@ export interface components {
              */
             epoch: number;
             /**
+             * Last Switch At
+             * @description 最近一次成功切换时刻（UTC）
+             */
+            last_switch_at?: string | null;
+            /**
+             * Last Switch By
+             * @description 最近一次切换触发人
+             */
+            last_switch_by?: string | null;
+            /**
+             * Last Switch Epoch
+             * @description 最近一次切换后的 epoch
+             */
+            last_switch_epoch?: number | null;
+            /**
+             * Last Switch Result
+             * @description 最近一次切换结果（truncated / retained / noop）
+             */
+            last_switch_result?: string | null;
+            /**
+             * Last Truncate To
+             * @description 最近一次切换截断后的 LEO；null = 未截断
+             */
+            last_truncate_to?: number | null;
+            /**
              * Leader
              * @description 当前 leader 标识
              */
@@ -4243,6 +4280,12 @@ export interface components {
              * @description 分区号（0 起）
              */
             partition_no: number;
+            /**
+             * Switch State
+             * @description 切换状态（idle / switching；02-5）
+             * @default idle
+             */
+            switch_state: string;
         };
     };
     responses: never;

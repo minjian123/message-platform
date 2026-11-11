@@ -435,6 +435,14 @@ message_key = "msg.error.insufficient_replicas"
 severity = "error"
 description = "ISR 不足 / 提交等待超时（acks=all）；data.reason 区分 insufficient_isr / commit_timeout，客户端应退避重试（提交超时）"
 
+[[errcodes]]
+code = 350033
+domain = "msg"
+http_status = 503
+message_key = "msg.error.not_leader"
+severity = "error"
+description = "非 leader / 过期任期 / 切换中 / 租约过期写入；data.reason 区分 not_leader / stale_epoch / switching / lease_expired，客户端应先刷新元数据再改投新 leader"
+
 # ---- 业务域声明（第九类记录；域布局统一走装载注册 register_domain_services）----
 # 只声明本产品承载的域 `msg`：表的归属域与之同值（`services/table_registry.py`）。
 # `deploy/boundaries/domain_layout.json` 是**生成物**（由清单渲染），本仓 ops 渲染命令归 8B_01，

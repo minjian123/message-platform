@@ -34,11 +34,22 @@ class _Clock:
 class _Row:
     """分区行替身。"""
 
-    def __init__(self, *, partition_no: int, replicas: ConcurrentStableList[str], min_insync: int, epoch: int) -> None:
+    def __init__(
+        self,
+        *,
+        partition_no: int,
+        replicas: ConcurrentStableList[str],
+        min_insync: int,
+        epoch: int,
+        leader: str = "",
+        switch_state: str = "idle",
+    ) -> None:
         self.partition_no = partition_no
         self.replicas = ConcurrentStableList(replicas)
         self.min_insync_replicas = min_insync
         self.epoch = epoch
+        self.leader = leader
+        self.switch_state = switch_state
 
 
 class _Uow(AbstractAsyncContextManager[object]):
@@ -94,7 +105,16 @@ def _patched_repo(monkeypatch: pytest.MonkeyPatch) -> type[_Repo]:
     monkeypatch.setattr(replication_topology, "PartitionRepository", _Repo)
     _Repo.calls = 0
     _Repo.rows = ConcurrentStableList(
-        (_Row(partition_no=0, replicas=ConcurrentStableList(("n1", "n2")), min_insync=2, epoch=3),)
+        (
+            _Row(
+                partition_no=0,
+                replicas=ConcurrentStableList(("n2", "n1")),
+                min_insync=2,
+                epoch=3,
+                leader="n2",
+                switch_state="switching",
+            ),
+        )
     )
     return _Repo
 
@@ -105,25 +125,29 @@ async def test_load_returns_topology_and_caches(_patched_repo: type[_Repo]) -> N
     loader = DbReplicaTopologyLoader(uow_factory=_uow_factory(), ttl_ms=1_000, clock=clock)
     topology = await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     assert topology is not None
-    assert list(topology.replicas) == ["n1", "n2"]
+    assert list(topology.replicas) == ["n2", "n1"]
     assert topology.min_insync_replicas == 2
     assert topology.epoch == 3
+    assert topology.leader == "n2"
+    assert topology.switch_state == "switching"
     assert _patched_repo.calls == 1
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     assert _patched_repo.calls == 1
 
 
 async def test_ttl_expiry_and_forget_reload(_patched_repo: type[_Repo]) -> None:
-    """TTL 过期与显式失效都会重新查库。"""
+    """TTL 过期、`force=True` 与显式失效都会重新查库。"""
     clock = _Clock()
     loader = DbReplicaTopologyLoader(uow_factory=_uow_factory(), ttl_ms=100, clock=clock)
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     clock.value = 1_000
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     assert _patched_repo.calls == 2
+    await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO, force=True)
+    assert _patched_repo.calls == 3
     loader.forget(topic_id=TOPIC_ID)
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
-    assert _patched_repo.calls == 3
+    assert _patched_repo.calls == 4
 
 
 async def test_missing_partition_returns_none(_patched_repo: type[_Repo]) -> None:

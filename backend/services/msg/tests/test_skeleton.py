@@ -6,15 +6,19 @@
 
 import configparser
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from bms_core.core.paths import resolve_backend_root
 from bms_core.core.plugin import default_plugin_registry
 
+from bms_msg.api.deps import get_leader_switch
 from bms_msg.broker.deadletter import DatabaseDeadLetterQueue
 from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
+from bms_msg.broker.election import InProcessLeaderControlTransport, LeaderSwitchService
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
 from bms_msg.broker.offset import FileOffsetStore
@@ -188,5 +192,9 @@ def test_application_assembles_replication_when_enabled(monkeypatch: pytest.Monk
         assert list(app.state.replication.config.nodes) == ["n1", "n2"]
         assert isinstance(app.state.replication_metrics, ReplicationMetrics)
         assert isinstance(app.state.replication_transport, InProcessReplicaTransport)
+        assert isinstance(app.state.leader_switch, LeaderSwitchService)
+        assert isinstance(app.state.leader_control, InProcessLeaderControlTransport)
+        request = cast("object", SimpleNamespace(app=app))
+        assert get_leader_switch(request) is app.state.leader_switch  # type: ignore[arg-type]
     finally:
         registry.reset()

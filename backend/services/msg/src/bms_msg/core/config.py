@@ -373,6 +373,15 @@ REPLICATION_SCAN_INTERVAL_MS_ENV = "MSG_REPLICATION_SCAN_INTERVAL_MS"
 REPLICATION_TOPOLOGY_TTL_MS_ENV = "MSG_REPLICATION_TOPOLOGY_TTL_MS"
 """分区拓扑缓存 TTL 环境变量（缺省 5000ms）。"""
 
+REPLICATION_EPOCH_REFRESH_MS_ENV = "MSG_REPLICATION_EPOCH_REFRESH_MS"
+"""已挂载分区的 epoch / leader / switch_state 强制刷新周期环境变量（缺省 1000ms；02-5）。"""
+
+REPLICATION_LEADER_LEASE_MS_ENV = "MSG_REPLICATION_LEADER_LEASE_MS"
+"""leader 写权限租约环境变量（缺省 5000ms；超租约未确认 leader 身份即拒写；02-5）。"""
+
+REPLICATION_SWITCH_GRACE_MS_ENV = "MSG_REPLICATION_SWITCH_GRACE_MS"
+"""新 leader 从观察到 switching 起的停写宽限环境变量（缺省 5000ms，须 ≥ 租约；02-5）。"""
+
 DEFAULT_REPLICATION_NODE_ID = "local"
 """单实例缺省节点标识（管理面 `isr=[local]` 与关闭态一致）。"""
 
@@ -402,6 +411,15 @@ DEFAULT_REPLICATION_SCAN_INTERVAL_MS = 1_000
 
 DEFAULT_REPLICATION_TOPOLOGY_TTL_MS = 5_000
 """分区拓扑缓存 TTL 缺省值（毫秒）：热路径不查库与分配可变的折中。"""
+
+DEFAULT_REPLICATION_EPOCH_REFRESH_MS = 1_000
+"""epoch / leader / switch_state 强制刷新周期缺省值（毫秒）：切换要求秒级收敛。"""
+
+DEFAULT_REPLICATION_LEADER_LEASE_MS = 5_000
+"""leader 写权限租约缺省值（毫秒）：元数据库不可用超过该值即停止写入（安全优先）。"""
+
+DEFAULT_REPLICATION_SWITCH_GRACE_MS = 5_000
+"""切换停写宽限缺省值（毫秒）：须 ≥ 租约，避免与旧 leader 写窗口重叠。"""
 
 REPLICATION_METRICS_PARTITION_LIMIT = 500
 """复制指标的分区基数上限：超出不输出并记一次 warning（防指标爆炸）。"""

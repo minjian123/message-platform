@@ -349,6 +349,7 @@ async def test_partitions_fields_and_placeholders(client: AsyncClient) -> None:
     items = _items(response)
     assert [item["partition"] for item in items] == [0, 1]
     assert all(item["hw"] is None and item["isr"] == [] for item in items)
+    assert all(item["epoch"] == 0 for item in items)
     assert all(item["committed"] is None and item["lag"] is None and item["owner"] is None for item in items)
     assert all(isinstance(item["leo"], int) for item in items)
 

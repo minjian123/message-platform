@@ -47,7 +47,7 @@ from bms_msg.broker.replication import (
 )
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.trace import EMPTY_TRACE
-from bms_msg.errors import MsgInsufficientReplicasError
+from bms_msg.errors import MsgError, MsgErrorCode, MsgInsufficientReplicasError, MsgNotLeaderError
 
 pytestmark = pytest.mark.kiwi_id(2484)
 
@@ -152,7 +152,7 @@ class _Topology:
         self.min_insync = min_insync
         self.epoch = epoch
 
-    async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology:
+    async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology:
         """返回固定拓扑。
 
         Args:
@@ -221,7 +221,7 @@ class _Cluster:
         self.writer = ReplicatedMessageStore(self.leader_store, replication=self.leader)
 
 
-def _error_data(error: MsgInsufficientReplicasError) -> ConcurrentStableDict[str, object]:
+def _error_data(error: MsgError) -> ConcurrentStableDict[str, object]:
     """取错误附带数据（`MsgError.data` 在基类上是可选对象，测试里统一收窄）。
 
     Args:
@@ -461,13 +461,13 @@ async def test_leader_rejects_newer_epoch_request() -> None:
 
 
 async def test_follower_diverged_when_ahead_of_leader() -> None:
-    """follower 位点超过 leader LEO：判定分叉并停止拉取（截断归 02-5）。"""
+    """follower 位点超过 leader LEO：02-5 按 leader 末端截断本地发散尾部后重新拉取。"""
     cluster = _Cluster()
     follower_state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     await cluster.leader.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     follower_state.local_leo = 5
-    with pytest.raises(ReplicationDivergedError):
-        await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+    assert follower_state.local_leo == 0
 
 
 async def test_unregistered_transport_node_raises_unavailable() -> None:
@@ -699,7 +699,7 @@ async def test_topology_loader_supplies_replicas() -> None:
     """拓扑加载器给出副本集与分区级 min：协调器按其挂载。"""
 
     class Loader:
-        async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology | None:
+        async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology | None:
             return PartitionTopology(
                 replicas=ConcurrentStableFrozenList(("n2", "n1")),
                 min_insync_replicas=1,
@@ -754,7 +754,7 @@ async def test_topology_loader_failure_falls_back_to_config() -> None:
     """拓扑加载失败：走配置轮转兜底并告警（不拒绝发布）。"""
 
     class BrokenLoader:
-        async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology | None:
+        async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology | None:
             raise RuntimeError("元数据库不可用")
 
     coordinator = ReplicationCoordinator(
@@ -768,10 +768,11 @@ async def test_topology_loader_failure_falls_back_to_config() -> None:
 
 
 async def test_follower_ensure_rejects_and_wait_is_noop() -> None:
-    """follower 收到 acks=all：预检报 not_leader（350032）；提交等待不参与。"""
+    """follower 收到 acks=all：预检报 not_leader（350033）；提交等待不参与。"""
     cluster = _Cluster()
-    with pytest.raises(MsgInsufficientReplicasError) as captured:
+    with pytest.raises(MsgNotLeaderError) as captured:
         await cluster.follower.ensure_writable(topic_id=TOPIC_ID, partition_no=PARTITION_NO, acks="all")
+    assert captured.value.code_ == MsgErrorCode.NOT_LEADER
     assert _error_data(captured.value)["reason"] == "not_leader"
     await cluster.follower.wait_committed(topic_id=TOPIC_ID, partition_no=PARTITION_NO, offset=0)
 
@@ -1047,9 +1048,9 @@ async def test_concurrent_attach_returns_single_state() -> None:
     """并发挂载同一分区：锁内二次检查命中，两个调用拿到同一实例。"""
 
     class SlowTopology(_Topology):
-        async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology:
+        async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology:
             await asyncio.sleep(0.01)
-            return await super().load(topic_id=topic_id, partition_no=partition_no)
+            return await super().load(topic_id=topic_id, partition_no=partition_no, force=force)
 
     coordinator = ReplicationCoordinator(
         config=_config(),

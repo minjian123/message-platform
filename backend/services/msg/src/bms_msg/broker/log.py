@@ -306,6 +306,25 @@ class MessageStore(BaseFrameworkObject, ABC):
         """
 
     @abstractmethod
+    async def truncate_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """截掉 `offset` 及之后的记录（02-5 切换截断；只用于显式尾部回退）。
+
+        **与 `truncate_before` 的分工**：本方法改**末端**（LEO 回退），`truncate_before` 改**起点**。
+        调用方须保证没有并发写入 / 拉取落盘（切换流程持分区锁）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 保留到的位置（不含）；`>= leo` 幂等无操作，`< start` 拒绝。
+
+        Returns:
+            int: 截断后的 LEO（= `offset`，或原 LEO 表示无操作）。
+
+        Raises:
+            ParamError: `offset < start_offset`（10001）。
+        """
+
+    @abstractmethod
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取只读头视图（管理面精确检索入口）。
 
@@ -528,6 +547,31 @@ class InMemoryMessageStore(MessageStore):
             return start
         del log[: offset - start]
         self._starts[bucket] = offset
+        return offset
+
+    async def truncate_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """截掉 `offset` 及之后的记录（内存替身）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 保留到的位置（不含）。
+
+        Returns:
+            int: 截断后的 LEO。
+
+        Raises:
+            ParamError: `offset` 小于起点（10001）。
+        """
+        bucket: PartitionKey = (topic_id, partition_no)
+        start = self._starts.get(bucket, 0)
+        log = self._logs.setdefault(bucket, [])
+        leo = start + len(log)
+        if offset < start:
+            raise ParamError(f"截断位置早于起点：{offset} < {start}")
+        if offset >= leo:
+            return leo
+        del log[offset - start :]
         return offset
 
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:

@@ -27,11 +27,13 @@ from bms_core.registry.products import load_product_manifest
 from bms_core.services.module_registry import register_error_code_records, reset_error_code_records
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.api.admin import topics
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
+from bms_msg.models.partition import MsgPartition
 
 pytestmark = pytest.mark.kiwi_id(2412)
 
@@ -305,7 +307,7 @@ async def test_list_rejects_invalid_query(client: AsyncClient) -> None:
 
 
 async def test_detail_returns_partitions(client: AsyncClient) -> None:
-    """详情：200 + 分区明细（分区号升序、leader、检查点）。"""
+    """详情：200 + 分区明细（分区号升序、leader、检查点、切换字段）。"""
     created = _data(await _create(client, partition_count=2))
     response = await client.get(f"/api/v1/msg/admin/topics/{created['id']}", headers={"X-Tenant-ID": "demo"})
     data = _data(response)
@@ -314,6 +316,39 @@ async def test_detail_returns_partitions(client: AsyncClient) -> None:
     assert [item["partition_no"] for item in partitions] == [0, 1]
     assert {str(item["leader"]) for item in partitions} == {"msg-0"}
     assert {item["epoch"] for item in partitions} == {0}
+    assert data["metadata_version"] == 0
+    assert {item["switch_state"] for item in partitions} == {"idle"}
+    assert {item["last_switch_at"] for item in partitions} == {None}
+    assert {item["last_truncate_to"] for item in partitions} == {None}
+
+
+async def test_detail_exposes_metadata_version_and_switch_result(client: AsyncClient, db_session: AsyncSession) -> None:
+    """详情：`metadata_version = max(epoch)`，并回显最近切换结果列。"""
+    created = _data(await _create(client, partition_count=2))
+    topic_id = int(cast("str", created["id"]))
+    await db_session.execute(
+        update(MsgPartition)
+        .where(MsgPartition.topic_id == topic_id, MsgPartition.partition_no == 0)
+        .values(
+            epoch=3,
+            switch_state="idle",
+            last_switch_by="system:drill",
+            last_switch_epoch=3,
+            last_switch_result="retained",
+            last_truncate_to=None,
+        )
+    )
+    await db_session.commit()
+    response = await client.get(f"/api/v1/msg/admin/topics/{topic_id}", headers={"X-Tenant-ID": "demo"})
+    data = _data(response)
+    partitions = [cast("dict[str, object]", item) for item in cast("list[object]", data["partitions"])]
+    assert response.status_code == 200
+    assert data["metadata_version"] == 3
+    first = partitions[0]
+    assert first["last_switch_by"] == "system:drill"
+    assert first["last_switch_epoch"] == 3
+    assert first["last_switch_result"] == "retained"
+    assert first["last_truncate_to"] is None
 
 
 async def test_detail_missing_returns_350001(client: AsyncClient) -> None:

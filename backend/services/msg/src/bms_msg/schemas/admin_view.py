@@ -27,6 +27,7 @@ class PartitionItem(BaseSchema):
 
     partition: int = Field(description="分区号（0 起）")
     leader: str | None = Field(description="当前 leader 实例标识；元数据缺行时为 null")
+    epoch: int = Field(default=0, description="领导者任期（复制快照优先；复制关闭时取元数据行）")
     leo: int = Field(description="日志末端位点（下一条待分配 offset）")
     hw: int | None = Field(description="高水位；02-4 交付前恒 null，不伪造单副本数值")
     isr: Annotated[ConcurrentStableList[str], CONTRACT_COLLECTION] = Field(

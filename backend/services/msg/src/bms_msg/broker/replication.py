@@ -43,35 +43,43 @@ from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.config import (
     ACKS_PUBLISH_ALL,
     DEFAULT_REPLICATION_COMMIT_TIMEOUT_MS,
+    DEFAULT_REPLICATION_EPOCH_REFRESH_MS,
     DEFAULT_REPLICATION_FACTOR,
     DEFAULT_REPLICATION_FETCH_BATCH,
     DEFAULT_REPLICATION_FETCH_INTERVAL_MS,
     DEFAULT_REPLICATION_LAG_RECORDS,
     DEFAULT_REPLICATION_LAG_TIME_MS,
+    DEFAULT_REPLICATION_LEADER_LEASE_MS,
     DEFAULT_REPLICATION_MIN_INSYNC,
     DEFAULT_REPLICATION_NODE_ID,
     DEFAULT_REPLICATION_SCAN_INTERVAL_MS,
+    DEFAULT_REPLICATION_SWITCH_GRACE_MS,
     DEFAULT_REPLICATION_TOPOLOGY_TTL_MS,
     MS_PER_SECOND,
     REPLICATION_COMMIT_TIMEOUT_MS_ENV,
     REPLICATION_ENABLED_ENV,
+    REPLICATION_EPOCH_REFRESH_MS_ENV,
     REPLICATION_FACTOR_ENV,
     REPLICATION_FETCH_BACKOFF_CAP_MS,
     REPLICATION_FETCH_BATCH_ENV,
     REPLICATION_FETCH_INTERVAL_MS_ENV,
     REPLICATION_LAG_RECORDS_ENV,
     REPLICATION_LAG_TIME_MS_ENV,
+    REPLICATION_LEADER_LEASE_MS_ENV,
     REPLICATION_METRICS_PARTITION_LIMIT,
     REPLICATION_MIN_INSYNC_ENV,
     REPLICATION_NODE_ID_ENV,
     REPLICATION_NODES_ENV,
     REPLICATION_SCAN_INTERVAL_MS_ENV,
+    REPLICATION_SWITCH_GRACE_MS_ENV,
     REPLICATION_TOPOLOGY_TTL_MS_ENV,
 )
 from bms_msg.core.trace import TraceContext
-from bms_msg.errors import MsgInsufficientReplicasError
+from bms_msg.errors import MsgInsufficientReplicasError, MsgNotLeaderError
 
 __all__ = [
+    "SWITCH_STATE_IDLE",
+    "SWITCH_STATE_SWITCHING",
     "FollowerProgress",
     "InProcessReplicaTransport",
     "PartitionReplication",
@@ -93,6 +101,8 @@ __all__ = [
     "ReplicationSnapshot",
     "ReplicationView",
     "StaleLeaderError",
+    "SwitchApplyCommand",
+    "SwitchApplyResult",
 ]
 
 _LOGGER = get_logger("bms_msg.replication")
@@ -102,6 +112,12 @@ _FAILURE_LOG_WINDOW_MS = 60_000
 
 ReplicaKey = tuple[int, int]
 """分区键：`(topic_id, partition_no)`。"""
+
+SWITCH_STATE_IDLE = "idle"
+"""切换状态：空闲（leader 在租约内可写）。"""
+
+SWITCH_STATE_SWITCHING = "switching"
+"""切换状态：切换窗口（拒绝写入，等旧租约过期后由目标节点激活）。"""
 
 
 class ReplicaRole(StrEnum):
@@ -130,7 +146,17 @@ class StaleLeaderError(ReplicationError):
 
 
 class ReplicationDivergedError(ReplicationError):
-    """副本位点不连续 / 起点不匹配：停止拉取，尾部截断与重同步归 02-5。"""
+    """副本位点不连续 / 起点不匹配：停止拉取；可修复时按 `leader_leo` 截断本地发散尾部（02-5）。"""
+
+    def __init__(self, message: str, *, leader_leo: int | None = None) -> None:
+        """初始化。
+
+        Args:
+            message: 错误说明。
+            leader_leo: 新 leader 的权威末端（可空；给出时调用方可据此截断本地尾部）。
+        """
+        super().__init__(message)
+        self.leader_leo = leader_leo
 
 
 @dataclass(frozen=True)
@@ -173,6 +199,15 @@ class ReplicaConfig(BaseValueObject):
     topology_ttl_ms: int = DEFAULT_REPLICATION_TOPOLOGY_TTL_MS
     """分区拓扑缓存 TTL（毫秒）。"""
 
+    epoch_refresh_ms: int = DEFAULT_REPLICATION_EPOCH_REFRESH_MS
+    """已挂载分区的 epoch / leader / switch_state 强制刷新周期（毫秒；02-5）。"""
+
+    leader_lease_ms: int = DEFAULT_REPLICATION_LEADER_LEASE_MS
+    """leader 写权限租约（毫秒；超时未确认即拒写；02-5）。"""
+
+    switch_grace_ms: int = DEFAULT_REPLICATION_SWITCH_GRACE_MS
+    """切换停写宽限（毫秒；须 ≥ 租约；02-5）。"""
+
     @classmethod
     def from_env(cls) -> ReplicaConfig:
         """从环境变量构造配置并校验。
@@ -202,6 +237,9 @@ class ReplicaConfig(BaseValueObject):
             commit_timeout_ms=_env_int(REPLICATION_COMMIT_TIMEOUT_MS_ENV, DEFAULT_REPLICATION_COMMIT_TIMEOUT_MS),
             scan_interval_ms=_env_int(REPLICATION_SCAN_INTERVAL_MS_ENV, DEFAULT_REPLICATION_SCAN_INTERVAL_MS),
             topology_ttl_ms=_env_int(REPLICATION_TOPOLOGY_TTL_MS_ENV, DEFAULT_REPLICATION_TOPOLOGY_TTL_MS),
+            epoch_refresh_ms=_env_int(REPLICATION_EPOCH_REFRESH_MS_ENV, DEFAULT_REPLICATION_EPOCH_REFRESH_MS),
+            leader_lease_ms=_env_int(REPLICATION_LEADER_LEASE_MS_ENV, DEFAULT_REPLICATION_LEADER_LEASE_MS),
+            switch_grace_ms=_env_int(REPLICATION_SWITCH_GRACE_MS_ENV, DEFAULT_REPLICATION_SWITCH_GRACE_MS),
         )
         config.validate()
         return config
@@ -220,9 +258,17 @@ class ReplicaConfig(BaseValueObject):
             ("commit_timeout_ms", self.commit_timeout_ms),
             ("scan_interval_ms", self.scan_interval_ms),
             ("topology_ttl_ms", self.topology_ttl_ms),
+            ("epoch_refresh_ms", self.epoch_refresh_ms),
+            ("leader_lease_ms", self.leader_lease_ms),
+            ("switch_grace_ms", self.switch_grace_ms),
         ):
             if value <= 0:
                 raise ValueError(f"复制配置非法：{name} 必须为正（当前 {value}）")
+        if self.switch_grace_ms < self.leader_lease_ms:
+            raise ValueError(
+                f"复制配置非法：switch_grace_ms={self.switch_grace_ms} 小于 leader_lease_ms={self.leader_lease_ms}"
+                "（宽限不足会与旧 leader 写窗口重叠）"
+            )
         if self.lag_time_max_ms < 0 or self.lag_records_max < 0:
             raise ValueError("复制配置非法：ISR 阈值不得为负")
         if self.lag_time_max_ms == 0 and self.lag_records_max == 0:
@@ -255,6 +301,12 @@ class PartitionTopology(BaseValueObject):
     epoch: int = 0
     """分区 leader 任期（02-5 递增；本任务只读与校验）。"""
 
+    leader: str = ""
+    """当前 leader（02-5；空串表示按 `replicas` 首个推导）。"""
+
+    switch_state: str = SWITCH_STATE_IDLE
+    """切换状态（`idle` / `switching`；02-5）。"""
+
 
 @dataclass(frozen=True)
 class FollowerProgress(BaseValueObject):
@@ -268,6 +320,42 @@ class FollowerProgress(BaseValueObject):
 
     in_sync: bool
     """当前是否在 ISR。"""
+
+
+@dataclass(frozen=True)
+class SwitchApplyCommand(BaseValueObject):
+    """目标节点激活命令（`LeaderControlTransport.apply_switch` 的载荷；02-5）。"""
+
+    topic_id: int
+    partition_no: int
+    from_leader: str
+    to_leader: str
+    to_epoch: int
+    watermark: int | None
+    """切换水位（旧 leader 真实 HW；None = 未知，走保留）。"""
+
+    truncate: bool
+    """是否按水位截断（旧 leader 可达时为 True）。"""
+
+    grace_ms: int
+    """停写宽限（毫秒；目标节点从观察到 switching 起计时）。"""
+
+
+@dataclass(frozen=True)
+class SwitchApplyResult(BaseValueObject):
+    """目标节点激活结果（02-5）。"""
+
+    to_leo: int
+    """激活后的 LEO。"""
+
+    truncated_to: int | None
+    """截断后的 LEO；None = 未截断。"""
+
+    retained_tail: int
+    """保留的未提交条数（0 = 未保留）。"""
+
+    already_applied: bool
+    """是否幂等重复激活。"""
 
 
 @dataclass(frozen=True)
@@ -291,6 +379,21 @@ class ReplicationSnapshot(BaseValueObject):
 
     replicas: ConcurrentStableFrozenList[str]
     """分区副本集（含 leader）。"""
+
+    switch_state: str = SWITCH_STATE_IDLE
+    """切换状态（`idle` / `switching`；02-5）。"""
+
+    writable: bool = False
+    """本节点当前是否可写（租约内 + idle + 本节点为 leader；02-5）。"""
+
+    last_known_hw: int = 0
+    """最后已知的 leader HW（follower 取最近一次拉取结果；02-5 旧 leader 不可达时用于验证）。"""
+
+    last_known_isr: ConcurrentStableFrozenList[str] = field(default_factory=lambda: ConcurrentStableFrozenList[str]())
+    """最后已知的 leader ISR（02-5 旧 leader 不可达时用于「已提交不丢」验证）。"""
+
+    last_known_at: float = 0.0
+    """最后已知运行态的采集时刻（单调毫秒；02-5 判是否新鲜）。"""
 
 
 @dataclass(frozen=True)
@@ -318,6 +421,8 @@ class ReplicaFetchResult(BaseValueObject):
     records: ConcurrentStableList[StoredMessage]
     leader_leo: int
     high_watermark: int
+    leader_isr: ConcurrentStableFrozenList[str] = field(default_factory=lambda: ConcurrentStableFrozenList[str]())
+    """leader 侧当前 ISR（follower 保存为 `last_known_isr`；02-5）。"""
 
 
 class ReplicaTransport(BaseFrameworkObject, ABC):
@@ -506,12 +611,13 @@ class ReplicaTopologyLoader(BaseFrameworkObject, ABC):
     """分区拓扑加载端口（生产实现走平台库；用例注入固定快照）。"""
 
     @abstractmethod
-    async def load(self, *, topic_id: int, partition_no: int) -> PartitionTopology | None:
+    async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology | None:
         """加载分区拓扑。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
+            force: 是否绕过缓存（切换刷新循环用；02-5）。
 
         Returns:
             PartitionTopology | None: 拓扑；行缺失 / 读取失败返回 None（走配置兜底）。
@@ -533,6 +639,10 @@ class PartitionReplication:
         min_insync_replicas: int,
         local_leo: int,
         hw: int,
+        switch_state: str = SWITCH_STATE_IDLE,
+        last_known_hw: int = 0,
+        last_known_isr: ConcurrentStableFrozenList[str] | None = None,
+        leadership_confirmed_at: float = 0.0,
     ) -> None:
         """初始化。
 
@@ -546,6 +656,10 @@ class PartitionReplication:
             min_insync_replicas: 生效的最小同步副本数。
             local_leo: 本节点已落盘末端。
             hw: 初始高水位。
+            switch_state: 已观察到的切换状态（02-5）。
+            last_known_hw: 最后已知 leader HW（02-5）。
+            last_known_isr: 最后已知 leader ISR（02-5）。
+            leadership_confirmed_at: 最近一次确认 leader 身份的单调毫秒（02-5 租约起点）。
         """
         self.topic_id = int(topic_id)
         self.partition_no = int(partition_no)
@@ -561,6 +675,17 @@ class PartitionReplication:
         self.isr: ConcurrentStableSet[str] = ConcurrentStableSet()
         self.condition = asyncio.Condition()
         self.last_reported_leader_hw = hw
+        self.last_reported_leader_leo = 0
+        self.switch_state = switch_state
+        self.last_known_hw = int(last_known_hw)
+        self.last_known_isr: ConcurrentStableSet[str] = ConcurrentStableSet(
+            last_known_isr if last_known_isr is not None else ()
+        )
+        self.last_known_at = float(leadership_confirmed_at)
+        self.leadership_confirmed_at = float(leadership_confirmed_at)
+        self.switch_observed_at: float | None = None
+        self.op_lock = asyncio.Lock()
+        self.lease_logged_at: float | None = None
 
     @property
     def key(self) -> ReplicaKey:
@@ -570,6 +695,29 @@ class PartitionReplication:
             ReplicaKey: `(topic_id, partition_no)`。
         """
         return (self.topic_id, self.partition_no)
+
+    @property
+    def writable(self) -> bool:
+        """本节点当前是否可写（仅按角色与切换状态；租约由协调器叠加判定）。
+
+        Returns:
+            bool: 复制关闭或 leader 且 idle 时为 True。
+        """
+        if self.role is ReplicaRole.DISABLED:
+            return True
+        return self.role is ReplicaRole.LEADER and self.switch_state == SWITCH_STATE_IDLE
+
+    def in_lease(self, *, now: float, lease_ms: int) -> bool:
+        """是否仍在 leader 身份租约内。
+
+        Args:
+            now: 当前单调毫秒。
+            lease_ms: 租约时长（毫秒）。
+
+        Returns:
+            bool: 未超租约为 True。
+        """
+        return now - self.leadership_confirmed_at <= lease_ms
 
     def isr_snapshot(self) -> ConcurrentStableFrozenList[str]:
         """按副本集顺序输出当前 ISR（管理面与指标共用）。
@@ -740,18 +888,17 @@ class ReplicationCoordinator(ReplicationView):
         replicas = topology.replicas if topology is not None and topology.replicas else None
         epoch = topology.epoch if topology is not None else 0
         partition_min = topology.min_insync_replicas if topology is not None else 0
+        switch_state = topology.switch_state if topology is not None else SWITCH_STATE_IDLE
         if not self._config.enabled:
             chosen: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList((self._config.node_id,))
             role = ReplicaRole.DISABLED
             leader = self._config.node_id
             min_insync = 1
+            switch_state = SWITCH_STATE_IDLE
         else:
             chosen = replicas if replicas is not None else self._derive_replicas(topic_id, partition_no)
-            if self._config.node_id in chosen:
-                role = ReplicaRole.LEADER if chosen[0] == self._config.node_id else ReplicaRole.FOLLOWER
-            else:
-                role = ReplicaRole.FOLLOWER
-            leader = chosen[0]
+            leader = topology.leader if topology is not None and topology.leader else chosen[0]
+            role = ReplicaRole.LEADER if leader == self._config.node_id else ReplicaRole.FOLLOWER
             min_insync = self._effective_min_insync(partition_min, len(chosen))
         leo = await self._store.leo(topic_id=topic_id, partition_no=partition_no)
         start = await self._store.start_offset(topic_id=topic_id, partition_no=partition_no)
@@ -766,6 +913,8 @@ class ReplicationCoordinator(ReplicationView):
             min_insync_replicas=min_insync,
             local_leo=leo,
             hw=hw,
+            switch_state=switch_state,
+            leadership_confirmed_at=self._clock(),
         )
         if role is not ReplicaRole.DISABLED:
             state.isr.add(leader)
@@ -827,12 +976,15 @@ class ReplicationCoordinator(ReplicationView):
             chosen.add(nodes[(start + index) % len(nodes)])
         return ConcurrentStableFrozenList(chosen)
 
-    async def _load_topology(self, *, topic_id: int, partition_no: int) -> PartitionTopology | None:
+    async def _load_topology(
+        self, *, topic_id: int, partition_no: int, force: bool = False
+    ) -> PartitionTopology | None:
         """加载分区拓扑（加载器失败不抛：走配置兜底并告警）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
+            force: 是否绕过加载器缓存（02-5 刷新循环）。
 
         Returns:
             PartitionTopology | None: 拓扑；缺失 / 失败返回 None。
@@ -840,7 +992,7 @@ class ReplicationCoordinator(ReplicationView):
         if self._topology_loader is None:
             return None
         try:
-            return await self._topology_loader.load(topic_id=topic_id, partition_no=partition_no)
+            return await self._topology_loader.load(topic_id=topic_id, partition_no=partition_no, force=force)
         except Exception as exc:
             _LOGGER.warning(
                 "msg_replication_topology_failed",
@@ -851,27 +1003,23 @@ class ReplicationCoordinator(ReplicationView):
             return None
 
     async def ensure_writable(self, *, topic_id: int, partition_no: int, acks: str) -> None:
-        """`acks=all` 写入前的 ISR 预检。
+        """写入前的 leader / 租约预检（`acks=all` 额外判 ISR）。
 
         Args:
             topic_id: 主题主键。
             partition_no: 分区号。
-            acks: 发布确认档位。
+            acks: 发布确认档位（`"1"` / `"all"`）。
 
         Raises:
-            MsgInsufficientReplicasError: 本节点非 leader 或 ISR 不足（350032）。
+            MsgNotLeaderError: 非 leader / 切换中 / 租约过期（350033）。
+            MsgInsufficientReplicasError: `acks=all` 且 ISR 不足（350032）。
         """
-        if not self._config.enabled or acks != ACKS_PUBLISH_ALL:
+        if not self._config.enabled:
             return
         state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
-        if state.role is not ReplicaRole.LEADER:
-            raise MsgInsufficientReplicasError(
-                reason="not_leader",
-                isr=len(state.isr),
-                required=state.min_insync_replicas,
-                topic_id=topic_id,
-                partition=partition_no,
-            )
+        self._ensure_leadership(state)
+        if acks != ACKS_PUBLISH_ALL:
+            return
         if len(state.isr) < state.min_insync_replicas:
             raise MsgInsufficientReplicasError(
                 reason="insufficient_isr",
@@ -880,6 +1028,81 @@ class ReplicationCoordinator(ReplicationView):
                 topic_id=topic_id,
                 partition=partition_no,
             )
+
+    async def ensure_write_allowed(self, *, topic_id: int, partition_no: int) -> None:
+        """所有写入（含 `acks=1` / 延迟转投 / 重放）落盘前的 leader fencing。
+
+        复制关闭时直接返回（单实例零变化）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Raises:
+            MsgNotLeaderError: 非 leader / 切换中 / 租约过期（350033）。
+        """
+        if not self._config.enabled:
+            return
+        state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
+        self._ensure_leadership(state)
+
+    def _ensure_leadership(self, state: PartitionReplication) -> None:
+        """判本节点是否仍是可写 leader（顺序：角色 → 切换状态 → 租约）。
+
+        Args:
+            state: 分区运行态。
+
+        Raises:
+            MsgNotLeaderError: 任一条件不满足（350033，`data.reason` 区分原因）。
+        """
+        if state.role is not ReplicaRole.LEADER:
+            raise MsgNotLeaderError(
+                reason="not_leader",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                leader=state.leader,
+                epoch=state.epoch,
+            )
+        if state.switch_state != SWITCH_STATE_IDLE:
+            raise MsgNotLeaderError(
+                reason="switching",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                leader=state.leader,
+                epoch=state.epoch,
+            )
+        if self._topology_loader is None:
+            # 无元数据权威（单实例 / 用例直连）：没有可确认的 leader 身份，不施加租约。
+            return
+        now = self._clock()
+        if state.in_lease(now=now, lease_ms=self._config.leader_lease_ms):
+            return
+        self._log_lease_expired(state, now=now)
+        raise MsgNotLeaderError(
+            reason="lease_expired",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            leader=state.leader,
+            epoch=state.epoch,
+        )
+
+    def _log_lease_expired(self, state: PartitionReplication, *, now: float) -> None:
+        """记录租约过期（同分区 60s 窗口抑制，避免每次写入刷一条）。
+
+        Args:
+            state: 分区运行态。
+            now: 当前单调毫秒。
+        """
+        last = state.lease_logged_at
+        if last is not None and now - last < _FAILURE_LOG_WINDOW_MS:
+            return
+        state.lease_logged_at = now
+        _LOGGER.warning(
+            "msg_replication_lease_expired",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            last_confirmed_ms=int(now - state.leadership_confirmed_at),
+        )
 
     async def wait_committed(self, *, topic_id: int, partition_no: int, offset: int) -> None:
         """等待某条记录被 ISR 提交。
@@ -966,6 +1189,19 @@ class ReplicationCoordinator(ReplicationView):
             hw=state.hw,
             isr=state.isr_snapshot(),
             replicas=state.replicas,
+            switch_state=state.switch_state,
+            writable=state.writable
+            and (
+                self._topology_loader is None
+                or state.in_lease(now=self._clock(), lease_ms=self._config.leader_lease_ms)
+            ),
+            last_known_hw=state.last_known_hw if state.role is not ReplicaRole.LEADER else state.hw,
+            last_known_isr=ConcurrentStableFrozenList(
+                state.isr_snapshot()
+                if state.role is ReplicaRole.LEADER
+                else (member for member in state.replicas if member in state.last_known_isr)
+            ),
+            last_known_at=state.last_known_at,
         )
 
     async def on_append(self, *, topic_id: int, partition_no: int, offset: int) -> None:
@@ -1017,6 +1253,8 @@ class ReplicationCoordinator(ReplicationView):
         state = await self.attach_partition(topic_id=request.topic_id, partition_no=request.partition_no)
         if state.role is not ReplicaRole.LEADER:
             raise ReplicaUnavailableError(f"本节点不是分区 leader：{state.key}")
+        if state.switch_state != SWITCH_STATE_IDLE:
+            raise ReplicaUnavailableError(f"分区处于切换窗口，暂停副本拉取：{state.key}")
         if request.epoch > state.epoch:
             raise StaleLeaderError(f"leader 任期过期：本地 {state.epoch} < 请求方 {request.epoch}（分区 {state.key}）")
         if request.follower not in state.followers:
@@ -1028,7 +1266,8 @@ class ReplicationCoordinator(ReplicationView):
             )
         if request.from_offset > state.leader_leo:
             raise ReplicationDivergedError(
-                f"follower 位点超过 leader LEO：{request.from_offset} > {state.leader_leo}（分区 {state.key}）"
+                f"follower 位点超过 leader LEO：{request.from_offset} > {state.leader_leo}（分区 {state.key}）",
+                leader_leo=state.leader_leo,
             )
         self._record_follower_progress(state, follower=request.follower, leo=request.from_offset)
         await self._advance_hw(state)
@@ -1045,6 +1284,7 @@ class ReplicationCoordinator(ReplicationView):
             records=records,
             leader_leo=state.leader_leo,
             high_watermark=state.hw,
+            leader_isr=state.isr_snapshot(),
         )
 
     def _record_follower_progress(self, state: PartitionReplication, *, follower: str, leo: int) -> None:
@@ -1140,77 +1380,308 @@ class ReplicationCoordinator(ReplicationView):
         Raises:
             ReplicaUnavailableError: 传输未装配 / leader 不可达。
             StaleLeaderError: leader 任期低于本地已知任期。
-            ReplicationDivergedError: 记录 offset 不连续。
+            ReplicationDivergedError: 记录 offset 不连续且无法按 `leader_leo` 修复。
         """
         state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
         if state.role is not ReplicaRole.FOLLOWER:
             return 0
+        if state.switch_state != SWITCH_STATE_IDLE:
+            # 切换窗口不追加：目标节点尚未截断，并发追加会制造新的未提交尾部。
+            return 0
         if self._transport is None:
             raise ReplicaUnavailableError("未装配副本传输，无法拉取")
-        request = ReplicaFetchRequest(
-            leader=state.leader,
-            follower=self._config.node_id,
-            topic_id=state.topic_id,
-            partition_no=state.partition_no,
-            from_offset=state.local_leo,
-            max_messages=self._config.fetch_batch,
-            epoch=state.epoch,
-        )
-        result = await self._transport.fetch(request)
-        if result.leader_epoch < state.epoch:
-            raise StaleLeaderError(
-                f"leader 任期过期：本地 {state.epoch} > 对端 {result.leader_epoch}（分区 {state.key}）"
+        async with state.op_lock:
+            if state.role is not ReplicaRole.FOLLOWER or state.switch_state != SWITCH_STATE_IDLE:
+                return 0  # pragma: no cover - 拿到锁后角色已变的并发窗口
+            await self._truncate_diverged_tail(state)
+            request = ReplicaFetchRequest(
+                leader=state.leader,
+                follower=self._config.node_id,
+                topic_id=state.topic_id,
+                partition_no=state.partition_no,
+                from_offset=state.local_leo,
+                max_messages=self._config.fetch_batch,
+                epoch=state.epoch,
             )
-        if result.leader_epoch > state.epoch:
-            state.epoch = result.leader_epoch
-        if result.from_offset != state.local_leo:
+            try:
+                result = await self._transport.fetch(request)
+            except ReplicationDivergedError as exc:
+                if exc.leader_leo is None or not await self._truncate_to_leader(state, leader_leo=exc.leader_leo):
+                    raise
+                return 0
+            if result.leader_epoch < state.epoch:
+                raise StaleLeaderError(
+                    f"leader 任期过期：本地 {state.epoch} > 对端 {result.leader_epoch}（分区 {state.key}）"
+                )
+            if result.leader_epoch > state.epoch:
+                state.epoch = result.leader_epoch
+            if result.from_offset != state.local_leo:
+                raise ReplicationDivergedError(
+                    f"拉取起点不一致：本地 {state.local_leo} != 响应 {result.from_offset}（分区 {state.key}）"
+                )
+            expected = state.local_leo
+            for message in result.records:
+                if message.offset != expected:
+                    raise ReplicationDivergedError(
+                        f"记录 offset 不连续：期望 {expected}，实际 {message.offset}（分区 {state.key}）"
+                    )
+                appended = await self._store.append(
+                    topic_id=message.topic_id,
+                    partition_no=message.partition_no,
+                    message_id=message.message_id,
+                    log_id=message.log_id,
+                    key=message.key,
+                    payload=message.payload,
+                    headers=message.headers,
+                    trace=message.trace,
+                    published_at=message.published_at,
+                    content_type=message.content_type,
+                    compression=message.compression,
+                    uncompressed_len=message.uncompressed_len,
+                    epoch=message.epoch,
+                )
+                if appended.offset != expected:  # pragma: no cover - 存储实现违约（本地 LEO 与期望不一致）
+                    raise ReplicationDivergedError(
+                        f"本地追加 offset 不一致：期望 {expected}，实际 {appended.offset}（分区 {state.key}）"
+                    )
+                expected += 1
+            state.local_leo = expected
+            visible = min(result.high_watermark, state.local_leo)
+            if visible > state.hw:
+                async with state.condition:
+                    state.hw = max(state.hw, visible)
+                    state.condition.notify_all()
+                if self._waiter is not None:
+                    self._waiter.notify((state.topic_id, state.partition_no))
+            state.last_reported_leader_hw = result.high_watermark
+            state.last_reported_leader_leo = result.leader_leo
+            state.last_known_hw = result.high_watermark
+            state.last_known_isr = ConcurrentStableSet(result.leader_isr)
+            state.last_known_at = self._clock()
+            self._update_metrics(state)
+            return len(result.records)
+
+    async def _truncate_diverged_tail(self, state: PartitionReplication) -> None:
+        """拉取前按最后已知 leader LEO 截断本地发散尾部（旧 leader 降级后的多余记录）。
+
+        Args:
+            state: 分区运行态。
+
+        Raises:
+            ReplicationDivergedError: 最后已知 leader 末端早于本地日志起点（无法修复，需全量重同步）。
+        """
+        leader_leo = state.last_reported_leader_leo
+        if leader_leo <= 0 or state.local_leo <= leader_leo:
+            return
+        if not await self._truncate_to_leader(state, leader_leo=leader_leo):
             raise ReplicationDivergedError(
-                f"拉取起点不一致：本地 {state.local_leo} != 响应 {result.from_offset}（分区 {state.key}）"
+                f"本地 LEO {state.local_leo} 超过 leader LEO {leader_leo} 且无法截断（分区 {state.key}）",
+                leader_leo=leader_leo,
             )
-        expected = state.local_leo
-        for message in result.records:
-            if message.offset != expected:
-                raise ReplicationDivergedError(
-                    f"记录 offset 不连续：期望 {expected}，实际 {message.offset}（分区 {state.key}）"
-                )
-            appended = await self._store.append(
-                topic_id=message.topic_id,
-                partition_no=message.partition_no,
-                message_id=message.message_id,
-                log_id=message.log_id,
-                key=message.key,
-                payload=message.payload,
-                headers=message.headers,
-                trace=message.trace,
-                published_at=message.published_at,
-                content_type=message.content_type,
-                compression=message.compression,
-                uncompressed_len=message.uncompressed_len,
-                epoch=message.epoch,
+
+    async def _truncate_to_leader(self, state: PartitionReplication, *, leader_leo: int) -> bool:
+        """把本地日志截断到 leader 末端（并发安全由 `op_lock` 保证，调用方已持有）。
+
+        Args:
+            state: 分区运行态。
+            leader_leo: leader 的权威末端。
+
+        Returns:
+            bool: 已截断 True；leader 末端早于本地起点（无法修复）False。
+        """
+        start = await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no)
+        if leader_leo < start:
+            return False
+        from_leo = state.local_leo
+        if from_leo <= leader_leo:
+            return True
+        await self._store.truncate_to(topic_id=state.topic_id, partition_no=state.partition_no, offset=leader_leo)
+        state.local_leo = leader_leo
+        state.hw = min(state.hw, leader_leo)
+        state.last_reported_leader_leo = leader_leo
+        _LOGGER.warning(
+            "msg_replication_diverged_truncated",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            local_leo=from_leo,
+            leader_leo=leader_leo,
+        )
+        return True
+
+    async def apply_switch(self, command: SwitchApplyCommand) -> SwitchApplyResult:
+        """目标节点激活新 leader（截断 / 保留未提交尾部，然后恢复可写）。
+
+        Args:
+            command: 切换命令（水位 / 是否截断 / 宽限）。
+
+        Returns:
+            SwitchApplyResult: 激活后的 LEO、截断位点与保留条数。
+
+        Raises:
+            ReplicaUnavailableError: 本节点不是命令目标（装配错误）。
+        """
+        state = await self.attach_partition(topic_id=command.topic_id, partition_no=command.partition_no)
+        if command.to_leader != self._config.node_id:
+            raise ReplicaUnavailableError(f"切换目标不是本节点：{command.to_leader}")
+        async with state.op_lock:
+            already = (
+                state.role is ReplicaRole.LEADER
+                and state.epoch == command.to_epoch
+                and state.switch_state == SWITCH_STATE_IDLE
             )
-            if appended.offset != expected:  # pragma: no cover - 存储实现违约（本地 LEO 与期望不一致）
-                raise ReplicationDivergedError(
-                    f"本地追加 offset 不一致：期望 {expected}，实际 {appended.offset}（分区 {state.key}）"
+            before = await self._store.leo(topic_id=state.topic_id, partition_no=state.partition_no)
+            truncated_to: int | None = None
+            retained = 0
+            if command.truncate and command.watermark is not None and before > command.watermark:
+                await self._store.truncate_to(
+                    topic_id=state.topic_id, partition_no=state.partition_no, offset=command.watermark
                 )
-            expected += 1
-        state.local_leo = expected
-        visible = min(result.high_watermark, state.local_leo)
-        if visible > state.hw:
-            async with state.condition:
-                state.hw = max(state.hw, visible)
-                state.condition.notify_all()
-            if self._waiter is not None:
-                self._waiter.notify((state.topic_id, state.partition_no))
-        state.last_reported_leader_hw = result.high_watermark
+                truncated_to = command.watermark
+                _LOGGER.warning(
+                    "msg_leader_switch_truncated",
+                    topic_id=state.topic_id,
+                    partition=state.partition_no,
+                    from_leo=before,
+                    to_offset=command.watermark,
+                    records=before - command.watermark,
+                    watermark=command.watermark,
+                    old_leader=command.from_leader,
+                )
+            elif command.watermark is not None:
+                retained = max(before - command.watermark, 0)
+            state.leader = command.to_leader
+            state.epoch = max(state.epoch, int(command.to_epoch))
+            state.role = ReplicaRole.LEADER
+            state.switch_state = SWITCH_STATE_IDLE
+            state.switch_observed_at = None
+            state.isr = ConcurrentStableSet((self._config.node_id,))
+            state.local_leo = await self._store.leo(topic_id=state.topic_id, partition_no=state.partition_no)
+            state.leader_leo = state.local_leo
+            state.hw = min(state.hw, state.local_leo)
+            state.leadership_confirmed_at = self._clock()
+            state.last_known_hw = max(state.last_known_hw, state.hw)
+            state.last_known_isr = ConcurrentStableSet((self._config.node_id,))
+            state.last_known_at = state.leadership_confirmed_at
+            self._update_metrics(state)
+            return SwitchApplyResult(
+                to_leo=state.local_leo,
+                truncated_to=truncated_to,
+                retained_tail=retained,
+                already_applied=already,
+            )
+
+    async def demote(self, *, topic_id: int, partition_no: int, to_leader: str, to_epoch: int) -> None:
+        """旧 leader 降级（控制通道可达时立即停写；不可达时靠租约）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            to_leader: 新 leader 节点标识。
+            to_epoch: 新 leader 任期。
+        """
+        if not self._config.enabled:
+            return
+        state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
+        async with state.op_lock:
+            state.leader = to_leader
+            state.epoch = max(state.epoch, int(to_epoch))
+            if state.role is ReplicaRole.LEADER:
+                state.role = ReplicaRole.FOLLOWER
+                state.leader_leo = 0
+            state.switch_state = SWITCH_STATE_SWITCHING
+            state.switch_observed_at = self._clock()
+            state.isr = ConcurrentStableSet((to_leader,))
+        async with state.condition:
+            state.condition.notify_all()
+        _LOGGER.info(
+            "msg_replication_demoted",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            to_leader=to_leader,
+            to_epoch=to_epoch,
+        )
+
+    async def refresh_once(self) -> None:
+        """强制重载已挂载分区的拓扑（epoch / leader / switch_state），并收敛本节点角色。
+
+        只对已挂载分区查库；加载失败不更新确认时间（超租约后自动拒写）。
+        """
+        if not self._config.enabled or self._topology_loader is None:
+            return
+        keys = ConcurrentStableList(self._partitions.keys())
+        for key in keys:
+            state = self._partitions.get(key)
+            if state is None:  # pragma: no cover - 键快照与读取之间的并发卸载窗口
+                continue
+            topology = await self._load_topology(topic_id=key[0], partition_no=key[1], force=True)
+            if topology is None:
+                continue
+            self._observe_topology(state, topology)
+
+    def _observe_topology(self, state: PartitionReplication, topology: PartitionTopology) -> None:
+        """把一次拓扑加载结果合入运行态（切换状态、epoch、leader 与租约确认）。
+
+        Args:
+            state: 分区运行态。
+            topology: 最新拓扑。
+        """
+        now = self._clock()
+        if topology.switch_state == SWITCH_STATE_SWITCHING and state.switch_state != SWITCH_STATE_SWITCHING:
+            state.switch_observed_at = now
+        elif topology.switch_state == SWITCH_STATE_IDLE:
+            state.switch_observed_at = None
+        state.switch_state = topology.switch_state
+        if topology.epoch > state.epoch:
+            state.epoch = topology.epoch
+        new_leader = topology.leader or (topology.replicas[0] if topology.replicas else state.leader)
+        if new_leader != state.leader:
+            self._apply_leader_change(state, new_leader=new_leader)
+        if state.role is ReplicaRole.LEADER and state.switch_state == SWITCH_STATE_IDLE:
+            state.leadership_confirmed_at = now
+        if state.role is ReplicaRole.FOLLOWER and topology.switch_state == SWITCH_STATE_IDLE:
+            state.last_known_at = max(state.last_known_at, now)
+
+    def _apply_leader_change(self, state: PartitionReplication, *, new_leader: str) -> None:
+        """按拓扑变更切换本节点角色（leader ↔ follower）。
+
+        Args:
+            state: 分区运行态。
+            new_leader: 新的 leader 节点标识。
+        """
+        was_leader = state.role is ReplicaRole.LEADER
+        state.leader = new_leader
+        state.role = ReplicaRole.LEADER if new_leader == self._config.node_id else ReplicaRole.FOLLOWER
+        state.isr = ConcurrentStableSet((new_leader,))
+        if state.role is ReplicaRole.LEADER:
+            state.leader_leo = state.local_leo
+            state.hw = min(state.hw, state.local_leo)
+        else:
+            state.leader_leo = 0
+        if was_leader and state.role is ReplicaRole.FOLLOWER:
+            _LOGGER.info(
+                "msg_replication_demoted_by_refresh",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                to_leader=new_leader,
+                epoch=state.epoch,
+            )
+        elif not was_leader and state.role is ReplicaRole.LEADER:
+            _LOGGER.info(
+                "msg_replication_promoted_by_refresh",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                epoch=state.epoch,
+            )
         self._update_metrics(state)
-        return len(result.records)
 
     async def ensure_started(self) -> None:
-        """启动 follower 拉取循环与 leader ISR 扫描（幂等；关闭时不启动）。"""
+        """启动 follower 拉取、leader ISR 扫描与 epoch 刷新循环（幂等；关闭时不启动）。"""
         if not self._config.enabled or self._stopped or self._tasks:
             return
         self._tasks.add(asyncio.create_task(self._pull_loop()))
         self._tasks.add(asyncio.create_task(self._scan_loop()))
+        if self._topology_loader is not None:
+            self._tasks.add(asyncio.create_task(self._refresh_loop()))
 
     async def aclose(self) -> None:
         """停止后台循环（幂等；不写盘）。"""
@@ -1227,6 +1698,8 @@ class ReplicationCoordinator(ReplicationView):
         for key in keys:
             state = self._partitions.get(key)
             if state is None or state.role is not ReplicaRole.LEADER:
+                continue
+            if state.switch_state != SWITCH_STATE_IDLE:
                 continue
             await self._scan_partition(state)
 
@@ -1282,6 +1755,16 @@ class ReplicationCoordinator(ReplicationView):
         while True:
             await asyncio.sleep(interval)
             await self.scan_isr_once()
+
+    async def _refresh_loop(self) -> None:
+        """周期强制重载拓扑（epoch / leader / switch_state；由 `aclose` 取消）。"""
+        interval = self._config.epoch_refresh_ms / MS_PER_SECOND
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.refresh_once()
+            except Exception as exc:  # pragma: no cover - 加载器已自行兜底，这里只防循环中断
+                _LOGGER.warning("msg_replication_refresh_failed", reason=type(exc).__name__)
 
     async def _scan_partition(self, state: PartitionReplication) -> None:
         """扫描一个 leader 分区的 ISR（踢出 / 重入 + 指标）。
@@ -1408,7 +1891,11 @@ class ReplicatedMessageStore(MessageStore):
 
         Returns:
             StoredMessage: 含分配到的 `offset` 的完整记录。
+
+        Raises:
+            MsgNotLeaderError: 本节点非 leader / 切换中 / 租约过期（350033）。
         """
+        await self._replication.ensure_write_allowed(topic_id=topic_id, partition_no=partition_no)
         message = await self._inner.append(
             topic_id=topic_id,
             partition_no=partition_no,
@@ -1493,6 +1980,19 @@ class ReplicatedMessageStore(MessageStore):
             int: 前移后的起点。
         """
         return await self._inner.truncate_before(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
+    async def truncate_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """截掉末端记录（原样委托；切换截断由协调器显式驱动）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 保留到的位置（不含）。
+
+        Returns:
+            int: 截断后的 LEO。
+        """
+        return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取头视图（原样委托）。

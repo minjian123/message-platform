@@ -236,9 +236,11 @@ def _detail(
         TopicDetail: 详情响应。
     """
     payload = _item(topic).model_dump()
+    metadata_version = max((int(partition.epoch or 0) for partition in partitions), default=0)
     return TopicDetail.model_validate(
         {
             **payload,
+            "metadata_version": metadata_version,
             "partitions": ConcurrentStableList(_partition(partition) for partition in partitions),
             "cleanup": _cleanup_progress(cleanup),
         }
