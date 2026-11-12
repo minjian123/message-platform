@@ -1,6 +1,8 @@
 import pytest
 from bms_core.core.concurrent import ConcurrentStableList
 
+pytestmark = pytest.mark.kiwi_id(2487)
+
 
 async def test_switch_metrics_record_results() -> None:
     """切主指标：成功 / 降级 / 失败 / no-op 各记一次。"""

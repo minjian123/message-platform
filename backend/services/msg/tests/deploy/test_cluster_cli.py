@@ -29,6 +29,8 @@ from bms_msg.services.partition_migration import (
 )
 from ops import failover, rebalance
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 
 class FakeMigration:
     """迁移编排替身。"""

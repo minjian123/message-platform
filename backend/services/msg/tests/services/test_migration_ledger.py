@@ -18,18 +18,22 @@ from bms_msg.services.migration_ledger import (
     new_plan_id,
 )
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 PLAN = "rb-20261112T000000Z-abcdef"
 
 
 def _item(*, plan_id: str = PLAN, partition_no: int = 0) -> MigrationPlanItem:
     """构造计划项。
 
-    Args:
-        plan_id: 计划标识。
-        partition_no: 分区号。
+    pytestmark = pytest.mark.kiwi_id(2486)
 
-    Returns:
-        MigrationPlanItem: 计划项。
+        Args:
+            plan_id: 计划标识。
+            partition_no: 分区号。
+
+        Returns:
+            MigrationPlanItem: 计划项。
     """
     return MigrationPlanItem(
         plan_id=plan_id,

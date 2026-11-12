@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.kiwi_id(2486)
+
 REPO_ROOT = Path(__file__).resolve().parents[5]
 COMPOSE = REPO_ROOT / "deploy" / "compose" / "msg.yml"
 GATEWAY = REPO_ROOT / "deploy" / "compose" / "msg-cluster.gateway.yml"
@@ -15,6 +19,7 @@ CLUSTER_ENV = REPO_ROOT / "deploy" / "drill" / "cluster.env.example"
 
 def test_compose_keeps_single_instance_default() -> None:
     """单实例：`msg` 服务仍在且不带 profile（默认即单实例）。"""
+
     text = COMPOSE.read_text(encoding="utf-8")
 
     assert "\n  msg:\n" in text

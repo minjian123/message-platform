@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
+import pytest
 from bms_core.core.concurrent import ConcurrentStableFrozenList
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,17 +15,21 @@ from bms_msg.services.partition_migration import DbMigrationTopology
 from bms_msg.services.topic import TopicService
 from bms_msg.tenant.context import CurrentTenant
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 MakeRequest = Callable[..., TopicCreateRequest]
 
 
 def _uow(session: AsyncSession) -> Callable[[], AbstractAsyncContextManager[UnitOfWork]]:
     """构造复用同一会话的工作单元工厂。
 
-    Args:
-        session: 请求级会话。
+    pytestmark = pytest.mark.kiwi_id(2486)
 
-    Returns:
-        Callable[[], AbstractAsyncContextManager[UnitOfWork]]: 工厂。
+        Args:
+            session: 请求级会话。
+
+        Returns:
+            Callable[[], AbstractAsyncContextManager[UnitOfWork]]: 工厂。
     """
 
     @asynccontextmanager
@@ -80,6 +85,7 @@ async def test_db_topology_list_without_filter(
     service: TopicService, db_session: AsyncSession, current_tenant: CurrentTenant, make_request: MakeRequest
 ) -> None:
     """拓扑：不传主题过滤时返回全部（按主题 / 分区升序）。"""
+
     await service.create_topic(tenant=current_tenant, request=make_request(partition_count=1))
     topology = DbMigrationTopology(uow_factory=_uow(db_session))
 

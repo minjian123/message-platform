@@ -11,12 +11,16 @@ from fastapi import FastAPI
 
 from bms_msg.broker.internal_server import InternalReplicationServer, InternalServerError
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 
 def _free_port() -> int:
     """取一个空闲端口。
 
-    Returns:
-        int: 端口。
+    pytestmark = pytest.mark.kiwi_id(2486)
+
+        Returns:
+            int: 端口。
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))

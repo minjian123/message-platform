@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
 
 from bms_msg.broker.election import LeaderSwitchMetrics
@@ -12,6 +13,8 @@ from bms_msg.metrics.collector import MsgMetricsCollector
 from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.metrics.sampler import MetricsSampler
 from bms_msg.metrics.traffic import TrafficMetrics
+
+pytestmark = pytest.mark.kiwi_id(2487)
 
 
 class _Source:

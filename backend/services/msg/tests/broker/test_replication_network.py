@@ -27,6 +27,8 @@ from bms_msg.broker.replication import (
     SwitchApplyResult,
 )
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 ENDPOINTS = ConcurrentStableFrozenDict({"msg-2": "http://msg-2:8001", "msg-3": "http://msg-3:8001"})
 
 

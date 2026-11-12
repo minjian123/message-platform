@@ -31,6 +31,8 @@ from bms_msg.broker.replication import (
 )
 from bms_msg.core.trace import EMPTY_TRACE
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 
 class FakeCoordinator:
     """复制协调器替身（按 `from_offset` 触发不同错误）。"""

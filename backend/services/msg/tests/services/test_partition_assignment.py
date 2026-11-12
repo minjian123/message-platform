@@ -10,19 +10,23 @@ from bms_msg.services.partition_assignment import (
     PartitionAssignmentConfig,
 )
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 NODES: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(("msg-1", "msg-2", "msg-3"))
 
 
 def _assigner(*, enabled: bool = True, factor: int = 3, min_insync: int = 2) -> PartitionAssigner:
     """构造分配器。
 
-    Args:
-        enabled: 是否开启复制。
-        factor: 副本数。
-        min_insync: 最小同步副本数。
+    pytestmark = pytest.mark.kiwi_id(2486)
 
-    Returns:
-        PartitionAssigner: 分配器。
+        Args:
+            enabled: 是否开启复制。
+            factor: 副本数。
+            min_insync: 最小同步副本数。
+
+        Returns:
+            PartitionAssigner: 分配器。
     """
     return PartitionAssigner(
         PartitionAssignmentConfig(

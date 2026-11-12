@@ -48,9 +48,12 @@ from ops.cluster_drill.remote import (
 from ops.cluster_drill.scenarios import build_criteria, degraded_note, missing_keys
 from ops.drill.model import DrillCriterionSpec, DrillReport, DrillScenario
 
+pytestmark = pytest.mark.kiwi_id(2487)
+
 
 def _config(tmp_path: Path) -> ClusterDrillConfig:
     """构造演练配置。"""
+
     return ClusterDrillConfig(
         env="test",
         ssh_target="user@host",

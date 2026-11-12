@@ -22,6 +22,8 @@ from bms_msg.services.partition_migration import (
     PartitionMigrationService,
 )
 
+pytestmark = pytest.mark.kiwi_id(2486)
+
 NODES: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(("msg-1", "msg-2", "msg-3"))
 
 
@@ -178,6 +180,7 @@ def _service(
     enabled: bool = True,
 ) -> PanelService:
     """构造迁移服务（固定时钟、零等待）。"""
+
     ledger = InMemoryMigrationLedger()
     return PanelService(
         assigner=PartitionAssigner(
