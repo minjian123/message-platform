@@ -233,3 +233,43 @@ async def test_start_internal_replication_hook(tmp_path: Path) -> None:
     finally:
         assert app.state.internal_server is not None
         await app.state.internal_server.aclose()
+
+
+@pytest.mark.kiwi_id(2488)
+def test_application_assembles_auto_election_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-9：复制开启且自动选举开关开启时装配看护循环与结果计数。"""
+    from bms_msg.broker.auto_election import AutoElectionMetrics, AutoElectionWatchdog
+
+    monkeypatch.setenv("MSG_REPLICATION_ENABLED", "true")
+    monkeypatch.setenv("MSG_REPLICATION_NODE_ID", "n1")
+    monkeypatch.setenv("MSG_REPLICATION_NODES", "n1,n2")
+    monkeypatch.setenv("MSG_REPLICATION_FACTOR", "2")
+    monkeypatch.setenv("MSG_REPLICATION_MIN_INSYNC", "2")
+    monkeypatch.setenv("MSG_REPLICATION_INTERNAL_PORT", "8001")
+    monkeypatch.setenv("MSG_REPLICATION_INTERNAL_HOST", "127.0.0.1")
+    monkeypatch.setenv("MSG_REPLICATION_NODE_ENDPOINTS", "n2=http://n2:8001")
+    monkeypatch.setenv("MSG_AUTO_ELECTION_ENABLED", "true")
+    registry = default_plugin_registry()
+    registry.reset()
+    try:
+        app = ApplicationFactory().create(None)
+        assert isinstance(app.state.auto_election, AutoElectionWatchdog)
+        assert isinstance(app.state.auto_election_metrics, AutoElectionMetrics)
+        assert app.state.auto_election.running is False, "装配期不得启动循环（由 startup_hooks 启动）"
+    finally:
+        registry.reset()
+
+
+@pytest.mark.kiwi_id(2488)
+def test_auto_election_skipped_when_replication_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-9：复制关闭时即使开关为 true 也不装配（单实例零变化）。"""
+    monkeypatch.delenv("MSG_REPLICATION_ENABLED", raising=False)
+    monkeypatch.setenv("MSG_AUTO_ELECTION_ENABLED", "true")
+    registry = default_plugin_registry()
+    registry.reset()
+    try:
+        app = ApplicationFactory().create(None)
+        assert app.state.auto_election is None
+        assert app.state.auto_election_metrics is None
+    finally:
+        registry.reset()

@@ -19,6 +19,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from bms_core.core.concurrent import (
     ConcurrentStableDict,
@@ -115,6 +116,8 @@ class SwitchPartitionState(BaseValueObject):
     switch_state: str = SWITCH_STATE_IDLE
     switch_from_leader: str | None = None
     switch_from_epoch: int | None = None
+    last_switch_at: datetime | None = None
+    """最近一次成功切换时刻（UTC；02-9 的跨节点冷却判据；None = 从未切换）。"""
 
 
 @dataclass(frozen=True)

@@ -1210,3 +1210,17 @@ async def test_refresh_once_timeout_keeps_loop_alive(monkeypatch: pytest.MonkeyP
     await coordinator.refresh_once()
     assert topology.calls == 3
     assert state.leadership_confirmed_at == confirmed + 1_000
+
+
+async def test_mounted_partition_keys_is_read_only_snapshot() -> None:
+    """02-9：已挂载分区键快照（只读视图；未挂载时为空、挂载后按插入序）。"""
+    store = InMemoryMessageStore()
+    coordinator = ReplicationCoordinator(config=_config(nodes=("n1",), factor=1, min_insync=1), store=store)
+    assert list(coordinator.mounted_partition_keys()) == []
+    await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert list(coordinator.mounted_partition_keys()) == [(TOPIC_ID, PARTITION_NO)]
+    # 返回的是冻结快照：只读语义由集合类自身保证（写入即抛错），不会污染协调器内部状态
+    snapshot = coordinator.mounted_partition_keys()
+    with pytest.raises(TypeError):
+        snapshot.clear()
+    assert list(coordinator.mounted_partition_keys()) == [(TOPIC_ID, PARTITION_NO)]

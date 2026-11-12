@@ -217,4 +217,5 @@ class DbLeaderSwitchStore(LeaderSwitchStore):
             switch_state=str(row.switch_state or SWITCH_STATE_IDLE),
             switch_from_leader=row.switch_from_leader,
             switch_from_epoch=row.switch_from_epoch,
+            last_switch_at=row.last_switch_at,
         )

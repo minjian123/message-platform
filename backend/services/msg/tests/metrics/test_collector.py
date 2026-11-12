@@ -286,3 +286,30 @@ def test_backpressure_other_key() -> None:
     )
     assert other.collect()
     assert collector.collect()
+
+
+@mark.kiwi_id(2488)
+def test_auto_election_counter_family() -> None:
+    """02-9：自动选举结果计数按 `result` 闭集打标签；未装配时不出家族。"""
+    from bms_msg.broker.auto_election import AutoElectionMetrics
+
+    assert "msg_auto_election_total" not in _by_name(_build()[0].collect()), "未装配不应产出家族"
+
+    counters = AutoElectionMetrics()
+    counters.record("succeeded")
+    counters.record("blocked")
+    collector = MsgMetricsCollector(
+        service="msg",
+        traffic=TrafficMetrics(),
+        snapshots=MetricsSnapshotStore(),
+        storage=_FakeSource(ConcurrentStableDict()),
+        delay=_FakeSource(ConcurrentStableDict()),
+        backpressure=_FakeSource(ConcurrentStableDict()),
+        lifecycle=_FakeSource(ConcurrentStableDict()),
+        purge=_FakeSource(ConcurrentStableDict()),
+        auto_election=counters,
+    )
+    family = _by_name(collector.collect())["msg_auto_election_total"]
+    assert {sample.labels["result"] for sample in family.samples} == {"succeeded", "blocked"}
+    assert {sample.labels["service"] for sample in family.samples} == {"msg"}
+    assert all(sample.value == 1.0 for sample in family.samples)

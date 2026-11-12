@@ -437,6 +437,70 @@ REPLICATION_ACKS_VALUES = (ACKS_PUBLISH_LOCAL, ACKS_PUBLISH_ALL)
 """发布确认档位的合法取值（契约层校验）。"""
 
 # ---------------------------------------------------------------------------
+# 02-9 自动选举：开关 / 判活节拍 / 阈值 / 退避 / 冷却 / 并发 / 错峰
+# ---------------------------------------------------------------------------
+
+AUTO_ELECTION_ENABLED_ENV = "MSG_AUTO_ELECTION_ENABLED"
+"""自动选举总开关环境变量（缺省关闭：复制开启也需显式开，灰度期可一键回退）。"""
+
+AUTO_ELECTION_DETECT_INTERVAL_MS_ENV = "MSG_AUTO_ELECTION_DETECT_INTERVAL_MS"
+"""判活节拍环境变量（毫秒）：每轮遍历已挂载分区、探活其 leader。"""
+
+AUTO_ELECTION_PROBE_TIMEOUT_MS_ENV = "MSG_AUTO_ELECTION_PROBE_TIMEOUT_MS"
+"""单次探活超时环境变量（毫秒）：超时与不可达同样记一次失败。"""
+
+AUTO_ELECTION_FAILURE_THRESHOLD_ENV = "MSG_AUTO_ELECTION_FAILURE_THRESHOLD"
+"""连续失败判死阈值环境变量（次）：任意一次探活成功即清零。"""
+
+AUTO_ELECTION_MAX_ATTEMPTS_ENV = "MSG_AUTO_ELECTION_MAX_ATTEMPTS"
+"""一轮内发起次数上限环境变量（次）：达上限记 `exhausted` 并进入冷却。"""
+
+AUTO_ELECTION_BACKOFF_BASE_MS_ENV = "MSG_AUTO_ELECTION_BACKOFF_BASE_MS"
+"""失败退避基数环境变量（毫秒）：随后按 2 的幂增长。"""
+
+AUTO_ELECTION_BACKOFF_CAP_MS_ENV = "MSG_AUTO_ELECTION_BACKOFF_CAP_MS"
+"""失败退避上限环境变量（毫秒）：指数增长到此封顶。"""
+
+AUTO_ELECTION_COOLDOWN_MS_ENV = "MSG_AUTO_ELECTION_COOLDOWN_MS"
+"""成功切换后的冷却环境变量（毫秒）：跨节点按 `msg_partition.last_switch_at` 判定。"""
+
+AUTO_ELECTION_CONCURRENCY_ENV = "MSG_AUTO_ELECTION_CONCURRENCY"
+"""单轮并发上限环境变量：探活与发起同时最多多少个分区在飞。"""
+
+AUTO_ELECTION_STAGGER_MS_ENV = "MSG_AUTO_ELECTION_STAGGER_MS"
+"""按副本序错峰的步长环境变量（毫秒）：rank 差 1 多等一个步长。"""
+
+DEFAULT_AUTO_ELECTION_ENABLED = False
+"""自动选举缺省关闭（02-5 定稿口径「自动选主误判代价高」，先显式开启）。"""
+
+DEFAULT_AUTO_ELECTION_DETECT_INTERVAL_MS = 1_000
+"""判活节拍缺省值（毫秒）：与 epoch 刷新循环同频。"""
+
+DEFAULT_AUTO_ELECTION_PROBE_TIMEOUT_MS = 800
+"""单次探活超时缺省值（毫秒）：须小于节拍，否则计数跨轮抖动。"""
+
+DEFAULT_AUTO_ELECTION_FAILURE_THRESHOLD = 3
+"""连续失败判死阈值缺省值（次）：约 3s 判死，滤掉 1~2 次网络抖动。"""
+
+DEFAULT_AUTO_ELECTION_MAX_ATTEMPTS = 5
+"""一轮内发起次数上限缺省值（次）。"""
+
+DEFAULT_AUTO_ELECTION_BACKOFF_BASE_MS = 2_000
+"""失败退避基数缺省值（毫秒）。"""
+
+DEFAULT_AUTO_ELECTION_BACKOFF_CAP_MS = 60_000
+"""失败退避上限缺省值（毫秒）。"""
+
+DEFAULT_AUTO_ELECTION_COOLDOWN_MS = 60_000
+"""成功切换后冷却缺省值（毫秒）：抑制换主风暴。"""
+
+DEFAULT_AUTO_ELECTION_CONCURRENCY = 4
+"""单轮并发上限缺省值。"""
+
+DEFAULT_AUTO_ELECTION_STAGGER_MS = 200
+"""按副本序错峰步长缺省值（毫秒）。"""
+
+# ---------------------------------------------------------------------------
 # 02-1 分区追加日志（文件段）：数据根 / 记录格式 / 段与索引 / fsync / log_id 索引
 # ---------------------------------------------------------------------------
 

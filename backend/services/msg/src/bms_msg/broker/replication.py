@@ -862,6 +862,14 @@ class ReplicationCoordinator(ReplicationView):
         """
         return self._config
 
+    def mounted_partition_keys(self) -> ConcurrentStableFrozenList[ReplicaKey]:
+        """取已挂载分区键快照（只读、无副作用、不查库；02-9 看护循环遍历用）。
+
+        Returns:
+            ConcurrentStableFrozenList[ReplicaKey]: 分区键（插入序）。
+        """
+        return ConcurrentStableFrozenList(self._partitions.keys())
+
     async def attach_partition(self, *, topic_id: int, partition_no: int) -> PartitionReplication:
         """惰性挂载分区（幂等；首次访问时解析拓扑并初始化运行态）。
 

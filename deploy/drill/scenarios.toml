@@ -267,7 +267,14 @@ target = "docker"
 inject = "container_kill"
 observe = ["msg_leader_switch_total", "msg_isr_size", "msg_publish_errors_total"]
 recovery_budget_ms = 300000
-expect = "杀 leader 容器后切主成功；已提交不丢；旧 leader 重启降 follower 并重入 ISR"
+expect = "杀 leader 容器后**不人工切主**、预算内自动换主（02-9）；已提交不丢；旧 leader 重启降 follower 并重入 ISR"
+
+  [[scenarios.criterion]]
+  key = "auto_switch_within_budget"
+  text = "杀 leader 后不执行人工切主，预算内 DB leader 自动变化（自动选举生效）"
+  record_keys = ["auto_switch_within_budget"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 自动换主耗时（commands 的 auto_switch 步）与 `ops.failover status` 轨迹"
 
   [[scenarios.criterion]]
   key = "committed_not_lost"

@@ -35,6 +35,7 @@ from ops.cluster_drill.config import (
 )
 from ops.cluster_drill.probe import MetricSample, ProbeClient, metric_value
 from ops.cluster_drill.remote import (
+    RemoteResult,
     RemoteRunner,
     SshTunnel,
     build_image_script,
@@ -44,6 +45,8 @@ from ops.cluster_drill.remote import (
 from ops.cluster_drill.report import backup_evidence, cluster_config_digest, write_cluster_report
 from ops.drill.env import TARGET_DOCKER, load_scenarios, validate_scenarios
 from ops.drill.model import (
+    RESULT_DEGRADED,
+    RESULT_OK,
     Criterion,
     DrillReport,
     DrillScenario,
@@ -61,6 +64,12 @@ _PROBE_INTERVAL_MS = 2_000
 
 _INJECTION_SETTLE_SEC = 12.0
 """注入后等待（秒）：ISR 收缩判据依赖 `lag_time_max_ms`（缺省 10s）内的拉取中断。"""
+
+_AUTO_SWITCH_SCENARIO = "replica_crash"
+"""走「自动选举」验证的场景：杀 leader 后不人工切主，等 DB `leader` 自己变（02-9）。"""
+
+_AUTO_SWITCH_BUDGET_SEC = 30.0
+"""自动换主预算（秒）：超预算才允许人工兜底，且判据记降级（02-9 定稿 ≈8~9s，留余量）。"""
 
 _EXPECTED_ISR_PER_PARTITION = 3
 """每分区的期望 ISR（三副本全同步）。"""
@@ -333,6 +342,63 @@ async def _wait_isr(client: ProbeClient, target: int, *, topic_id: int, timeout_
     return False
 
 
+def _manual_switch(
+    runner: RemoteRunner,
+    config: ClusterDrillConfig,
+    *,
+    scenario: str,
+    topic_id: int,
+) -> RemoteResult:
+    """在集群首实例上执行一次人工切主（演练入口，与运维命令同一实现）。
+
+    Args:
+        runner: 远程执行器。
+        config: 演练配置（取容器名）。
+        scenario: 场景名（写进切主原因）。
+        topic_id: 演练主题主键。
+
+    Returns:
+        RemoteResult: 执行结果（ 为退出码为 0）。
+    """
+    return runner.docker_exec(
+        config.container_names[0],
+        f"PATH=/opt/msg/backend/.venv/bin:$PATH BMS_APP__SERVICE=msg "
+        f"python -m ops.failover switch --topic-id {int(topic_id)} --all-partitions "
+        f"--operator system:drill --reason {scenario} --json",
+    )
+
+
+async def _wait_auto_switch(
+    dsn: str,
+    topic_id: int,
+    *,
+    old_leader: str,
+    budget_sec: float,
+) -> float | None:
+    """等 DB `leader` 自己变成别的节点（02-9 自动选举），返回耗时或 None。
+
+    **判据只看库**：`msg_partition.leader` 由自动选举的条件更新改写；调用方在此之前
+    不得执行任何人工切主，否则这条判据失去意义。
+
+    Args:
+        dsn: 平台库连接串。
+        topic_id: 演练主题主键。
+        old_leader: 被杀掉的原 leader。
+        budget_sec: 预算（秒）。
+
+    Returns:
+        float | None: 自动换主耗时（秒）；超预算仍未变化时为 None。
+    """
+    started = time.monotonic()
+    while True:
+        state = await _topic_state(dsn, topic_id)
+        if state.leader_of(0) not in ("", old_leader):
+            return time.monotonic() - started
+        if time.monotonic() - started >= budget_sec:
+            return None
+        await asyncio.sleep(1.0)
+
+
 def _container_for(config: ClusterDrillConfig, node: str) -> str:
     """把节点标识（`msg-1`）映射到演练容器名（`msg-drill-1`）。
 
@@ -467,6 +533,7 @@ async def run_scenario(
     switch_items: ConcurrentStableFrozenList[chain.SwitchItem] = ConcurrentStableFrozenList()
     before_state: chain.TopicState | None = None
     after_state: chain.TopicState | None = None
+    auto_fact: tuple[str, str] | None = None
     probe_failed_during = False
     recovery_ok = False
     try:
@@ -499,26 +566,54 @@ async def run_scenario(
         before = await _samples(client, "before", topic_id=topic_id)
         before_state = await _topic_state(dsn, topic_id)
         isr_before = _isr_total(before)
-        target = _container_for(config, before_state.leader_of(0))
+        old_leader = before_state.leader_of(0)
+        target = _container_for(config, old_leader)
         target_index = next(
             (index for index, name in enumerate(config.container_names) if name == target),
             0,
         )
         steps = inject.steps_for(scenario.name, config, leader=target)
-        switch = runner.docker_exec(
-            config.container_names[0],
-            f"PATH=/opt/msg/backend/.venv/bin:$PATH BMS_APP__SERVICE=msg "
-            f"python -m ops.failover switch --topic-id {int(topic_id)} --all-partitions "
-            f"--operator system:drill --reason {scenario.name} --json",
-        )
-        outcome.commands.add(ConcurrentStableDict({"step": "failover", "result": "ok" if switch.ok else "failed"}))
-        if switch.ok:
-            switch_items = chain.parse_switch_result(chain.last_json_object(switch.stdout or ""))
+        auto_mode = scenario.name == _AUTO_SWITCH_SCENARIO
+        if not auto_mode:
+            # 窗口 / 脑裂两类场景先显式切主，再注入故障（保持 02-8 既有口径）。
+            switch = _manual_switch(runner, config, scenario=scenario.name, topic_id=int(topic_id))
+            outcome.commands.add(ConcurrentStableDict({"step": "failover", "result": "ok" if switch.ok else "failed"}))
+            if switch.ok:
+                switch_items = chain.parse_switch_result(chain.last_json_object(switch.stdout or ""))
         inject.apply_steps(runner, steps, phase="inject")
+        if auto_mode:
+            # 02-9：杀 leader 后不人工切主，等 DB `leader` 自己变；超预算才兜底并记降级。
+            elapsed = await _wait_auto_switch(
+                dsn,
+                topic_id,
+                old_leader=old_leader,
+                budget_sec=_AUTO_SWITCH_BUDGET_SEC,
+            )
+            if elapsed is None:
+                auto_fact = (
+                    RESULT_DEGRADED,
+                    f"超预算 {int(_AUTO_SWITCH_BUDGET_SEC)}s 未自动换主，已人工兜底（不计通过）",
+                )
+                outcome.issues.add(
+                    ConcurrentStableDict({"step": "auto_switch", "reason": "自动换主超预算", "owner": "02-9"})
+                )
+                switch = _manual_switch(runner, config, scenario=scenario.name, topic_id=int(topic_id))
+                outcome.commands.add(
+                    ConcurrentStableDict({"step": "failover_fallback", "result": "ok" if switch.ok else "failed"})
+                )
+                if switch.ok:
+                    switch_items = chain.parse_switch_result(chain.last_json_object(switch.stdout or ""))
+            else:
+                budget = int(_AUTO_SWITCH_BUDGET_SEC)
+                auto_fact = (RESULT_OK, f"{elapsed:.1f}s 内自动换主（未人工切主，预算 {budget}s）")
+                outcome.commands.add(
+                    ConcurrentStableDict(
+                        {"step": "auto_switch", "result": "ok", "elapsed_ms": str(int(elapsed * 1000))}
+                    )
+                )
         await asyncio.sleep(_INJECTION_SETTLE_SEC)
         during = await _samples(client, "during", topic_id=topic_id)
         probe_failed_during = await _probe_publish_rejected(drill, bases[target_index])
-        old_leader = before_state.leader_of(0)
         switched_during = await _leader_changed(drill, bases, old_leader, before_state.partitions[0].partition_no)
         inject.apply_steps(runner, steps, phase="recover")
         recovery_ok = await _wait_ready(client, config.ready_timeout_sec)
@@ -561,6 +656,8 @@ async def run_scenario(
         old_leader_demoted=demoted,
         switched_during=switched_during,
     )
+    if auto_fact is not None:
+        facts.set("auto_switch_within_budget", auto_fact)
     outcome.criteria.extend(scenarios.build_criteria(scenario, facts))
     report = _report(config, scenario, outcome, samples, rerun_reason=rerun_reason)
     json_path, markdown_path = write_cluster_report(report, config.report_dir, title=scenario.title)

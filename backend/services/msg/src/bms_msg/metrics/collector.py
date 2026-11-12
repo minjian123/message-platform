@@ -19,6 +19,7 @@ from prometheus_client.metrics_core import (
     Metric,
 )
 
+from bms_msg.broker.auto_election import AutoElectionMetrics
 from bms_msg.broker.election import LeaderSwitchMetrics
 from bms_msg.broker.network import TransportErrorMetrics
 from bms_msg.broker.replication import ReplicationMetrics, ReplicationMetricsSnapshot
@@ -61,6 +62,7 @@ class MsgMetricsCollector:
         purge: SnapshotSource,
         replication: ReplicationMetrics | None = None,
         leader_switch: LeaderSwitchMetrics | None = None,
+        auto_election: AutoElectionMetrics | None = None,
         transport_errors: TransportErrorMetrics | None = None,
     ) -> None:
         """初始化。
@@ -76,6 +78,7 @@ class MsgMetricsCollector:
             purge: 租户到期清理计数。
             replication: 复制指标采集点（02-4；None 表示复制组件未装配）。
             leader_switch: 切主结果计数（02-8；None 表示未装配）。
+            auto_election: 自动选举结果计数（02-9；None 表示未装配）。
             transport_errors: 传输错误计数（02-8；None 表示未装配）。
         """
         self._service = service
@@ -88,6 +91,7 @@ class MsgMetricsCollector:
         self._purge = purge
         self._replication = replication
         self._leader_switch = leader_switch
+        self._auto_election = auto_election
         self._transport_errors = transport_errors
 
     def describe(self) -> ConcurrentStableList[Metric]:
@@ -117,6 +121,7 @@ class MsgMetricsCollector:
         families.add(self._isr_family())
         self._collect_replication(families)
         self._collect_leader_switch(families)
+        self._collect_auto_election(families)
         self._collect_transport_errors(families)
         self._collect_migration(families)
         return families
@@ -337,6 +342,18 @@ class MsgMetricsCollector:
             "msg_leader_switch_total", _help("msg_leader_switch_total"), labels=["service", "result"]
         )
         for result, value in self._leader_switch.snapshot().items():
+            family.add_metric([self._service, str(result)], float(value))
+        if family.samples:
+            families.add(family)
+
+    def _collect_auto_election(self, families: ConcurrentStableList[Metric]) -> None:
+        """自动选举结果计数（02-9；按 `result` 闭集打标签）。"""
+        if self._auto_election is None:
+            return
+        family = CounterMetricFamily(
+            "msg_auto_election_total", _help("msg_auto_election_total"), labels=["service", "result"]
+        )
+        for result, value in self._auto_election.snapshot().items():
             family.add_metric([self._service, str(result)], float(value))
         if family.samples:
             families.add(family)

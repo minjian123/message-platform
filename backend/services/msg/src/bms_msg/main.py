@@ -65,6 +65,7 @@ from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.internal.app import create_internal_app
 from bms_msg.api.router import api_router, frame_router
 from bms_msg.audit.trail import ACTION_CLASSES
+from bms_msg.broker.auto_election import AutoElectionConfig, AutoElectionMetrics, AutoElectionWatchdog
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
 from bms_msg.broker.connection import ConnectionRegistry
 from bms_msg.broker.deadletter import DatabaseDeadLetterQueue
@@ -352,15 +353,38 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         else:
             leader_control.register_local(replica_config.node_id, replication)
         app.state.leader_control = leader_control
-        app.state.leader_switch = LeaderSwitchService(
+        switch_store = DbLeaderSwitchStore(uow_factory=platform_uow_factory(app))
+        switch_service = LeaderSwitchService(
             enabled=replica_config.enabled,
-            store=DbLeaderSwitchStore(uow_factory=platform_uow_factory(app)),
+            store=switch_store,
             control=leader_control,
             audit=sink,
             grace_ms=replica_config.switch_grace_ms,
             follower_fresh_ms=replica_config.lag_time_max_ms,
             metrics=switch_metrics,
         )
+        app.state.leader_switch = switch_service
+        # 02-9：自动选举看护循环（只在复制开启且开关显式开启时装配；单实例零变化）。
+        auto_election_config = AutoElectionConfig.from_env()
+        auto_election_config.validate(
+            switch_grace_ms=replica_config.switch_grace_ms,
+            freshness_ms=replica_config.lag_time_max_ms,
+        )
+        auto_election: AutoElectionWatchdog | None = None
+        auto_election_metrics: AutoElectionMetrics | None = None
+        if auto_election_config.enabled and replica_config.enabled:
+            auto_election_metrics = AutoElectionMetrics()
+            auto_election = AutoElectionWatchdog(
+                config=auto_election_config,
+                node_id=replica_config.node_id,
+                replication=replication,
+                store=switch_store,
+                control=leader_control,
+                switch=switch_service,
+                metrics=auto_election_metrics,
+            )
+        app.state.auto_election = auto_election
+        app.state.auto_election_metrics = auto_election_metrics
         app.state.replication = replication
         app.state.replication_metrics = replication_metrics
         app.state.replication_transport = replication_transport
@@ -528,6 +552,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             purge=get_tenant_purge_metrics(),
             replication=getattr(app.state, "replication_metrics", None),
             leader_switch=getattr(app.state, "switch_metrics", None),
+            auto_election=getattr(app.state, "auto_election_metrics", None),
             transport_errors=getattr(app.state, "transport_metrics", None),
         )
         registered = app.state.metrics.register_collector(collector)

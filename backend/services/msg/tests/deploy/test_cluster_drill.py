@@ -1,5 +1,7 @@
 """集群演练包（02-8）：配置 / 命令构造 / 注入步骤 / 探针解析 / 数据核对 / 客户端刷新 / 记录。"""
 
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 import asyncio
@@ -1106,3 +1108,365 @@ def test_cleanup_paths_and_scripts(tmp_path: Path) -> None:
         variables=ConcurrentStableFrozenDict({"MSG_DATA_HOST_DIR": "/srv/msg-drill", "MSG_DATA_HOST_DIR_1": ""}),
     )
     assert list(cluster_cleanup.target_paths(duplicate)) == ["/srv/msg-drill"]
+
+
+# ---------------------------------------------------------------------------
+# 02-9：杀 leader 后「等自动换主」的编排（成功档 / 超预算兜底档）
+# ---------------------------------------------------------------------------
+
+
+def _state(leader: str, *, epoch: int = 4) -> chain_mod.TopicState:
+    """构造单分区主题状态（leader / epoch 可指定）。
+
+    Args:
+        leader: 分区 leader。
+        epoch: 分区任期。
+
+    Returns:
+        chain_mod.TopicState: 主题状态。
+    """
+    return chain_mod.TopicState(
+        partitions=ConcurrentStableFrozenList(
+            (
+                chain_mod.PartitionState(
+                    partition_no=0,
+                    leader=leader,
+                    epoch=epoch,
+                    replicas=ConcurrentStableFrozenList(("msg-1", "msg-2", "msg-3")),
+                ),
+            )
+        )
+    )
+
+
+class _TunnelStub:
+    """SSH 隧道替身（就绪、开关空实现）。"""
+
+    def __init__(self, config: ClusterDrillConfig) -> None:
+        """初始化。
+
+        Args:
+            config: 演练配置（未使用）。
+        """
+        del config
+
+    def open(self) -> None:
+        """空实现。"""
+
+    def close(self) -> None:
+        """空实现。"""
+
+    def wait_ready(self) -> bool:
+        """恒就绪。
+
+        Returns:
+            bool: True。
+        """
+        return True
+
+
+class _ProbeStub:
+    """探针替身（只保留关闭钩子；采样与就绪由 monkeypatch 接管）。"""
+
+    def __init__(self, bases: ConcurrentStableList[str]) -> None:
+        """初始化。
+
+        Args:
+            bases: 实例地址（未使用）。
+        """
+        del bases
+
+    async def aclose(self) -> None:
+        """空实现。"""
+
+
+class _DrillStub:
+    """演练客户端替身（发布 / 预热 / 探 leader 均返回固定值）。"""
+
+    def __init__(self, bases: ConcurrentStableList[str], *, tenant: str, namespace: str, topic: str) -> None:
+        """初始化。
+
+        Args:
+            bases: 实例地址。
+            tenant: 租户编码。
+            namespace: 命名空间。
+            topic: 主题名。
+        """
+        del bases, tenant, namespace, topic
+
+    async def publish_batch(self, count: int, *, warm: bool = False) -> ConcurrentStableList[chain_mod.PublishRecord]:
+        """返回空批次。
+
+        Args:
+            count: 条数。
+            warm: 是否预热。
+
+        Returns:
+            ConcurrentStableList[chain_mod.PublishRecord]: 空列表。
+        """
+        del count, warm
+        return ConcurrentStableList()
+
+    async def warmup(self) -> None:
+        """空实现。"""
+
+    async def probe_leader(self, base: str) -> str:
+        """返回固定的新 leader。
+
+        Args:
+            base: 实例地址。
+
+        Returns:
+            str: 新 leader。
+        """
+        del base
+        return "msg-2"
+
+    async def publish_at(self, base: str, tag: str) -> ConcurrentStableDict[str, object]:
+        """返回空结果（定向探针已被打桩）。
+
+        Args:
+            base: 实例地址。
+            tag: 标记。
+
+        Returns:
+            ConcurrentStableDict[str, object]: 空结果。
+        """
+        del base, tag
+        return ConcurrentStableDict()
+
+    async def aclose(self) -> None:
+        """空实现。"""
+
+
+def _ok_run(self: object, script: str) -> remote_mod.RemoteResult:
+    """远程脚本替身（恒成功）。
+
+    Args:
+        self: 执行器。
+        script: 脚本。
+
+    Returns:
+        remote_mod.RemoteResult: 成功结果。
+    """
+    del self, script
+    return remote_mod.RemoteResult(code=0)
+
+
+def _ok_exec(self: object, container: str, command: str) -> remote_mod.RemoteResult:
+    """远程 docker exec 替身（恒成功）。
+
+    Args:
+        self: 执行器。
+        container: 容器名。
+        command: 命令。
+
+    Returns:
+        remote_mod.RemoteResult: 成功结果。
+    """
+    del self, container, command
+    return remote_mod.RemoteResult(code=0, stdout="{}")
+
+
+def _patch_auto_switch_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    states: ConcurrentStableList[chain_mod.TopicState],
+) -> None:
+    """把 run_scenario 的远程 / 隧道 / 库读 / 报告全部打桩。
+
+    Args:
+        tmp_path: 记录落点。
+        monkeypatch: pytest monkeypatch。
+        states: `_topic_state` 依次返回的状态（不足时重复最后一个）。
+    """
+    remaining = ConcurrentStableList(states)
+    last = states[-1]
+
+    async def fake_state(dsn: str, topic_id: int) -> chain_mod.TopicState:
+        del dsn, topic_id
+        return remaining.pop(0) if remaining else last
+
+    async def fake_samples(client: object, phase: str, *, topic_id: int) -> ConcurrentStableList[object]:
+        del client, phase, topic_id
+        return ConcurrentStableList()
+
+    async def ok_true(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        return True
+
+    def fake_report(*args: object, **kwargs: object) -> tuple[Path, Path]:
+        del args, kwargs
+        return tmp_path / "r.json", tmp_path / "r.md"
+
+    monkeypatch.setattr(cluster_main, "SshTunnel", _TunnelStub)
+    monkeypatch.setattr(cluster_main, "ProbeClient", _ProbeStub)
+    monkeypatch.setattr(cluster_main.chain, "DrillClient", _DrillStub)
+    monkeypatch.setattr(cluster_main.chain, "platform_dsn", _fake_dsn)
+    monkeypatch.setattr(cluster_main, "_topic_state", fake_state)
+    monkeypatch.setattr(cluster_main, "_samples", fake_samples)
+    monkeypatch.setattr(cluster_main, "_wait_ready", ok_true)
+    monkeypatch.setattr(cluster_main, "_ensure_isr", ok_true)
+    monkeypatch.setattr(cluster_main, "_wait_isr", ok_true)
+    monkeypatch.setattr(cluster_main, "_leader_changed", ok_true)
+    monkeypatch.setattr(cluster_main, "_probe_publish_rejected", ok_true)
+    monkeypatch.setattr(cluster_main, "_commit", _fake_commit)
+    monkeypatch.setattr(cluster_main, "write_cluster_report", fake_report)
+    monkeypatch.setattr(cluster_main.chain, "derive_facts", _empty_facts)
+    monkeypatch.setattr(cluster_main.inject, "apply_steps", _noop_steps)
+    monkeypatch.setattr(cluster_main, "_INJECTION_SETTLE_SEC", 0.0)
+    monkeypatch.setattr(cluster_main.RemoteRunner, "run", _ok_run)
+    monkeypatch.setattr(cluster_main.RemoteRunner, "docker_exec", _ok_exec)
+
+
+def _fake_commit(root: Path) -> str:
+    """提交短号替身。
+
+    Args:
+        root: 仓根（未使用）。
+
+    Returns:
+        str: 固定短号。
+    """
+    del root
+    return "abc1234"
+
+
+def _fake_dsn(*args: object, **kwargs: object) -> str:
+    """平台库连接串替身。
+
+    Args:
+        args: 位置参数。
+        kwargs: 关键字参数。
+
+    Returns:
+        str: 内存库连接串。
+    """
+    del args, kwargs
+    return "sqlite+aiosqlite:///:memory:"
+
+
+def _empty_facts(**kwargs: object) -> ConcurrentStableDict[str, tuple[str, str]]:
+    """判据事实替身（空集合；本用例只验编排分支）。
+
+    Args:
+        kwargs: 透传参数。
+
+    Returns:
+        ConcurrentStableDict[str, tuple[str, str]]: 空事实。
+    """
+    del kwargs
+    return ConcurrentStableDict()
+
+
+def _noop_steps(runner: object, steps: object, phase: str) -> None:
+    """注入步骤替身（不执行）。
+
+    Args:
+        runner: 远程执行器。
+        steps: 步骤。
+        phase: 阶段。
+    """
+    del runner, steps, phase
+
+
+def test_run_scenario_auto_switch_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-9：杀 leader 后不人工切主，库里的 leader 变化即记通过（不调用 failover）。"""
+    config = _config(tmp_path)
+    scenario = next(item for item in cluster_main._scenario_set(config).scenarios if item.name == "replica_crash")
+    calls = ConcurrentStableList[str]()
+
+    def exec_spy(self: object, container: str, command: str) -> remote_mod.RemoteResult:
+        del self, container
+        calls.add(command)
+        return remote_mod.RemoteResult(code=0, stdout='{"items": []}')
+
+    _patch_auto_switch_flow(
+        tmp_path,
+        monkeypatch,
+        states=ConcurrentStableList([_state("msg-1"), _state("msg-1"), _state("msg-2")]),
+    )
+    monkeypatch.setattr(cluster_main.RemoteRunner, "docker_exec", exec_spy)
+
+    code = asyncio.run(
+        cluster_main.run_scenario(
+            config,
+            scenario,
+            confirm="replica_crash",
+            dry_run=False,
+            skip_provision=True,
+            topic_id=42,
+            rerun_reason="",
+        )
+    )
+
+    assert code in (0, 2)
+    assert not any("failover" in command for command in calls), "自动换主成功时不得回落到人工切主"
+
+
+def test_run_scenario_auto_switch_timeout_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-9：超预算仍未自动换主 → 人工兜底，判据记降级（不计通过）。"""
+    config = _config(tmp_path)
+    scenario = next(item for item in cluster_main._scenario_set(config).scenarios if item.name == "replica_crash")
+    calls = ConcurrentStableList[str]()
+
+    def exec_spy(self: object, container: str, command: str) -> remote_mod.RemoteResult:
+        del self, container
+        calls.add(command)
+        return remote_mod.RemoteResult(code=0, stdout='{"items": []}')
+
+    _patch_auto_switch_flow(
+        tmp_path,
+        monkeypatch,
+        states=ConcurrentStableList([_state("msg-1"), _state("msg-1"), _state("msg-1")]),
+    )
+    monkeypatch.setattr(cluster_main.RemoteRunner, "docker_exec", exec_spy)
+    monkeypatch.setattr(cluster_main, "_AUTO_SWITCH_BUDGET_SEC", 0.0)
+
+    code = asyncio.run(
+        cluster_main.run_scenario(
+            config,
+            scenario,
+            confirm="replica_crash",
+            dry_run=False,
+            skip_provision=True,
+            topic_id=42,
+            rerun_reason="",
+        )
+    )
+
+    assert code in (0, 1, 2)
+    assert any("ops.failover switch" in command for command in calls), "超预算须人工兜底"
+
+
+async def _noop_sleep(seconds: float) -> None:
+    """不等待。
+
+    Args:
+        seconds: 秒（忽略）。
+    """
+    del seconds
+
+
+def test_wait_auto_switch_returns_elapsed_or_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """02-9：`_wait_auto_switch` 只在库里的 leader 变化时返回耗时，超预算返回 None。"""
+    states = ConcurrentStableList([_state("msg-1"), _state("msg-2")])
+
+    async def fake_state(dsn: str, topic_id: int) -> chain_mod.TopicState:
+        del dsn, topic_id
+        return states.pop(0)
+
+    monkeypatch.setattr(cluster_main, "_topic_state", fake_state)
+    monkeypatch.setattr(cluster_main.asyncio, "sleep", _noop_sleep)
+
+    elapsed = asyncio.run(cluster_main._wait_auto_switch("dsn", 42, old_leader="msg-1", budget_sec=1.0))
+    assert elapsed is not None
+    assert elapsed >= 0.0
+
+    async def same_state(dsn: str, topic_id: int) -> chain_mod.TopicState:
+        del dsn, topic_id
+        return _state("msg-1")
+
+    monkeypatch.setattr(cluster_main, "_topic_state", same_state)
+    assert asyncio.run(cluster_main._wait_auto_switch("dsn", 42, old_leader="msg-1", budget_sec=0.0)) is None

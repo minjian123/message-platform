@@ -98,6 +98,7 @@ async def test_load_partition_and_topic_partitions(
     assert state.tenant_id == int(current_tenant.tenant_id)
     assert list(state.replicas) == ["n1", "n2"]
     assert state.switch_state == SWITCH_STATE_IDLE
+    assert state.last_switch_at is None, "从未切换的分区没有冷却判据时间"
 
     partitions = await store.load_topic_partitions(topic_id=topic_id)
     assert [item.partition_no for item in partitions] == [0, 1]

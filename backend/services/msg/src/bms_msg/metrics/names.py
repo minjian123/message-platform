@@ -62,6 +62,7 @@ COUNTER_NAMES: ConcurrentStableList[str] = ConcurrentStableList(
         "msg_dlq_growth_total",
         "msg_isr_shrink_total",
         "msg_leader_switch_total",
+        "msg_auto_election_total",
         "msg_replication_transport_errors_total",
         "msg_storage_rejected_total",
         "msg_delay_rejected_total",
@@ -128,6 +129,9 @@ METRIC_HELP: ConcurrentStableDict[str, str] = ConcurrentStableDict(
         "msg_dlq_growth_total": "累计转入死信条数。",
         "msg_isr_shrink_total": "ISR 收缩次数（02-4 起为真实计数）。",
         "msg_leader_switch_total": "分区切主结果计数（按 result；degraded 表示 isr_verified=false）。",
+        "msg_auto_election_total": (
+            "自动选举结果计数（按 result：triggered / succeeded / blocked / conflict / exhausted）。"
+        ),
         "msg_replication_transport_errors_total": "副本复制 / 控制通道传输失败次数（按操作与原因）。",
         "msg_partition_migration_tasks": "分区迁移台账任务数（按状态）。",
         "msg_partition_migration_remaining_records": "追平中迁移任务的剩余条数之和。",

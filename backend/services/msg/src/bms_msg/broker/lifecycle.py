@@ -19,12 +19,14 @@ from bms_core.core.logging import get_logger
 from bms_core.core.resources import ResourceManager
 from fastapi import FastAPI
 
+from bms_msg.broker.auto_election import AutoElectionWatchdog
 from bms_msg.broker.delay import DelayStore
 from bms_msg.broker.replay import ReplayRunner
 from bms_msg.broker.replication import ReplicationCoordinator
 from bms_msg.broker.scheduler import DelayScheduler
 
 __all__ = [
+    "AutoElectionCloser",
     "BackgroundLoops",
     "CloseableStore",
     "DelayCloser",
@@ -196,6 +198,23 @@ class ReplicationCloser(BaseAsyncResource):
         _LOGGER.info("replication_closed")
 
 
+class AutoElectionCloser(BaseAsyncResource):
+    """自动选举看护循环的回收句柄（02-9）：停机时取消判活循环。"""
+
+    def __init__(self, *, watchdog: AutoElectionWatchdog) -> None:
+        """初始化。
+
+        Args:
+            watchdog: 自动选举看护循环（提供 `stop`）。
+        """
+        self._watchdog = watchdog
+
+    async def aclose(self) -> None:
+        """取消任务并等待（`stop` 幂等，重复调用无副作用）。"""
+        await self._watchdog.stop()
+        _LOGGER.info("auto_election_closed")
+
+
 class BackgroundLoops(BaseAsyncResource):
     """两个后台循环的回收句柄（登记进 `ResourceManager`，停机时逆序释放）。"""
 
@@ -284,6 +303,13 @@ async def start_background_tasks(app: FastAPI) -> None:
         closer = ReplicationCloser(coordinator=replication)
         resources.register(closer)
         app.state.replication_closer = closer
+    watchdog = cast("AutoElectionWatchdog | None", getattr(app.state, "auto_election", None))
+    if watchdog is not None:
+        watchdog.ensure_started()
+        if getattr(app.state, "auto_election_closer", None) is None:
+            auto_closer = AutoElectionCloser(watchdog=watchdog)
+            resources.register(auto_closer)
+            app.state.auto_election_closer = auto_closer
     _LOGGER.info(
         "background_loops_started",
         delay_scheduler=scheduler.running,
@@ -291,6 +317,7 @@ async def start_background_tasks(app: FastAPI) -> None:
         tenant_purge=purge is not None,
         metrics_sampler=sampler is not None,
         topic_cleanup=cleanup is not None,
+        auto_election=watchdog is not None,
         offset_flush_loop=getattr(app.state, "offset_flush_loop", None) is not None,
     )
 
