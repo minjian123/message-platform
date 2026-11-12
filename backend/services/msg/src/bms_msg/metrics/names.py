@@ -87,6 +87,7 @@ GAUGE_NAMES: ConcurrentStableList[str] = ConcurrentStableList(
         "msg_replay_tasks",
         "msg_isr_size",
         "msg_replication_lag_records",
+        "msg_replication_mounted_partitions",
         "msg_partition_migration_tasks",
         "msg_partition_migration_remaining_records",
     )
@@ -137,6 +138,7 @@ METRIC_HELP: ConcurrentStableDict[str, str] = ConcurrentStableDict(
         "msg_partition_migration_remaining_records": "追平中迁移任务的剩余条数之和。",
         "msg_isr_size": "分区当前 ISR 大小（含 leader；标签 topic_id 为数值主键）。",
         "msg_replication_lag_records": "分区副本延迟条数（leader LEO 与 ISR follower LEO 的差值）。",
+        "msg_replication_mounted_partitions": "本节点已挂载的复制分区数（含 leader 与 follower；复制关闭时为 0）。",
         "msg_disk_used_ratio": "磁盘使用率（多卷取最大值）。",
         "msg_storage_rejected_total": "存储水位拒绝次数（按原因）。",
         "msg_delay_pending": "延迟区待投条数（按租户）。",

@@ -382,6 +382,18 @@ REPLICATION_LEADER_LEASE_MS_ENV = "MSG_REPLICATION_LEADER_LEASE_MS"
 REPLICATION_SWITCH_GRACE_MS_ENV = "MSG_REPLICATION_SWITCH_GRACE_MS"
 """新 leader 从观察到 switching 起的停写宽限环境变量（缺省 5000ms，须 ≥ 租约；02-5）。"""
 
+REPLICATION_MOUNT_SWEEP_MS_ENV = "MSG_REPLICATION_MOUNT_SWEEP_MS"
+"""分区挂载复查周期环境变量（缺省 30000ms；02-10 分配事实驱动挂载）。"""
+
+REPLICATION_MOUNT_BATCH_ENV = "MSG_REPLICATION_MOUNT_BATCH"
+"""单轮挂载上限环境变量（缺省 64；超出留到下一轮，避免启动期 IO 打满；02-10）。"""
+
+REPLICATION_IDLE_FETCH_INTERVAL_MS_ENV = "MSG_REPLICATION_IDLE_FETCH_INTERVAL_MS"
+"""空闲分区拉取间隔环境变量（缺省 1000ms；连续空拉后降频到该值；02-10）。"""
+
+REPLICATION_PULL_CONCURRENCY_ENV = "MSG_REPLICATION_PULL_CONCURRENCY"
+"""follower 单轮拉取并发上限环境变量（缺省 8；02-10）。"""
+
 DEFAULT_REPLICATION_NODE_ID = "local"
 """单实例缺省节点标识（管理面 `isr=[local]` 与关闭态一致）。"""
 
@@ -420,6 +432,21 @@ DEFAULT_REPLICATION_LEADER_LEASE_MS = 5_000
 
 DEFAULT_REPLICATION_SWITCH_GRACE_MS = 5_000
 """切换停写宽限缺省值（毫秒）：须 ≥ 租约，避免与旧 leader 写窗口重叠。"""
+
+DEFAULT_REPLICATION_MOUNT_SWEEP_MS = 30_000
+"""分区挂载复查周期缺省值（毫秒）：运行期新建主题 / 迁移新增副本的上限滞后。"""
+
+DEFAULT_REPLICATION_MOUNT_BATCH = 64
+"""单轮挂载上限缺省值：启动期分区多时分批排空，避免同时打开大量分区日志。"""
+
+DEFAULT_REPLICATION_IDLE_FETCH_INTERVAL_MS = 1_000
+"""空闲分区拉取间隔缺省值（毫秒）：连续空拉后降频到该值，须远小于 ISR 时间阈值。"""
+
+DEFAULT_REPLICATION_PULL_CONCURRENCY = 8
+"""follower 单轮拉取并发缺省值：保证分区规模上升后单轮耗时仍小于轮次间隔。"""
+
+REPLICATION_IDLE_FETCH_ROUNDS = 5
+"""连续空拉多少轮后降频到空闲间隔（缺省 5 轮 ≈ 1s @ 200ms 间隔）。"""
 
 REPLICATION_METRICS_PARTITION_LIMIT = 500
 """复制指标的分区基数上限：超出不输出并记一次 warning（防指标爆炸）。"""

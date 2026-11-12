@@ -18,7 +18,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFroze
 from bms_core.db.session import DbSession
 
 from bms_msg.broker.replay import UowFactory
-from bms_msg.broker.replication import PartitionTopology, ReplicaTopologyLoader
+from bms_msg.broker.replication import PartitionAssignment, PartitionTopology, ReplicaMountSource, ReplicaTopologyLoader
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.models.partition import MsgPartition
 from bms_msg.repositories.topic import PartitionRepository
@@ -26,8 +26,8 @@ from bms_msg.repositories.topic import PartitionRepository
 __all__ = ["DbReplicaTopologyLoader"]
 
 
-class DbReplicaTopologyLoader(ReplicaTopologyLoader):
-    """从平台库加载分区复制拓扑（按主题缓存 + TTL）。"""
+class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
+    """从平台库加载分区复制拓扑（按主题缓存 + TTL）与分配枚举（02-10）。"""
 
     def __init__(
         self,
@@ -79,6 +79,23 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader):
             topic_id: 主题主键。
         """
         self._rows.pop(int(topic_id), None)
+
+    async def list_assignments(self) -> ConcurrentStableList[PartitionAssignment]:
+        """枚举全部分区分配（02-10；只读、不走缓存，保证新建主题与迁移能被及时看见）。
+
+        Returns:
+            ConcurrentStableList[PartitionAssignment]: 分配事实（按 `(topic_id, partition_no)` 升序）。
+        """
+        async with self._uow_factory() as uow:
+            rows = await PartitionRepository(cast("DbSession", uow.session)).list_assignments()
+        return ConcurrentStableList(
+            PartitionAssignment(
+                topic_id=int(row.topic_id),
+                partition_no=int(row.partition_no),
+                replicas=ConcurrentStableFrozenList(str(item) for item in row.replicas),
+            )
+            for row in rows
+        )
 
     async def _topic_rows(self, *, topic_id: int, force: bool = False) -> ConcurrentStableList[MsgPartition]:
         """取某主题的分区行（缓存命中且未过期即复用；`force` 绕过缓存）。

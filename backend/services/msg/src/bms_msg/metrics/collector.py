@@ -119,6 +119,7 @@ class MsgMetricsCollector:
         self._collect_counters(families, name="msg_tenant_lifecycle_events_total", source=self._lifecycle)
         self._collect_counters(families, name="msg_tenant_purge_total", source=self._purge)
         families.add(self._isr_family())
+        families.add(self._mounted_family())
         self._collect_replication(families)
         self._collect_leader_switch(families)
         self._collect_auto_election(families)
@@ -307,6 +308,24 @@ class MsgMetricsCollector:
         """ISR 收缩计数（02-4 起读真实计数；未装配复制时为 0）。"""
         family = CounterMetricFamily("msg_isr_shrink_total", _help("msg_isr_shrink_total"), labels=["service"])
         total = 0 if self._replication is None else self._replication.shrink_total
+        family.add_metric([self._service], float(total))
+        return family
+
+    def _mounted_family(self) -> Metric:
+        """已挂载分区数（02-10；未装配复制时输出 0，与 `msg_isr_shrink_total` 同口径）。
+
+        **不要并进 `_collect_replication`**：该方法在无分区行时提前返回，会把
+        「0 个已挂载分区」一并吞掉，排障时反而看不到真实值。
+
+        Returns:
+            Metric: 单样本 gauge 家族。
+        """
+        family = GaugeMetricFamily(
+            "msg_replication_mounted_partitions",
+            _help("msg_replication_mounted_partitions"),
+            labels=["service"],
+        )
+        total = 0 if self._replication is None else self._replication.mounted_partitions
         family.add_metric([self._service], float(total))
         return family
 

@@ -134,6 +134,18 @@ class PartitionRepository(BaseDbRepository[MsgPartition]):
         statement = self._select().where(self._column("topic_id") == topic_id).order_by(self._column("partition_no"))
         return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
 
+    async def list_assignments(self) -> ConcurrentStableList[MsgPartition]:
+        """取全部分区行（按 `topic_id`、`partition_no` 升序；02-10 挂载枚举用）。
+
+        只读、无副作用：成员过滤与「本节点是否承载」的判定留在复制协调器，
+        仓储不掺业务判断（避免第二套副本集解析）。
+
+        Returns:
+            ConcurrentStableList[MsgPartition]: 分区行（全量）。
+        """
+        statement = self._select().order_by(self._column("topic_id"), self._column("partition_no"))
+        return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
+
     async def add_partitions(
         self,
         *,

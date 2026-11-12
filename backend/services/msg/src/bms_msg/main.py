@@ -333,14 +333,17 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         else:
             replication_transport = InProcessReplicaTransport()
             leader_control = InProcessLeaderControlTransport()
+        # 02-10：拓扑加载器同时作分配枚举源（挂载由分配事实驱动），两处共用同一对象避免两次解析。
+        topology_loader = DbReplicaTopologyLoader(
+            uow_factory=platform_uow_factory(app),
+            ttl_ms=replica_config.topology_ttl_ms,
+        )
         replication = ReplicationCoordinator(
             config=replica_config,
             store=file_store,
             transport=replication_transport,
-            topology_loader=DbReplicaTopologyLoader(
-                uow_factory=platform_uow_factory(app),
-                ttl_ms=replica_config.topology_ttl_ms,
-            ),
+            topology_loader=topology_loader,
+            mount_source=topology_loader,
             waiter=waiter,
             metrics=replication_metrics,
         )

@@ -47,11 +47,15 @@ from bms_msg.core.config import (
     DEFAULT_REPLICATION_FACTOR,
     DEFAULT_REPLICATION_FETCH_BATCH,
     DEFAULT_REPLICATION_FETCH_INTERVAL_MS,
+    DEFAULT_REPLICATION_IDLE_FETCH_INTERVAL_MS,
     DEFAULT_REPLICATION_LAG_RECORDS,
     DEFAULT_REPLICATION_LAG_TIME_MS,
     DEFAULT_REPLICATION_LEADER_LEASE_MS,
     DEFAULT_REPLICATION_MIN_INSYNC,
+    DEFAULT_REPLICATION_MOUNT_BATCH,
+    DEFAULT_REPLICATION_MOUNT_SWEEP_MS,
     DEFAULT_REPLICATION_NODE_ID,
+    DEFAULT_REPLICATION_PULL_CONCURRENCY,
     DEFAULT_REPLICATION_SCAN_INTERVAL_MS,
     DEFAULT_REPLICATION_SWITCH_GRACE_MS,
     DEFAULT_REPLICATION_TOPOLOGY_TTL_MS,
@@ -63,13 +67,18 @@ from bms_msg.core.config import (
     REPLICATION_FETCH_BACKOFF_CAP_MS,
     REPLICATION_FETCH_BATCH_ENV,
     REPLICATION_FETCH_INTERVAL_MS_ENV,
+    REPLICATION_IDLE_FETCH_INTERVAL_MS_ENV,
+    REPLICATION_IDLE_FETCH_ROUNDS,
     REPLICATION_LAG_RECORDS_ENV,
     REPLICATION_LAG_TIME_MS_ENV,
     REPLICATION_LEADER_LEASE_MS_ENV,
     REPLICATION_METRICS_PARTITION_LIMIT,
     REPLICATION_MIN_INSYNC_ENV,
+    REPLICATION_MOUNT_BATCH_ENV,
+    REPLICATION_MOUNT_SWEEP_MS_ENV,
     REPLICATION_NODE_ID_ENV,
     REPLICATION_NODES_ENV,
+    REPLICATION_PULL_CONCURRENCY_ENV,
     REPLICATION_SCAN_INTERVAL_MS_ENV,
     REPLICATION_SWITCH_GRACE_MS_ENV,
     REPLICATION_TOPOLOGY_TTL_MS_ENV,
@@ -82,12 +91,14 @@ __all__ = [
     "SWITCH_STATE_SWITCHING",
     "FollowerProgress",
     "InProcessReplicaTransport",
+    "PartitionAssignment",
     "PartitionReplication",
     "PartitionTopology",
     "ReplicaConfig",
     "ReplicaFetchRequest",
     "ReplicaFetchResult",
     "ReplicaKey",
+    "ReplicaMountSource",
     "ReplicaRole",
     "ReplicaTopologyLoader",
     "ReplicaTransport",
@@ -112,6 +123,9 @@ _FAILURE_LOG_WINDOW_MS = 60_000
 
 _REFRESH_LOAD_TIMEOUT_SEC = 2.0
 """单分区拓扑刷新超时（秒）：DB 卡死时放弃本轮，等下一轮重试，避免后台循环永久停摆。"""
+
+_MOUNT_LOAD_TIMEOUT_SEC = 2.0
+"""单轮分配枚举超时（秒）：DB 卡死时放弃本轮挂载，等下一轮重试（02-10）。"""
 
 ReplicaKey = tuple[int, int]
 """分区键：`(topic_id, partition_no)`。"""
@@ -221,6 +235,18 @@ class ReplicaConfig(BaseValueObject):
     switch_grace_ms: int = DEFAULT_REPLICATION_SWITCH_GRACE_MS
     """切换停写宽限（毫秒；须 ≥ 租约；02-5）。"""
 
+    mount_sweep_ms: int = DEFAULT_REPLICATION_MOUNT_SWEEP_MS
+    """分区挂载复查周期（毫秒；02-10 分配事实驱动挂载）。"""
+
+    mount_batch: int = DEFAULT_REPLICATION_MOUNT_BATCH
+    """单轮挂载上限（02-10；超出留到下一轮）。"""
+
+    idle_fetch_interval_ms: int = DEFAULT_REPLICATION_IDLE_FETCH_INTERVAL_MS
+    """空闲分区拉取间隔（毫秒；02-10 连续空拉后降频）。"""
+
+    pull_concurrency: int = DEFAULT_REPLICATION_PULL_CONCURRENCY
+    """follower 单轮拉取并发上限（02-10）。"""
+
     @classmethod
     def from_env(cls) -> ReplicaConfig:
         """从环境变量构造配置并校验。
@@ -253,6 +279,12 @@ class ReplicaConfig(BaseValueObject):
             epoch_refresh_ms=_env_int(REPLICATION_EPOCH_REFRESH_MS_ENV, DEFAULT_REPLICATION_EPOCH_REFRESH_MS),
             leader_lease_ms=_env_int(REPLICATION_LEADER_LEASE_MS_ENV, DEFAULT_REPLICATION_LEADER_LEASE_MS),
             switch_grace_ms=_env_int(REPLICATION_SWITCH_GRACE_MS_ENV, DEFAULT_REPLICATION_SWITCH_GRACE_MS),
+            mount_sweep_ms=_env_int(REPLICATION_MOUNT_SWEEP_MS_ENV, DEFAULT_REPLICATION_MOUNT_SWEEP_MS),
+            mount_batch=_env_int(REPLICATION_MOUNT_BATCH_ENV, DEFAULT_REPLICATION_MOUNT_BATCH),
+            idle_fetch_interval_ms=_env_int(
+                REPLICATION_IDLE_FETCH_INTERVAL_MS_ENV, DEFAULT_REPLICATION_IDLE_FETCH_INTERVAL_MS
+            ),
+            pull_concurrency=_env_int(REPLICATION_PULL_CONCURRENCY_ENV, DEFAULT_REPLICATION_PULL_CONCURRENCY),
         )
         config.validate()
         return config
@@ -274,9 +306,24 @@ class ReplicaConfig(BaseValueObject):
             ("epoch_refresh_ms", self.epoch_refresh_ms),
             ("leader_lease_ms", self.leader_lease_ms),
             ("switch_grace_ms", self.switch_grace_ms),
+            ("mount_sweep_ms", self.mount_sweep_ms),
+            ("mount_batch", self.mount_batch),
+            ("idle_fetch_interval_ms", self.idle_fetch_interval_ms),
+            ("pull_concurrency", self.pull_concurrency),
         ):
             if value <= 0:
                 raise ValueError(f"复制配置非法：{name} 必须为正（当前 {value}）")
+        if self.idle_fetch_interval_ms < self.fetch_interval_ms:
+            raise ValueError(
+                f"复制配置非法：idle_fetch_interval_ms={self.idle_fetch_interval_ms} "
+                f"小于 fetch_interval_ms={self.fetch_interval_ms}（空闲间隔不能比正常间隔更密）"
+            )
+        if self.lag_time_max_ms > 0 and self.idle_fetch_interval_ms * 2 > self.lag_time_max_ms:
+            raise ValueError(
+                f"复制配置非法：idle_fetch_interval_ms={self.idle_fetch_interval_ms} 过大，"
+                f"须满足 2 × 空闲间隔 ≤ lag_time_max_ms={self.lag_time_max_ms}"
+                "（否则空闲分区会因降频被踢出 ISR，并压缩自动选举的视图新鲜窗口）"
+            )
         if self.switch_grace_ms < self.leader_lease_ms:
             raise ValueError(
                 f"复制配置非法：switch_grace_ms={self.switch_grace_ms} 小于 leader_lease_ms={self.leader_lease_ms}"
@@ -319,6 +366,20 @@ class PartitionTopology(BaseValueObject):
 
     switch_state: str = SWITCH_STATE_IDLE
     """切换状态（`idle` / `switching`；02-5）。"""
+
+
+@dataclass(frozen=True)
+class PartitionAssignment(BaseValueObject):
+    """一条分区分配事实（02-10 挂载枚举的输入；只读）。"""
+
+    topic_id: int
+    """主题主键。"""
+
+    partition_no: int
+    """分区号。"""
+
+    replicas: ConcurrentStableFrozenList[str] = field(default_factory=lambda: ConcurrentStableFrozenList[str]())
+    """库内副本集（可能为空：历史行按配置轮转推导）。"""
 
 
 @dataclass(frozen=True)
@@ -541,6 +602,8 @@ class ReplicationMetricsSnapshot(BaseValueObject):
     rows: ConcurrentStableFrozenList[ReplicationMetricRow] = field(
         default_factory=lambda: ConcurrentStableFrozenList[ReplicationMetricRow]()
     )
+    mounted_partitions: int = 0
+    """本节点已挂载（且本节点在副本集内）的分区数（02-10）。"""
 
 
 class ReplicationMetrics(BaseFrameworkObject):
@@ -554,6 +617,7 @@ class ReplicationMetrics(BaseFrameworkObject):
         """
         self._partition_limit = partition_limit
         self._shrink_total = 0
+        self._mounted = 0
         self._rows: ConcurrentStableDict[ReplicaKey, tuple[int, int]] = ConcurrentStableDict()
         self._warned = False
 
@@ -565,6 +629,19 @@ class ReplicationMetrics(BaseFrameworkObject):
             int: 累计值。
         """
         return self._shrink_total
+
+    @property
+    def mounted_partitions(self) -> int:
+        """已挂载分区数（02-10；只统计本节点在副本集内的分区）。
+
+        Returns:
+            int: 已挂载分区数。
+        """
+        return self._mounted
+
+    def record_mount(self) -> None:
+        """记一次挂载（02-10）。"""
+        self._mounted += 1
 
     def record_shrink(self) -> None:
         """记一次 ISR 收缩。"""
@@ -620,6 +697,7 @@ class ReplicationMetrics(BaseFrameworkObject):
         return ReplicationMetricsSnapshot(
             shrink_total=self._shrink_total,
             rows=ConcurrentStableFrozenList(rows),
+            mounted_partitions=self._mounted,
         )
 
 
@@ -637,6 +715,22 @@ class ReplicaTopologyLoader(BaseFrameworkObject, ABC):
 
         Returns:
             PartitionTopology | None: 拓扑；行缺失 / 读取失败返回 None（走配置兜底）。
+        """
+
+
+class ReplicaMountSource(BaseFrameworkObject, ABC):
+    """分区分配枚举（02-10）：只读，决定「本节点该为哪些分区建立拉取态」。
+
+    **为什么单独一个协议**：`broker/replication.py` 只认「分配事实」这一输入，不依赖仓储与会话；
+    读哪张表、怎么过滤留在服务装配侧，02-8 改分配时只改实现。
+    """
+
+    @abstractmethod
+    async def list_assignments(self) -> ConcurrentStableList[PartitionAssignment]:
+        """枚举全部分区分配（只读、无副作用）。
+
+        Returns:
+            ConcurrentStableList[PartitionAssignment]: 分配事实（按 `(topic_id, partition_no)` 升序）。
         """
 
 
@@ -659,6 +753,7 @@ class PartitionReplication:
         last_known_hw: int = 0,
         last_known_isr: ConcurrentStableFrozenList[str] | None = None,
         leadership_confirmed_at: float = 0.0,
+        hosted: bool = True,
     ) -> None:
         """初始化。
 
@@ -676,6 +771,7 @@ class PartitionReplication:
             last_known_hw: 最后已知 leader HW（02-5）。
             last_known_isr: 最后已知 leader ISR（02-5）。
             leadership_confirmed_at: 最近一次确认 leader 身份的单调毫秒（02-5 租约起点）。
+            hosted: 本节点是否在副本集内（02-10；False 表示非承载节点，不拉取）。
         """
         self.topic_id = int(topic_id)
         self.partition_no = int(partition_no)
@@ -702,6 +798,7 @@ class PartitionReplication:
         self.switch_observed_at: float | None = None
         self.op_lock = asyncio.Lock()
         self.lease_logged_at: float | None = None
+        self.hosted = bool(hosted)
 
     @property
     def key(self) -> ReplicaKey:
@@ -814,6 +911,7 @@ class ReplicationCoordinator(ReplicationView):
         store: MessageStore,
         transport: ReplicaTransport | None = None,
         topology_loader: ReplicaTopologyLoader | None = None,
+        mount_source: ReplicaMountSource | None = None,
         waiter: DeliveryWaiter | None = None,
         metrics: ReplicationMetrics | None = None,
         clock: Callable[[], float] | None = None,
@@ -825,6 +923,7 @@ class ReplicationCoordinator(ReplicationView):
             store: 消息存储（必须是**未经复制 / 唤醒包装**的实现，避免自递归）。
             transport: 副本拉取传输（None 表示单机 / 仅 leader）。
             topology_loader: 分区拓扑加载器（None 表示纯配置兜底）。
+            mount_source: 分区分配枚举源（None 表示不主动挂载，退回惰性挂载；02-10）。
             waiter: 分区唤醒器（HW 推进时唤醒长轮询）。
             metrics: 复制指标采集点。
             clock: 单调毫秒时钟（用例注入以确定性驱动 ISR 判据）。
@@ -833,6 +932,7 @@ class ReplicationCoordinator(ReplicationView):
         self._store = store
         self._transport = transport
         self._topology_loader = topology_loader
+        self._mount_source = mount_source
         self._waiter = waiter
         self._metrics = metrics if metrics is not None else ReplicationMetrics()
         self._clock = clock if clock is not None else _monotonic_ms
@@ -842,6 +942,9 @@ class ReplicationCoordinator(ReplicationView):
         self._fetch_backoff: ConcurrentStableDict[ReplicaKey, float] = ConcurrentStableDict()
         self._fetch_backoff_delay: ConcurrentStableDict[ReplicaKey, float] = ConcurrentStableDict()
         self._fetch_failure_logged_at: ConcurrentStableDict[ReplicaKey, float] = ConcurrentStableDict()
+        self._fetch_due_at: ConcurrentStableDict[ReplicaKey, float] = ConcurrentStableDict()
+        self._idle_streak: ConcurrentStableDict[ReplicaKey, int] = ConcurrentStableDict()
+        self._mount_backlog = 0
         self._stopped = False
 
     @property
@@ -890,12 +993,14 @@ class ReplicationCoordinator(ReplicationView):
                 return existing
             state = await self._build_state(topic_id=int(topic_id), partition_no=int(partition_no))
             self._partitions.set(key, state)
-            self._metrics.update(
-                topic_id=state.topic_id,
-                partition_no=state.partition_no,
-                isr_size=len(state.isr),
-                lag_records=state.lag_records(),
-            )
+            if state.hosted:
+                self._metrics.record_mount()
+                self._metrics.update(
+                    topic_id=state.topic_id,
+                    partition_no=state.partition_no,
+                    isr_size=len(state.isr),
+                    lag_records=state.lag_records(),
+                )
             return state
 
     async def _build_state(self, *, topic_id: int, partition_no: int) -> PartitionReplication:
@@ -919,11 +1024,14 @@ class ReplicationCoordinator(ReplicationView):
             leader = self._config.node_id
             min_insync = 1
             switch_state = SWITCH_STATE_IDLE
+            hosted = True
         else:
             chosen = replicas if replicas is not None else self._derive_replicas(topic_id, partition_no)
             leader = topology.leader if topology is not None and topology.leader else chosen[0]
             role = ReplicaRole.LEADER if leader == self._config.node_id else ReplicaRole.FOLLOWER
             min_insync = self._effective_min_insync(partition_min, len(chosen))
+            # 非副本集成员：不拉取、不进 ISR 推导（02-10 守卫；消除「伪 follower」噪声）。
+            hosted = self._config.node_id in chosen
         leo = await self._store.leo(topic_id=topic_id, partition_no=partition_no)
         start = await self._store.start_offset(topic_id=topic_id, partition_no=partition_no)
         hw = leo if role is ReplicaRole.DISABLED else start
@@ -939,6 +1047,7 @@ class ReplicationCoordinator(ReplicationView):
             hw=hw,
             switch_state=switch_state,
             leadership_confirmed_at=self._clock(),
+            hosted=hosted,
         )
         if role is not ReplicaRole.DISABLED:
             state.isr.add(leader)
@@ -1410,6 +1519,9 @@ class ReplicationCoordinator(ReplicationView):
         state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
         if state.role is not ReplicaRole.FOLLOWER:
             return 0
+        if not state.hosted:
+            # 非副本集成员：不拉取（02-10 守卫；请求路径仍可挂载只为读写语义判定）。
+            return 0
         if state.switch_state != SWITCH_STATE_IDLE:
             # 切换窗口不追加：目标节点尚未截断，并发追加会制造新的未提交尾部。
             return 0
@@ -1760,9 +1872,12 @@ class ReplicationCoordinator(ReplicationView):
         self._update_metrics(state)
 
     async def ensure_started(self) -> None:
-        """启动 follower 拉取、leader ISR 扫描与 epoch 刷新循环（幂等；关闭时不启动）。"""
+        """启动挂载、follower 拉取、leader ISR 扫描与 epoch 刷新循环（幂等；关闭时不启动）。"""
         if not self._config.enabled or self._stopped or self._tasks:
             return
+        if self._mount_source is not None:
+            # 先起挂载循环：首轮不等待，保证后续拉取循环有分区可拉（02-10）。
+            self._tasks.add(asyncio.create_task(self._mount_loop()))
         self._tasks.add(asyncio.create_task(self._pull_loop()))
         self._tasks.add(asyncio.create_task(self._scan_loop()))
         if self._topology_loader is not None:
@@ -1788,25 +1903,196 @@ class ReplicationCoordinator(ReplicationView):
                 continue
             await self._scan_partition(state)
 
-    async def _pull_loop(self) -> None:
-        """follower 周期拉取（异常隔离，指数退避封顶；由 `aclose` 取消）。"""
-        interval = self._config.fetch_interval_ms / MS_PER_SECOND
+    async def mount_once(self) -> int:
+        """挂载一轮（02-10）：枚举分配 → 差分 → 成员判定 → 批量挂载并立即首拉。
+
+        用例可直接驱动（不依赖后台循环）；返回值只表示本轮**成功挂载**的分区数，
+        待挂剩余记在 `_mount_backlog`，由循环决定是否立即续轮。
+
+        Returns:
+            int: 本轮成功挂载的分区数。
+        """
+        if not self._config.enabled or self._mount_source is None:
+            return 0
+        started = self._clock()
+        try:
+            async with asyncio.timeout(_MOUNT_LOAD_TIMEOUT_SEC):
+                assignments = await self._mount_source.list_assignments()
+        except TimeoutError:
+            _LOGGER.warning(
+                "msg_replication_mount_failed",
+                topic_id=0,
+                partition=-1,
+                reason="TimeoutError",
+                detail="枚举分区分配超时（本轮放弃，下一轮重试）",
+            )
+            return 0
+        except Exception as exc:
+            _LOGGER.warning(
+                "msg_replication_mount_failed",
+                topic_id=0,
+                partition=-1,
+                reason=type(exc).__name__,
+                detail=str(exc),
+            )
+            return 0
+        mounted = 0
+        skipped = 0
+        remaining = 0
+        for assignment in assignments:
+            key: ReplicaKey = (int(assignment.topic_id), int(assignment.partition_no))
+            if key in self._partitions:
+                continue
+            if not self._hosts(assignment):
+                skipped += 1
+                _LOGGER.debug(
+                    "msg_replication_mount_skipped",
+                    topic_id=key[0],
+                    partition=key[1],
+                    detail="not_in_replica_set",
+                )
+                continue
+            if mounted >= self._config.mount_batch:
+                remaining += 1
+                continue
+            if await self._mount_one(key):
+                mounted += 1
+        self._mount_backlog = remaining
+        if mounted or skipped or remaining:
+            _LOGGER.info(
+                "msg_replication_mount_round",
+                mounted=mounted,
+                skipped=skipped,
+                remaining=remaining,
+                elapsed_ms=int(self._clock() - started),
+            )
+        return mounted
+
+    def _hosts(self, assignment: PartitionAssignment) -> bool:
+        """判定本节点是否承载该分区（与 `_build_state` 同源的副本集解析）。
+
+        Args:
+            assignment: 分配事实。
+
+        Returns:
+            bool: 本节点在副本集内为 True。
+        """
+        replicas = (
+            assignment.replicas
+            if assignment.replicas
+            else self._derive_replicas(assignment.topic_id, assignment.partition_no)
+        )
+        return self._config.node_id in replicas
+
+    async def _mount_one(self, key: ReplicaKey) -> bool:
+        """挂载一个分区并立即首拉（02-10；失败逐分区隔离）。
+
+        Args:
+            key: 分区键。
+
+        Returns:
+            bool: 挂载成功（不要求首拉成功）为 True。
+        """
+        try:
+            state = await self.attach_partition(topic_id=key[0], partition_no=key[1])
+        except Exception as exc:
+            _LOGGER.warning(
+                "msg_replication_mount_failed",
+                topic_id=key[0],
+                partition=key[1],
+                reason=type(exc).__name__,
+                detail=str(exc),
+            )
+            return False
+        if state.role is ReplicaRole.FOLLOWER and state.hosted and self._transport is not None:
+            try:
+                count = await self.pull_once(topic_id=key[0], partition_no=key[1])
+            except Exception as exc:
+                # 首拉失败不影响「已挂载」，交给既有退避与周期拉取重试。
+                self._on_fetch_failure(key, exc)
+            else:
+                self._schedule_next_fetch(key=key, count=count)
+        return True
+
+    async def _mount_loop(self) -> None:
+        """挂载循环（02-10）：首轮不等待；有 backlog 且本轮有进展则立即续轮（由 `aclose` 取消）。"""
+        sweep = self._config.mount_sweep_ms / MS_PER_SECOND
         while True:
-            await asyncio.sleep(interval)
-            keys = ConcurrentStableList(self._partitions.keys())
-            for key in keys:
-                state = self._partitions.get(key)
-                if state is None or state.role is not ReplicaRole.FOLLOWER:
-                    continue
-                backoff_until = self._fetch_backoff.get(key, 0.0)
-                if self._clock() < backoff_until:
-                    continue
-                try:
-                    await self.pull_once(topic_id=key[0], partition_no=key[1])
-                    self._fetch_backoff.pop(key, None)
-                    self._fetch_backoff_delay.pop(key, None)
-                except Exception as exc:
-                    self._on_fetch_failure(key, exc)
+            try:
+                mounted = await self.mount_once()
+            except Exception as exc:  # pragma: no cover - mount_once 已逐段兜底，这里只防循环中断
+                mounted = 0
+                _LOGGER.warning("msg_replication_mount_loop_failed", reason=type(exc).__name__)
+            await asyncio.sleep(0 if self._mount_backlog and mounted else sweep)
+
+    async def pull_round(self) -> int:
+        """拉取一轮（02-10）：按到期时间挑选分区，有界并发执行。
+
+        Returns:
+            int: 本轮拉到的记录条数合计。
+        """
+        now = self._clock()
+        due: ConcurrentStableList[ReplicaKey] = ConcurrentStableList()
+        for key in ConcurrentStableList(self._partitions.keys()):
+            state = self._partitions.get(key)
+            if state is None or state.role is not ReplicaRole.FOLLOWER or not state.hosted:
+                continue
+            if now < self._fetch_backoff.get(key, 0.0) or now < self._fetch_due_at.get(key, 0.0):
+                continue
+            due.add(key)
+        if not due:
+            return 0
+        semaphore = asyncio.Semaphore(self._config.pull_concurrency)
+        results = await asyncio.gather(*(self._pull_guarded(key=key, semaphore=semaphore) for key in due))
+        return sum(results)
+
+    async def _pull_guarded(self, *, key: ReplicaKey, semaphore: asyncio.Semaphore) -> int:
+        """带并发闸门与单分区异常隔离地拉取一个分区。
+
+        Args:
+            key: 分区键。
+            semaphore: 单轮并发闸门。
+
+        Returns:
+            int: 本轮拉到的记录条数（失败为 0）。
+        """
+        async with semaphore:
+            try:
+                count = await self.pull_once(topic_id=key[0], partition_no=key[1])
+            except Exception as exc:
+                self._on_fetch_failure(key, exc)
+                return 0
+            self._fetch_backoff.pop(key, None)
+            self._fetch_backoff_delay.pop(key, None)
+            self._schedule_next_fetch(key=key, count=count)
+            return count
+
+    def _schedule_next_fetch(self, *, key: ReplicaKey, count: int) -> None:
+        """按本轮结果排下一次拉取（02-10 空闲降频；拉到记录即回落）。
+
+        Args:
+            key: 分区键。
+            count: 本轮拉到的记录条数（0 视为空拉）。
+        """
+        if count > 0:
+            self._idle_streak.pop(key, None)
+            delay = float(self._config.fetch_interval_ms)
+        else:
+            streak = self._idle_streak.get(key, 0) + 1
+            self._idle_streak.set(key, streak)
+            delay = float(
+                self._config.idle_fetch_interval_ms
+                if streak >= REPLICATION_IDLE_FETCH_ROUNDS
+                else self._config.fetch_interval_ms
+            )
+        self._fetch_due_at.set(key, self._clock() + delay)
+
+    async def _pull_loop(self) -> None:
+        """follower 周期拉取（02-10：固定 tick + 到期判定 + 有界并发；由 `aclose` 取消）。"""
+        tick = self._config.fetch_interval_ms / MS_PER_SECOND
+        while True:
+            await asyncio.sleep(tick)
+            await self.pull_round()
 
     def _on_fetch_failure(self, key: ReplicaKey, exc: Exception) -> None:
         """记录拉取失败并按指数退避重试（日志 60s 窗口抑制）。
@@ -1821,6 +2107,7 @@ class ReplicationCoordinator(ReplicationView):
         next_backoff = base if previous is None else min(previous * 2, float(REPLICATION_FETCH_BACKOFF_CAP_MS))
         self._fetch_backoff_delay.set(key, next_backoff)
         self._fetch_backoff.set(key, now + next_backoff)
+        self._fetch_due_at.set(key, now + next_backoff)
         last_log = self._fetch_failure_logged_at.get(key)
         if last_log is not None and now - last_log < _FAILURE_LOG_WINDOW_MS:
             return

@@ -288,35 +288,25 @@ async def _topic_state(dsn: str, topic_id: int) -> chain.TopicState:
 
 async def _ensure_isr(
     client: ProbeClient,
-    drill: chain.DrillClient,
     target: int,
     *,
     topic_id: int,
-    rounds: int = 3,
-    round_timeout_sec: float = 60,
+    timeout_sec: float = 60,
 ) -> bool:
-    """预热 + 等 ISR 收敛到期望合计（落后副本需被写请求「碰一次」才建拉取态）。
+    """等 ISR 收敛到期望合计（**不预热**：拉取态由 02-10 的挂载循环按分配事实建立）。
+
+    演练不再用「向每个实例各写一轮」绕开缺口——若挂载初始化失效，这里必然超时并落 issue。
 
     Args:
         client: 探针。
-        drill: 采集客户端（提供预热）。
         target: 期望 ISR 合计（3 实例 × 分区数）。
         topic_id: 主题主键。
-        rounds: 预热轮数上限。
-        round_timeout_sec: 每轮等待上限（秒）。
+        timeout_sec: 等待上限（秒）。
 
     Returns:
         bool: 收敛 True。
     """
-    for _ in range(rounds):
-        await drill.warmup()
-        try:
-            await drill.publish("warm-commit", b"warmup-commit")
-        except chain.ChainError:
-            continue
-        if await _wait_isr(client, target, topic_id=topic_id, timeout_sec=round_timeout_sec):
-            return True
-    return False
+    return await _wait_isr(client, target, topic_id=topic_id, timeout_sec=timeout_sec)
 
 
 async def _wait_isr(client: ProbeClient, target: int, *, topic_id: int, timeout_sec: float = 180) -> bool:
@@ -560,9 +550,9 @@ async def run_scenario(
             )
         state = await _topic_state(dsn, topic_id)
         expected_isr = _EXPECTED_ISR_PER_PARTITION * len(state.partitions)
-        if not await _ensure_isr(client, drill, expected_isr, topic_id=topic_id):
+        if not await _ensure_isr(client, expected_isr, topic_id=topic_id):
             raise ClusterDrillError(f"cluster-drill.guard ISR 未在预算内收敛到 {expected_isr}")
-        records = await drill.publish_batch(int(publish_count), warm=False)
+        records = await drill.publish_batch(int(publish_count))
         before = await _samples(client, "before", topic_id=topic_id)
         before_state = await _topic_state(dsn, topic_id)
         isr_before = _isr_total(before)
@@ -618,7 +608,7 @@ async def run_scenario(
         inject.apply_steps(runner, steps, phase="recover")
         recovery_ok = await _wait_ready(client, config.ready_timeout_sec)
         if recovery_ok:
-            await drill.warmup()
+            # 重启实例在启动首轮按分配事实自行挂载（02-10），无需再「碰一次」预热。
             recovery_ok = await _wait_isr(client, isr_before, topic_id=topic_id)
         if not recovery_ok:
             outcome.issues.add(

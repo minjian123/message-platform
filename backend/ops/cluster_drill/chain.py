@@ -58,9 +58,6 @@ TOPIC_EXISTS = 350008
 MARKER_ROUNDS = 12
 """恢复后为覆盖全部分区所做的标记发布轮数上限。"""
 
-_ISR_CONVERGE_SEC = 20.0
-"""发布前的 ISR 收敛等待（秒）：落后副本需先收到一次写请求才建立拉取态。"""
-
 
 class Publisher(Protocol):
     """发布能力协议（`DrillClient` 与其测试替身都满足）。"""
@@ -377,9 +374,6 @@ class DrillClient(BaseFrameworkObject):
         }
         last = ""
         for round_no in range(40):
-            if round_no and round_no % 10 == 0:
-                # 长时间未成功：重新预热（副本拉取态 / epoch 可能已失效），再继续改投
-                await self.warmup()
             # 轮次之间必须等：故障恢复后各节点的拓扑刷新是异步的（秒级），
             # 若不等待，`350033` 会在毫秒内把 40 轮预算烧光（真机演练踩坑）。
             if round_no:
@@ -489,41 +483,19 @@ class DrillClient(BaseFrameworkObject):
                 leaders.set(int(cast("int", data.get("partition") or 0)), str(data.get("leader")))
         return leaders
 
-    async def warmup(self) -> None:
-        """向**每个实例**各发一遍写请求（非 leader 会 `350033`），让各节点为全部分区建立复制态。
+    async def publish_batch(self, count: int) -> ConcurrentStableList[PublishRecord]:
+        """按分区键发布一批消息并记录每条写入位点。
 
-        只写 leader 的话，副本永远不建拉取态，ISR 会停在 1，`acks=all` 报 `350032`；
-        故障重启后同样需要「碰一次」才会重新拉取。
-        """
-        for base in self._bases:
-            for index in range(30):
-                await self._call(
-                    "POST",
-                    base,
-                    "/api/v1/msg/publish",
-                    {
-                        "namespace": self._namespace,
-                        "topic": self._topic,
-                        "key": f"k{index % 10}",
-                        "payload": base64.b64encode(b"warmup").decode(),
-                        "acks": "1",
-                    },
-                )
-        await self._sleep(_ISR_CONVERGE_SEC)
-
-    async def publish_batch(self, count: int, *, warm: bool = True) -> ConcurrentStableList[PublishRecord]:
-        """按分区键发布一批消息并记录每条写入位点（缺省先预热再 `acks=all`）。
+        **不再预热**（02-10）：副本拉取态由分配事实驱动建立，演练不该用「向每个实例各写一轮」
+        绕开缺口；`acks=all` 前只等 ISR 收敛（见 `__main__._ensure_isr`）。
 
         Args:
             count: 条数。
-            warm: 是否先做副本预热（调用方已预热时置 False，避免重复等待）。
 
         Returns:
             ConcurrentStableList[PublishRecord]: 写入结果（声明序）。
         """
         records: ConcurrentStableList[PublishRecord] = ConcurrentStableList()
-        if warm:
-            await self.warmup()
         for index in range(count):
             records.add(await self.publish(f"k{index % 10}", f"drill-{index:03d}".encode()))
         return records
