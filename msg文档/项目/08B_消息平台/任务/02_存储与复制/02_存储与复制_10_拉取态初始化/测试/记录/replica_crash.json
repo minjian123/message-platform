@@ -1,0 +1,184 @@
+{
+  "schema_version": 2,
+  "task": "07-6-1",
+  "scenario": "replica_crash",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "docker",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4",
+    "config_digest": "d3c6e5b734bb0a408544107a0fe15ebaf21f82700284a2fac1142c384862aa04"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-12T14:41:37.595145+00:00",
+  "finished_at": "2026-11-12T14:44:51.021300+00:00",
+  "injection": {
+    "method": "container_kill",
+    "detail": "杀 leader 容器后**不人工切主**、预算内自动换主（02-9）；已提交不丢；旧 leader 重启降 follower 并重入 ISR",
+    "artifact": "msg-drill"
+  },
+  "commands": [
+    {
+      "step": "build",
+      "result": "ok"
+    },
+    {
+      "step": "network_create",
+      "result": "ok"
+    },
+    {
+      "step": "compose_up",
+      "result": "ok"
+    },
+    {
+      "step": "reset_cluster",
+      "result": "ok"
+    },
+    {
+      "step": "network_attach",
+      "result": "ok"
+    },
+    {
+      "step": "create_topic",
+      "result": "ok",
+      "topic": "drill.replica.probe.replica_crash.1794494497",
+      "topic_id": "58782380943565177445211520976814080"
+    },
+    {
+      "step": "auto_switch",
+      "result": "ok",
+      "elapsed_ms": "3069"
+    }
+  ],
+  "artifacts": [],
+  "logs": {},
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-12T14:44:11.584000+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 0
+      },
+      "detail": ""
+    },
+    "during": {
+      "captured_at": "2026-11-12T14:44:27.277433+00:00",
+      "readyz_status": 0,
+      "readyz_ok": false,
+      "healthz_ok": false,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 7.0,
+        "msg_publish_errors_total": 0
+      },
+      "detail": ""
+    },
+    "after": {
+      "captured_at": "2026-11-12T14:44:36.554884+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 0
+      },
+      "detail": ""
+    }
+  },
+  "criteria": [
+    {
+      "key": "auto_switch_within_budget",
+      "expect": "杀 leader 后不执行人工切主，预算内 DB leader 自动变化（自动选举生效）",
+      "actual": "3.1s 内自动换主（未人工切主，预算 30s）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "committed_not_lost",
+      "expect": "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费",
+      "actual": "3 个分区恢复后位点均越过已提交尾部",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "no_double_write",
+      "expect": "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033",
+      "actual": "3 个分区位点连续且无重复",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "client_refresh",
+      "expect": "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功",
+      "actual": "触发 350033 改投 13 次后写入成功",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "leader_switched",
+      "expect": "DB leader 变为目标且 epoch 递增",
+      "actual": "1 个分区换主（显式切主 0 项）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "old_leader_fenced",
+      "expect": "旧 leader 重启后为 follower，对旧 leader 写被拒或由客户端改投",
+      "actual": "1 个分区 epoch 提升，旧 leader 写入被围栏",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "isr_shrink_rejoin",
+      "expect": "故障期 ISR 收缩，重启后重新入 ISR",
+      "actual": "ISR 9→7→9（收缩后回升）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rto_within_budget",
+      "expect": "注入开始到恢复判据通过的时长在预算内",
+      "actual": "恢复后探针全部就绪",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "isr_verified",
+      "expect": "切主结果 isr_verified=true（force 降级不计通过）",
+      "actual": "自动选举后 ISR 回升到 9",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 193422,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练环境（test）：独立容器 / 派生库前缀 / 独立 Redis 库，不写生产数据，无需备份"
+  },
+  "rerun": {
+    "reason": "02-10 去掉预热后的复跑（第 2 次，含目录登记修复）"
+  },
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "演练使用独立项目 / 容器名 / 派生库前缀，不等同生产链路",
+    "未启用网关别名，客户端经本机隧道直连实例",
+    "未做真盘故障注入（归 07-8）"
+  ],
+  "issues": [],
+  "leftovers": []
+}
