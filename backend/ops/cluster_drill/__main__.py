@@ -368,20 +368,21 @@ async def _leader_changed(
     return False
 
 
-async def _probe_publish_fails(drill: chain.Publisher) -> bool:
-    """注入期探针：写一条消息，被拒（分区 / 租约到期）即 True。
+async def _probe_publish_rejected(drill: chain.SingleShotPublisher, base: str) -> bool:
+    """注入期探针：**只写被隔离的那个实例**，被拒（非 leader / 租约到期）即 True。
+
+    不能用「集群任意节点能写」来判：隔离旧 leader 后新 leader 仍可写，集群级发布
+    一定成功，永远观测不到拒绝（真机踩坑）。只有定向打被隔离实例才能验证租约围栏。
 
     Args:
         drill: 采集客户端。
+        base: 被隔离实例的地址。
 
     Returns:
         bool: 写入是否被拒。
     """
-    try:
-        await drill.publish("probe", b"during-probe")
-    except chain.ChainError:
-        return True
-    return False
+    result = await drill.publish_at(base, "probe")
+    return int(cast("int", result.get("status", 0) or 0)) != 200
 
 
 async def run_scenario(
@@ -493,6 +494,10 @@ async def run_scenario(
         before_state = await _topic_state(dsn, topic_id)
         isr_before = _isr_total(before)
         target = _container_for(config, before_state.leader_of(0))
+        target_index = next(
+            (index for index, name in enumerate(config.container_names) if name == target),
+            0,
+        )
         steps = inject.steps_for(scenario.name, config, leader=target)
         switch = runner.docker_exec(
             config.container_names[0],
@@ -506,7 +511,7 @@ async def run_scenario(
         inject.apply_steps(runner, steps, phase="inject")
         await asyncio.sleep(_INJECTION_SETTLE_SEC)
         during = await _samples(client, "during", topic_id=topic_id)
-        probe_failed_during = await _probe_publish_fails(drill)
+        probe_failed_during = await _probe_publish_rejected(drill, bases[target_index])
         old_leader = before_state.leader_of(0)
         switched_during = await _leader_changed(drill, bases, old_leader, before_state.partitions[0].partition_no)
         inject.apply_steps(runner, steps, phase="recover")

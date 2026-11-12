@@ -814,22 +814,22 @@ def test_topic_state_helpers(tmp_path: Path) -> None:
     assert cluster_main._isr_total(samples) == 3  # pyright: ignore[reportPrivateUsage]
     assert cluster_main._isr_total(ConcurrentStableList()) == 0  # pyright: ignore[reportPrivateUsage]
 
-    class _FailingClient:
-        async def publish(self, key: str, payload: bytes, *, acks: str = "all") -> chain_mod.PublishRecord:
-            del key, payload, acks
-            raise chain_mod.ChainError("x")
+    class _RejectingClient:
+        async def publish_at(self, base: str, key: str) -> ConcurrentStableFrozenDict[str, object]:
+            del base, key
+            return ConcurrentStableFrozenDict({"status": 503, "leader": "msg-2"})
 
-    class _OkClient:
-        async def publish(self, key: str, payload: bytes, *, acks: str = "all") -> chain_mod.PublishRecord:
-            del key, payload, acks
-            return chain_mod.PublishRecord(partition=0, offset=1, message_id="m")
+    class _AcceptingClient:
+        async def publish_at(self, base: str, key: str) -> ConcurrentStableFrozenDict[str, object]:
+            del base, key
+            return ConcurrentStableFrozenDict({"status": 200, "leader": ""})
 
     assert (
-        asyncio.run(cluster_main._probe_publish_fails(_FailingClient()))  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        asyncio.run(cluster_main._probe_publish_rejected(_RejectingClient(), "http://a"))  # pyright: ignore[reportPrivateUsage, reportArgumentType]
         is True
     )
     assert (
-        asyncio.run(cluster_main._probe_publish_fails(_OkClient()))  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+        asyncio.run(cluster_main._probe_publish_rejected(_AcceptingClient(), "http://a"))  # pyright: ignore[reportPrivateUsage, reportArgumentType]
         is False
     )
 
