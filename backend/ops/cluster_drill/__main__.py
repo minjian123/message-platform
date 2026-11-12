@@ -664,13 +664,14 @@ def run_cleanup(config: ClusterDrillConfig, *, keep_data: bool = False) -> int:
     down = runner.run(cluster_cleanup.cleanup_down_script(config))
     if not down.ok:
         failures.add(f"停容器 / 删卷：{down.stderr.strip()[:200]}")
-    runner.run(inject.remove_network_script(config))
     if not keep_data:
         purge = runner.run(cluster_cleanup.purge_data_script(config, network=inject.network_name(config)))
         if purge.code == cluster_cleanup.PURGE_SKIPPED_EXIT:
             print(f"[SKIP] 数据清理跳过：{purge.stderr.strip()[:200]}")
         elif not purge.ok:
             failures.add(f"数据库 / Redis：{purge.stderr.strip()[:200]}")
+    # 自建网络要等数据清理跑完再删：一次性容器要接同一个网络才能访问 DB / Redis。
+    runner.run(inject.remove_network_script(config))
     paths = runner.run(cluster_cleanup.remove_paths_script(config))
     if not paths.ok:
         failures.add(f"宿主目录：{paths.stderr.strip()[:200]}")
