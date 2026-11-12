@@ -41,7 +41,7 @@ from ops.cluster_drill.remote import (
     compose_up_script,
     restart_script,
 )
-from ops.cluster_drill.report import write_cluster_report
+from ops.cluster_drill.report import backup_evidence, cluster_config_digest, write_cluster_report
 from ops.drill.env import TARGET_DOCKER, load_scenarios, validate_scenarios
 from ops.drill.model import (
     Criterion,
@@ -610,6 +610,8 @@ def _report(
         leftovers=ConcurrentStableFrozenList(),
         commands=ConcurrentStableFrozenList(ConcurrentStableFrozenDict(item) for item in outcome.commands),
         rerun=ConcurrentStableFrozenDict({"reason": rerun_reason} if rerun_reason else {}),
+        config_digest=cluster_config_digest(config, scenario.name),
+        backup=backup_evidence(config),
     )
 
 

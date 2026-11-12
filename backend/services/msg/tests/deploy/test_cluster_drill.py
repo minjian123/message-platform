@@ -1005,3 +1005,18 @@ def test_isr_total_of_takes_per_partition_max() -> None:
     assert cluster_main._isr_total_of(payloads, topic_id=1) == 9  # pyright: ignore[reportPrivateUsage]
     assert cluster_main._isr_total_of(payloads, topic_id=2) == 3  # pyright: ignore[reportPrivateUsage]
     assert cluster_main._isr_total_of(payloads, topic_id=3) == 0  # pyright: ignore[reportPrivateUsage]
+
+
+def test_cluster_config_digest_and_backup(tmp_path: Path) -> None:
+    """配置摘要随场景变化且稳定；备份证据在隔离环境记 `not_applicable` 且理由非空。"""
+    from ops.cluster_drill.report import backup_evidence, cluster_config_digest
+
+    config = _config(tmp_path)
+    first = cluster_config_digest(config, "replica_crash")
+    assert first == cluster_config_digest(config, "replica_crash")
+    assert first != cluster_config_digest(config, "split_brain_multi")
+    assert len(first) == 64
+
+    backup = backup_evidence(config)
+    assert backup["mode"] == "not_applicable"
+    assert backup["reason"]
