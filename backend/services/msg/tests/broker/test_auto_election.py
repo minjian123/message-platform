@@ -710,6 +710,18 @@ async def test_stagger_when_earlier_replica_reachable() -> None:
     assert tracker.next_attempt_at == ctx.clock() + 200
 
 
+async def test_claims_when_all_earlier_replicas_unreachable() -> None:
+    """前序有多个副本但都不可达：逐个探活后由本节点发起（不因前序不可达而卡死）。"""
+    # replicas=(a,b,c,d)、死的是 b → 顺序 [c, d, a]；a 前有 c、d，均不可达 → a 发起
+    ctx = _Ctx(
+        store=_Store(partition=_partition(replicas=("a", "b", "c", "d"), leader="b")),
+        control=_Control(reachable=("a",)),
+    )
+    await ctx.rounds(3)
+    assert list(ctx.control.probes) == ["b", "b", "b", "c", "d"]
+    assert len(ctx.switch.requests) == 1
+
+
 async def test_claims_when_first_reachable() -> None:
     """本节点是死 leader 的直接后继：直接发起。"""
     ctx = _Ctx(store=_Store(partition=_partition(replicas=("b", "a", "c"))))

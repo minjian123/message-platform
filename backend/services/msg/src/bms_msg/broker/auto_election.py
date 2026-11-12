@@ -592,12 +592,10 @@ class AutoElectionWatchdog(BaseFrameworkObject):
         Returns:
             bool: 轮到本节点发起时为 True。
         """
+        # 调用方已保证「本节点在副本集内且不是 leader」（`_claim_if_eligible` 的前置判断），
+        # 故本节点必在序内——用下标切片取「前序副本」，不留永不成立的成员查找分支。
         order = _successor_order(partition)
-        ahead: ConcurrentStableList[str] = ConcurrentStableList()
-        for member in order:
-            if member == self._node_id:
-                break
-            ahead.add(member)
+        ahead = order[: order.index(self._node_id)]
         for rank, member in enumerate(ahead):
             if await self._probe(node_id=member, key=key):
                 tracker.next_attempt_at = self._clock() + (rank + 1) * self._config.stagger_ms
