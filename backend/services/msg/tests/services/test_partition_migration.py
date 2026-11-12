@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -13,6 +14,7 @@ from bms_core.core.concurrent import (
 
 from bms_msg.broker.election import LeaderSwitchError, SwitchResult
 from bms_msg.broker.replication import ReplicationSnapshot
+from bms_msg.models.partition_migration import PLAN_STATUS_SUCCEEDED
 from bms_msg.services.migration_ledger import InMemoryMigrationLedger
 from bms_msg.services.partition_assignment import PartitionAssigner, PartitionAssignmentConfig
 from bms_msg.services.partition_migration import (
@@ -945,3 +947,26 @@ async def test_replace_shrink_write_failure_marks_failed() -> None:
 
     assert result.failed == 1
     assert "assignment_conflict" in result.items[0].error
+
+
+async def test_apply_item_ignores_terminal_status() -> None:
+    """单行执行：终态行（既非 running 也非 catching_up）直接跳过，不写拓扑。"""
+    topology = FakeTopology(ConcurrentStableList([_partition(replicas=("msg-1",))]))
+    control = FakeControl(
+        ConcurrentStableDict(
+            {
+                "msg-1": _snapshot(node="msg-1", leo=10, hw=10, isr=("msg-1", "msg-2")),
+                "msg-2": _snapshot(node="msg-2", leo=10, isr=("msg-1", "msg-2")),
+            }
+        )
+    )
+    service = _service(topology, control, FakeSwitch())
+    planned = await service.plan(nodes=NODES, factor=2, min_insync=1)
+    items = await service._ledger.load(planned.plan_id)  # pyright: ignore[reportPrivateUsage]
+    terminal = replace(items[0], status=PLAN_STATUS_SUCCEEDED)
+
+    await service._apply_item(  # pyright: ignore[reportPrivateUsage]
+        terminal, operator="t", reason="r", budget_ms=1_000, allow_force=False
+    )
+
+    assert len(topology.writes) == 0

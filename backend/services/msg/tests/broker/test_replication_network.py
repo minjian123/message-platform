@@ -455,6 +455,16 @@ async def test_fetch_protocol_version_mismatch() -> None:
     assert exc.value.reason == "protocol"
     await transport.aclose()
 
+    bare = HttpReplicaTransport(
+        config=_config(),
+        tokens=ServiceTokenProvider(cast("object", FakeIssuer())),  # type: ignore[arg-type]
+        metrics=None,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=dict(body.items()))),
+    )
+    with pytest.raises(ReplicaUnavailableError):
+        await bare.fetch(_fetch_request())
+    await bare.aclose()
+
 
 async def test_control_snapshot_failures_and_protocol() -> None:
     """控制通道：传输失败 / 非 2xx / 协议未知都返回 None。"""
