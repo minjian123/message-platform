@@ -110,6 +110,9 @@ _LOGGER = get_logger("bms_msg.replication")
 _FAILURE_LOG_WINDOW_MS = 60_000
 """拉取失败日志的抑制窗口（毫秒）：同一分区 60s 内只记一条。"""
 
+_REFRESH_LOAD_TIMEOUT_SEC = 2.0
+"""单分区拓扑刷新超时（秒）：DB 卡死时放弃本轮，等下一轮重试，避免后台循环永久停摆。"""
+
 ReplicaKey = tuple[int, int]
 """分区键：`(topic_id, partition_no)`。"""
 
@@ -1636,6 +1639,11 @@ class ReplicationCoordinator(ReplicationView):
         """强制重载已挂载分区的拓扑（epoch / leader / switch_state），并收敛本节点角色。
 
         只对已挂载分区查库；加载失败不更新确认时间（超租约后自动拒写）。
+
+        **逐分区加超时与异常隔离**：网络分区期间 DB 连接可能永久卡在 connect 上
+        （实测：leader 断网恢复后租约 7 分钟不续期，只能重启进程）。这里给每次拉取套
+        上限，卡住只放弃该分区本轮、下轮重试，循环本身永不停摆；断网期间租约按预期
+        过期（保留 fencing 语义），恢复后 1s 内自动续约。
         """
         if not self._config.enabled or self._topology_loader is None:
             return
@@ -1644,10 +1652,26 @@ class ReplicationCoordinator(ReplicationView):
             state = self._partitions.get(key)
             if state is None:  # pragma: no cover - 键快照与读取之间的并发卸载窗口
                 continue
-            topology = await self._load_topology(topic_id=key[0], partition_no=key[1], force=True)
-            if topology is None:
-                continue
-            await self._observe_topology(state, topology)
+            try:
+                async with asyncio.timeout(_REFRESH_LOAD_TIMEOUT_SEC):
+                    topology = await self._load_topology(topic_id=key[0], partition_no=key[1], force=True)
+                    if topology is None:
+                        continue
+                    await self._observe_topology(state, topology)
+            except TimeoutError:
+                _LOGGER.warning(
+                    "msg_replication_topology_failed",
+                    topic_id=key[0],
+                    partition=key[1],
+                    reason="TimeoutError",
+                )
+            except Exception as exc:  # pragma: no cover - 加载器内部已兜底，这里防单分区拖垮整轮
+                _LOGGER.warning(
+                    "msg_replication_topology_failed",
+                    topic_id=key[0],
+                    partition=key[1],
+                    reason=type(exc).__name__,
+                )
 
     async def _observe_topology(self, state: PartitionReplication, topology: PartitionTopology) -> None:
         """把一次拓扑加载结果合入运行态（切换状态、epoch、leader 与租约确认）。

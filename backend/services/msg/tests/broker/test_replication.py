@@ -1169,3 +1169,44 @@ async def test_promotion_by_refresh_rebuilds_follower_progress() -> None:
     )
     assert result.leader_epoch == 1
     assert "n1" in state.followers
+
+
+async def test_refresh_once_timeout_keeps_loop_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """网卡断连恢复后 DB 拉取卡死：单分区超时被放弃，下一轮照常续约（02-8 真机缺陷回归）。
+
+    实测现象：leader 断网恢复后 `_refresh_loop` 卡死在一次无上限的 DB 拉取上，
+    `leadership_confirmed_at` 7 分钟不更新，写请求永久 `350033 lease_expired`，
+    只能重启进程恢复。这里用「首次永久挂起、后续正常」的加载器复现并验证自愈。
+    """
+
+    class _StuckFirst(_Topology):
+        def __init__(self, *, nodes: tuple[str, ...]) -> None:
+            super().__init__(nodes=nodes, min_insync=2, epoch=1)
+            self.calls = 0
+
+        async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology:
+            self.calls += 1
+            if self.calls == 2:
+                await asyncio.Event().wait()
+            return await super().load(topic_id=topic_id, partition_no=partition_no, force=force)
+
+    monkeypatch.setattr("bms_msg.broker.replication._REFRESH_LOAD_TIMEOUT_SEC", 0.05)
+    topology = _StuckFirst(nodes=("n1", "n2"))
+    clock = _Clock()
+    coordinator = ReplicationCoordinator(
+        config=_config(node_id="n1"),
+        store=InMemoryMessageStore(),
+        topology_loader=cast("ReplicaTopologyLoader", topology),
+        clock=clock,
+    )
+    state = await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    confirmed = state.leadership_confirmed_at
+
+    await coordinator.refresh_once()
+    assert topology.calls == 2
+    assert state.leadership_confirmed_at == confirmed
+
+    clock.advance(1_000)
+    await coordinator.refresh_once()
+    assert topology.calls == 3
+    assert state.leadership_confirmed_at == confirmed + 1_000
