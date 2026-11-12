@@ -43,7 +43,7 @@ from ops.cluster_drill.inject import (
     steps_for,
     stop_command,
 )
-from ops.cluster_drill.probe import ProbeClient, metric_value, parse_metrics, parse_readyz
+from ops.cluster_drill.probe import MetricSample, ProbeClient, metric_value, parse_metrics, parse_readyz
 from ops.cluster_drill.remote import (
     RemoteResult,
     RemoteRunner,
@@ -884,14 +884,16 @@ def test_container_for_and_wait_isr(tmp_path: Path) -> None:
     assert cluster_main._container_for(config, "") == "msg-drill-1"  # pyright: ignore[reportPrivateUsage]
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text="msg_isr_size 6\n")
+        return httpx.Response(
+            200, text='msg_isr_size{topic_id="1",partition="0"} 3\nmsg_isr_size{topic_id="1",partition="1"} 3\n'
+        )
 
     client = ProbeClient(
         ConcurrentStableList(("http://a", "http://b", "http://c")),
         transport=httpx.MockTransport(handler),
     )
     try:
-        assert asyncio.run(cluster_main._wait_isr(client, 6, timeout_sec=1)) is True  # pyright: ignore[reportPrivateUsage]
+        assert asyncio.run(cluster_main._wait_isr(client, 6, topic_id=1, timeout_sec=1)) is True  # pyright: ignore[reportPrivateUsage]
     finally:
         asyncio.run(client.aclose())
 
@@ -976,3 +978,30 @@ def test_restart_script_covers_all_instances(tmp_path: Path) -> None:
     assert script.startswith("docker restart ")
     for name in ("msg-drill-1", "msg-drill-2", "msg-drill-3"):
         assert name in script
+
+
+def test_isr_total_of_takes_per_partition_max() -> None:
+    """ISR 合计按分区取各节点最大值：降主节点残留的旧行不得把总数拉低或拉高。
+
+    实测：恢复后各 leader 都报 ISR=3，但降主节点的旧行仍在（值 1），
+    直接三实例求和在 5 附近徘徊，`_wait_isr` 永远等不到 9。
+    """
+
+    def sample(topic: str, partition: str, value: float) -> MetricSample:
+        return MetricSample(
+            name="msg_isr_size",
+            labels=ConcurrentStableFrozenDict({"topic_id": topic, "partition": partition}),
+            value=value,
+        )
+
+    payloads: ConcurrentStableList[ConcurrentStableList[MetricSample]] = ConcurrentStableList(
+        (
+            ConcurrentStableList((sample("1", "0", 1.0), sample("1", "1", 3.0), sample("1", "2", 1.0))),
+            ConcurrentStableList((sample("1", "0", 1.0), sample("1", "1", 1.0), sample("1", "2", 3.0))),
+            ConcurrentStableList((sample("1", "0", 3.0), sample("1", "1", 1.0), sample("1", "2", 1.0))),
+            ConcurrentStableList((sample("2", "0", 3.0),)),
+        )
+    )
+    assert cluster_main._isr_total_of(payloads, topic_id=1) == 9  # pyright: ignore[reportPrivateUsage]
+    assert cluster_main._isr_total_of(payloads, topic_id=2) == 3  # pyright: ignore[reportPrivateUsage]
+    assert cluster_main._isr_total_of(payloads, topic_id=3) == 0  # pyright: ignore[reportPrivateUsage]

@@ -32,7 +32,7 @@ from ops.cluster_drill.config import (
     reject_production,
     require_confirmation,
 )
-from ops.cluster_drill.probe import ProbeClient, metric_value
+from ops.cluster_drill.probe import MetricSample, ProbeClient, metric_value
 from ops.cluster_drill.remote import (
     RemoteRunner,
     SshTunnel,
@@ -174,31 +174,38 @@ async def _wait_ready(client: ProbeClient, timeout_sec: int) -> bool:
     return False
 
 
-async def _samples(client: ProbeClient, phase: str) -> ConcurrentStableList[PhaseSample]:
-    """采集一段观测（三实例聚合：任一就绪即 ok，指标取首实例合计）。
+async def _samples(client: ProbeClient, phase: str, *, topic_id: int) -> ConcurrentStableList[PhaseSample]:
+    """采集一段观测（三实例各一条；ISR 取「按分区各节点最大值的合计」）。
 
     Args:
         client: 探针。
         phase: 阶段（`before` / `during` / `after`）。
+        topic_id: 主题主键（ISR 只统计本主题的分区）。
 
     Returns:
         ConcurrentStableList[PhaseSample]: 三实例样本。
     """
-    result: ConcurrentStableList[PhaseSample] = ConcurrentStableList()
+    readings: ConcurrentStableList[tuple[bool, int, ConcurrentStableList[MetricSample]]] = ConcurrentStableList()
+    payloads: ConcurrentStableList[ConcurrentStableList[MetricSample]] = ConcurrentStableList()
     for index in range(3):
         reading = await client.readyz(index)
         metrics = await client.metrics(index)
+        payloads.add(metrics)
+        readings.add((reading.ok, reading.status, metrics))
+    isr_total = _isr_total_of(payloads, topic_id=topic_id)
+    result: ConcurrentStableList[PhaseSample] = ConcurrentStableList()
+    for ready, status, metrics in readings:
         result.add(
             PhaseSample(
                 phase=phase,
                 captured_at=datetime.now(UTC).isoformat(),
-                readyz_status=reading.status,
-                readyz_ok=reading.ok,
-                healthz_ok=reading.status == 200,
+                readyz_status=status,
+                readyz_ok=ready,
+                healthz_ok=status == 200,
                 metrics=ConcurrentStableFrozenDict(
                     {
                         "msg_leader_switch_total": metric_value(metrics, "msg_leader_switch_total"),
-                        "msg_isr_size": metric_value(metrics, "msg_isr_size"),
+                        "msg_isr_size": float(isr_total),
                         "msg_publish_errors_total": metric_value(metrics, "msg_publish_errors_total"),
                     }
                 ),
@@ -206,6 +213,31 @@ async def _samples(client: ProbeClient, phase: str) -> ConcurrentStableList[Phas
             )
         )
     return result
+
+
+def _isr_total_of(payloads: ConcurrentStableList[ConcurrentStableList[MetricSample]], *, topic_id: int) -> int:
+    """按分区取各节点自报的 ISR 最大值再求和（同主题的多节点读数去重）。
+
+    节点降主后其旧分区的 `msg_isr_size` 行仍留在指标里且不再更新，直接把三实例所有行
+    相加会在 3~27 之间乱跳，无法判断「ISR 是否回升」；只有当前 leader 的行是最新的。
+
+    Args:
+        payloads: 三实例的原始指标读数。
+        topic_id: 主题主键。
+
+    Returns:
+        int: ISR 合计（分区数 × 每分区最大 ISR）。
+    """
+    best: ConcurrentStableDict[tuple[str, str], float] = ConcurrentStableDict()
+    for samples in payloads:
+        for sample in samples:
+            if sample.name != "msg_isr_size":
+                continue
+            if sample.labels.get("topic_id") != str(topic_id):
+                continue
+            key = (sample.labels.get("topic_id", ""), sample.labels.get("partition", ""))
+            best.set(key, max(best.get(key, 0.0), sample.value))
+    return int(sum(best.values()))
 
 
 def _isr_total(samples: ConcurrentStableList[PhaseSample]) -> int:
@@ -240,7 +272,13 @@ async def _topic_state(dsn: str, topic_id: int) -> chain.TopicState:
 
 
 async def _ensure_isr(
-    client: ProbeClient, drill: chain.DrillClient, target: int, *, rounds: int = 3, round_timeout_sec: float = 60
+    client: ProbeClient,
+    drill: chain.DrillClient,
+    target: int,
+    *,
+    topic_id: int,
+    rounds: int = 3,
+    round_timeout_sec: float = 60,
 ) -> bool:
     """预热 + 等 ISR 收敛到期望合计（落后副本需被写请求「碰一次」才建拉取态）。
 
@@ -248,6 +286,7 @@ async def _ensure_isr(
         client: 探针。
         drill: 采集客户端（提供预热）。
         target: 期望 ISR 合计（3 实例 × 分区数）。
+        topic_id: 主题主键。
         rounds: 预热轮数上限。
         round_timeout_sec: 每轮等待上限（秒）。
 
@@ -260,17 +299,18 @@ async def _ensure_isr(
             await drill.publish("warm-commit", b"warmup-commit")
         except chain.ChainError:
             continue
-        if await _wait_isr(client, target, timeout_sec=round_timeout_sec):
+        if await _wait_isr(client, target, topic_id=topic_id, timeout_sec=round_timeout_sec):
             return True
     return False
 
 
-async def _wait_isr(client: ProbeClient, target: int, *, timeout_sec: float = 180) -> bool:
+async def _wait_isr(client: ProbeClient, target: int, *, topic_id: int, timeout_sec: float = 180) -> bool:
     """等 ISR 回升到目标值（副本重入判据依赖 `lag_time_max_ms` 窗口）。
 
     Args:
         client: 探针。
-        target: 目标 ISR 合计（取三实例最大值）。
+        target: 目标 ISR 合计（3 实例 × 分区数）。
+        topic_id: 主题主键。
         timeout_sec: 超时（秒）。
 
     Returns:
@@ -278,10 +318,10 @@ async def _wait_isr(client: ProbeClient, target: int, *, timeout_sec: float = 18
     """
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        total = 0
+        payloads: ConcurrentStableList[ConcurrentStableList[MetricSample]] = ConcurrentStableList()
         for index in range(3):
-            total = max(total, int(metric_value(await client.metrics(index), "msg_isr_size")))
-        if total >= target:
+            payloads.add(await client.metrics(index))
+        if _isr_total_of(payloads, topic_id=topic_id) >= target:
             return True
         await asyncio.sleep(3)
     return False
@@ -446,10 +486,10 @@ async def run_scenario(
             )
         state = await _topic_state(dsn, topic_id)
         expected_isr = _EXPECTED_ISR_PER_PARTITION * len(state.partitions)
-        if not await _ensure_isr(client, drill, expected_isr):
+        if not await _ensure_isr(client, drill, expected_isr, topic_id=topic_id):
             raise ClusterDrillError(f"cluster-drill.guard ISR 未在预算内收敛到 {expected_isr}")
         records = await drill.publish_batch(int(publish_count), warm=False)
-        before = await _samples(client, "before")
+        before = await _samples(client, "before", topic_id=topic_id)
         before_state = await _topic_state(dsn, topic_id)
         isr_before = _isr_total(before)
         target = _container_for(config, before_state.leader_of(0))
@@ -465,7 +505,7 @@ async def run_scenario(
             switch_items = chain.parse_switch_result(chain.last_json_object(switch.stdout or ""))
         inject.apply_steps(runner, steps, phase="inject")
         await asyncio.sleep(_INJECTION_SETTLE_SEC)
-        during = await _samples(client, "during")
+        during = await _samples(client, "during", topic_id=topic_id)
         probe_failed_during = await _probe_publish_fails(drill)
         old_leader = before_state.leader_of(0)
         switched_during = await _leader_changed(drill, bases, old_leader, before_state.partitions[0].partition_no)
@@ -473,14 +513,14 @@ async def run_scenario(
         recovery_ok = await _wait_ready(client, config.ready_timeout_sec)
         if recovery_ok:
             await drill.warmup()
-            recovery_ok = await _wait_isr(client, isr_before)
+            recovery_ok = await _wait_isr(client, isr_before, topic_id=topic_id)
         if not recovery_ok:
             outcome.issues.add(
                 ConcurrentStableDict(
                     {"step": "recover", "reason": "恢复后未在预算内全部就绪（含 ISR 回升）", "owner": "02-8"}
                 )
             )
-        after = await _samples(client, "after")
+        after = await _samples(client, "after", topic_id=topic_id)
         after_state = await _topic_state(dsn, topic_id)
         demoted = False
         if old_leader:
