@@ -8,12 +8,12 @@
 - 命名空间校验用 `CurrentTenant.ensure_namespace()`，与消费守卫共用同一判定（`350010`）。
 """
 
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Annotated, cast
 
 from bms_core.core.config import get_settings
 from bms_core.core.exceptions import ConfigError
-from bms_core.db.session import DbSession, get_platform_uow
+from bms_core.db.session import DbSession, get_platform_uow, get_platform_write_db
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.extension.base import RESOURCE_ACL_KEY
 from bms_core.resource_scope.acl import get_resource_acl
@@ -129,6 +129,7 @@ __all__ = [
     "get_topic_acl_admin_service",
     "get_topic_acl_cache",
     "get_topic_acl_service",
+    "get_topic_acl_session",
     "get_topic_cache",
     "get_uow_factory",
     "get_usage_counter",
@@ -862,27 +863,50 @@ def _resource_acl_declared(request: Request) -> bool:
     return any(getattr(item, "plugin_key", None) == RESOURCE_ACL_KEY for item in requirements)
 
 
-def get_topic_acl_service(
-    request: Request,
-    uow: Annotated[UnitOfWork, Depends(get_platform_uow)],
-) -> TopicAclService:
-    """取主题 ACL 守卫（请求级仓储 + 进程级快照缓存 + 端口读取器）。
+async def get_topic_acl_session(request: Request) -> AsyncGenerator[DbSession | None]:
+    """取 ACL 守卫专用会话（**与请求业务会话隔离**；未声明扩展点时为 None）。
+
+    ACL 守卫读完规则后必须结束自己的读事务，否则调用方服务再 `uow.begin()` 会撞「事务已开启」。
+    历史做法是 `release=uow.rollback`，但 `rollback` 会**过期请求会话内全部 ORM 实例**，
+    端点「先查行 → 再判权 → 再读行属性」就会触发同步懒加载并抛 `MissingGreenlet`
+    （同源破面见 05-3-1 详细设计 §2）。故守卫改用本依赖提供的独立平台库会话：
+
+    - 独立会话读取规则，永不触碰请求业务会话，业务 ORM 行不会因判权而过期；
+    - 未声明 `resource_acl` 扩展点（最小测试 app / 无 ACL 模型产品）时不建第二会话，
+      守卫照常短路，测试装配零改动。
 
     Args:
         request: 当前请求。
-        uow: 平台库工作单元。
+
+    Yields:
+        DbSession | None: 平台库会话（未声明扩展点为 None）。
+    """
+    if not _resource_acl_declared(request):
+        yield None
+        return
+    async for session in get_platform_write_db(request):
+        yield session
+
+
+def get_topic_acl_service(
+    request: Request,
+    session: Annotated[DbSession | None, Depends(get_topic_acl_session)],
+) -> TopicAclService:
+    """取主题 ACL 守卫（专用会话仓储 + 进程级快照缓存 + 端口读取器）。
+
+    Args:
+        request: 当前请求。
+        session: ACL 专用平台库会话（None = 未声明扩展点，守卫恒短路）。
 
     Returns:
         TopicAclService: ACL 守卫。
     """
-    session = cast("DbSession", uow.session)
     acl_provider = (lambda: get_resource_acl(request)) if _resource_acl_declared(request) else (lambda: None)
     return TopicAclService(
-        rules=MsgTopicAclRepository(session),
-        scopes=MsgTopicAclScopeRepository(session),
+        rules=None if session is None else MsgTopicAclRepository(session),
+        scopes=None if session is None else MsgTopicAclScopeRepository(session),
         cache=get_topic_acl_cache(request),
         acl_provider=acl_provider,
-        release=uow.rollback,
     )
 
 

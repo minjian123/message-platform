@@ -6,6 +6,9 @@
   版本戳自增、提交后缓存失效与强审计；
 - **失败口径**：ACL 读取失败 → `ServiceUnavailableError` 10007 / 503（fail-closed）；
   端口拒绝 → `ResourceAccessDeniedError` 82013 → 产品码 350027 / 403。
+- **会话隔离（05-3-1）**：守卫的仓储绑定专用平台库会话（`get_topic_acl_session`），
+  读完即随依赖关闭；**不释放请求业务会话**——旧口径 `release=uow.rollback` 会过期业务 ORM 实例，
+  使「先查行 → 再判权 → 再读行」的端点在判权后抛 `MissingGreenlet`。
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from datetime import datetime
 
 from bms_core.core.concurrent import ConcurrentStableFrozenList, ConcurrentStableList, ConcurrentStableSet
 from bms_core.core.context import get_current_user_id
-from bms_core.core.exceptions import ParamError, ResourceAccessDeniedError, ServiceUnavailableError
+from bms_core.core.exceptions import ConfigError, ParamError, ResourceAccessDeniedError, ServiceUnavailableError
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.resource_scope.acl import AclContext, BaseResourceAcl, current_roles
 from sqlalchemy.exc import IntegrityError
@@ -116,13 +119,18 @@ class AclChange:
 
 
 class TopicAclService:
-    """ACL 异步守卫：装载快照 + 调端口（判定单点在 `MsgTopicAcl`）。"""
+    """ACL 异步守卫：装载快照 + 调端口（判定单点在 `MsgTopicAcl`）。
+
+    **会话隔离（05-3-1）**：`rules` / `scopes` 必须绑定**守卫专用会话**（`get_topic_acl_session`），
+    不得复用请求业务会话——`rollback` 会过期业务会话内全部 ORM 实例，导致端点判权后读行属性时
+    抛 `MissingGreenlet`。`release` 仅为单测直连旧路径保留（生产装配不再传）。
+    """
 
     def __init__(
         self,
         *,
-        rules: MsgTopicAclRepository,
-        scopes: MsgTopicAclScopeRepository,
+        rules: MsgTopicAclRepository | None = None,
+        scopes: MsgTopicAclScopeRepository | None = None,
         cache: TopicAclCache,
         acl_provider: Callable[[], BaseResourceAcl | None],
         user_id_provider: Callable[[], int | None] = get_current_user_id,
@@ -132,14 +140,13 @@ class TopicAclService:
         """初始化。
 
         Args:
-            rules: 规则仓储（请求级会话）。
-            scopes: 版本戳仓储（同会话）。
+            rules: 规则仓储（**守卫专用会话**；None = 未声明扩展点，守卫恒短路）。
+            scopes: 版本戳仓储（同上）。
             cache: 进程级快照缓存。
             acl_provider: `resource_acl` 端口读取器（未声明返回 None）。
             user_id_provider: 操作人读取器。
             roles_provider: 角色主键读取器。
-            release: 读取后释放会话事务（避免后续 `uow.begin()` 撞「事务已开启」）；
-                None 表示不释放（单元测试直连）。
+            release: 读取后释放会话事务（仅单测直连时用；生产装配为 None，会话由依赖生命周期关闭）。
         """
         self._rules = rules
         self._scopes = scopes
@@ -220,8 +227,11 @@ class TopicAclService:
             AclSnapshot: 启用规则快照（空快照 = 默认允许）。
 
         Raises:
+            ConfigError: 守卫未绑定仓储（未声明扩展点却走到装载，属装配缺陷）。
             ServiceUnavailableError: 版本 / 规则读取失败（10007 / 503）。
         """
+        if self._rules is None or self._scopes is None:
+            raise ConfigError("主题 ACL 守卫缺少仓储（未声明 resource_acl 扩展点或装配缺陷）")
         try:
             version = await self._scopes.get_scope_version(tenant_id=tenant_id, namespace=namespace)
             cached = self._cache.get(tenant_id, namespace)
@@ -234,7 +244,11 @@ class TopicAclService:
             raise ServiceUnavailableError("主题 ACL 规则不可用") from exc
 
     async def _release_session(self) -> None:
-        """释放读取产生的会话事务（未注入 release 时为空操作）。"""
+        """释放读取产生的会话事务（仅单测直连路径；生产装配未注入 → 空操作）。
+
+        生产装配把守卫绑定在**专用会话**上、由依赖生命周期关闭，本方法不再被调用；
+        保留它是为了让直连仓储的单测仍能显式控制事务边界。
+        """
         if self._release is not None:
             await self._release()
 
