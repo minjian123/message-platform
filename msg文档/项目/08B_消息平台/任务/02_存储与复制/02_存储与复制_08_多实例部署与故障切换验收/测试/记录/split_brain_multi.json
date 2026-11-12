@@ -1,0 +1,155 @@
+{
+  "schema_version": 2,
+  "task": "07-6-1",
+  "scenario": "split_brain_multi",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "docker",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4",
+    "config_digest": "0cb59143ba1704e35bd1840e9751e63735dc7b1032b420c4a87a69926be38c3e"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-12T07:01:31.249631+00:00",
+  "finished_at": "2026-11-12T07:03:51.829956+00:00",
+  "injection": {
+    "method": "split_brain",
+    "detail": "双主认知期间只有一侧可写；旧 leader 恢复后降 follower 并截断发散尾部",
+    "artifact": "msg-drill"
+  },
+  "commands": [
+    {
+      "step": "reset_cluster",
+      "result": "ok"
+    },
+    {
+      "step": "network_attach",
+      "result": "ok"
+    },
+    {
+      "step": "create_topic",
+      "result": "ok",
+      "topic": "drill.replica.probe.split_brain_multi.1794466891",
+      "topic_id": "58774015324585831628170058488872960"
+    },
+    {
+      "step": "failover",
+      "result": "ok"
+    }
+  ],
+  "artifacts": [],
+  "logs": {},
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-12T07:02:23.637366+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 21.0
+      },
+      "detail": ""
+    },
+    "during": {
+      "captured_at": "2026-11-12T07:02:57.849389+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 5.0,
+        "msg_publish_errors_total": 21.0
+      },
+      "detail": ""
+    },
+    "after": {
+      "captured_at": "2026-11-12T07:03:21.906847+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 42.0
+      },
+      "detail": ""
+    }
+  },
+  "criteria": [
+    {
+      "key": "committed_not_lost",
+      "expect": "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费",
+      "actual": "3 个分区恢复后位点均越过已提交尾部",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "no_double_write",
+      "expect": "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033",
+      "actual": "3 个分区位点连续且无重复",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "client_refresh",
+      "expect": "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功",
+      "actual": "触发 350033 改投 18 次后写入成功",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "stale_leader_rejected",
+      "expect": "隔离侧超租约后不再接受写，恢复后降 follower",
+      "actual": "隔离期旧 leader 写入被拒（未双写）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rejoin_demotes",
+      "expect": "旧 leader 重新加入后为 follower；本地 LEO > 新 leader 时截断发散尾部",
+      "actual": "3 个分区重入后仍由新 leader 持有",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rto_within_budget",
+      "expect": "注入开始到恢复判据通过的时长在预算内",
+      "actual": "恢复后探针全部就绪",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "isr_verified",
+      "expect": "切主结果 isr_verified=true（force 降级不计通过）",
+      "actual": "显式切主时 ISR 验证通过",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 140575,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练环境（test）：独立容器 / 派生库前缀 / 独立 Redis 库，不写生产数据，无需备份"
+  },
+  "rerun": {},
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "演练使用独立项目 / 容器名 / 派生库前缀，不等同生产链路",
+    "未启用网关别名，客户端经本机隧道直连实例",
+    "未做真盘故障注入（归 07-8）"
+  ],
+  "issues": [],
+  "leftovers": []
+}

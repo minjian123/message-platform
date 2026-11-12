@@ -1,0 +1,162 @@
+{
+  "schema_version": 2,
+  "task": "07-6-1",
+  "scenario": "network_partition_multi",
+  "mode": "run",
+  "environment": {
+    "env": "test",
+    "target": "docker",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.4",
+    "config_digest": "f722b324392027409868641d2a2f7e594eecff0ba1ed9bb12d3c5d8b7c119b3f"
+  },
+  "service": {
+    "name": "msg",
+    "version": "0.1.0",
+    "contract_version": "0.1.0"
+  },
+  "started_at": "2026-11-12T06:59:10.572157+00:00",
+  "finished_at": "2026-11-12T07:01:30.571131+00:00",
+  "injection": {
+    "method": "network_disconnect",
+    "detail": "断网 leader 租约后拒写；切主不双写；ISR 收缩后重入；客户端可刷新",
+    "artifact": "msg-drill"
+  },
+  "commands": [
+    {
+      "step": "reset_cluster",
+      "result": "ok"
+    },
+    {
+      "step": "network_attach",
+      "result": "ok"
+    },
+    {
+      "step": "create_topic",
+      "result": "ok",
+      "topic": "drill.replica.probe.network_partition_multi.1794466750",
+      "topic_id": "58773972847863730551891457929641984"
+    },
+    {
+      "step": "failover",
+      "result": "ok"
+    }
+  ],
+  "artifacts": [],
+  "logs": {},
+  "samples": {
+    "before": {
+      "captured_at": "2026-11-12T07:00:02.763424+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 18.0
+      },
+      "detail": ""
+    },
+    "during": {
+      "captured_at": "2026-11-12T07:00:37.326090+00:00",
+      "readyz_status": 0,
+      "readyz_ok": false,
+      "healthz_ok": false,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 3.0,
+        "msg_publish_errors_total": 0
+      },
+      "detail": ""
+    },
+    "after": {
+      "captured_at": "2026-11-12T07:01:01.860639+00:00",
+      "readyz_status": 200,
+      "readyz_ok": true,
+      "healthz_ok": true,
+      "metrics": {
+        "msg_leader_switch_total": 0,
+        "msg_isr_size": 9.0,
+        "msg_publish_errors_total": 39.0
+      },
+      "detail": ""
+    }
+  },
+  "criteria": [
+    {
+      "key": "committed_not_lost",
+      "expect": "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费",
+      "actual": "3 个分区恢复后位点均越过已提交尾部",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "no_double_write",
+      "expect": "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033",
+      "actual": "3 个分区位点连续且无重复",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "client_refresh",
+      "expect": "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功",
+      "actual": "触发 350033 改投 21 次后写入成功",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "leader_lease_expired",
+      "expect": "断网 leader 在租约后写返回 350033 lease_expired",
+      "actual": "分区期写入被拒（leader 租约到期，未产生假确认）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "follower_isr_shrink",
+      "expect": "断网 follower 被踢出 ISR，恢复后重新入 ISR",
+      "actual": "ISR 9→3（副本被踢出）",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "retained_tail_documented",
+      "expect": "旧 leader 不可达时切换结果为 retained，retained_tail 与风险可读且 isr_verified=true",
+      "actual": "恢复后位点连续，无未提交尾部",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "rto_within_budget",
+      "expect": "注入开始到恢复判据通过的时长在预算内",
+      "actual": "恢复后探针全部就绪",
+      "result": "ok",
+      "passed": true
+    },
+    {
+      "key": "isr_verified",
+      "expect": "切主结果 isr_verified=true（force 降级不计通过）",
+      "actual": "显式切主时 ISR 验证通过",
+      "result": "ok",
+      "passed": true
+    }
+  ],
+  "rto_ms": 139995,
+  "data_loss": false,
+  "backup": {
+    "mode": "not_applicable",
+    "reason": "隔离演练环境（test）：独立容器 / 派生库前缀 / 独立 Redis 库，不写生产数据，无需备份"
+  },
+  "rerun": {},
+  "conclusion": {
+    "result": "通过",
+    "exit_code": 0,
+    "reasons": []
+  },
+  "deviations": [
+    "演练使用独立项目 / 容器名 / 派生库前缀，不等同生产链路",
+    "未启用网关别名，客户端经本机隧道直连实例",
+    "未做真盘故障注入（归 07-8）"
+  ],
+  "issues": [],
+  "leftovers": []
+}
