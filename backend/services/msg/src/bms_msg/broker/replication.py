@@ -140,6 +140,16 @@ class ReplicationError(RuntimeError):
 class ReplicaUnavailableError(ReplicationError):
     """目标副本不可达（节点未登记 / leader 未就绪）：follower 退避重试。"""
 
+    def __init__(self, message: str, *, reason: str = "unavailable") -> None:
+        """初始化。
+
+        Args:
+            message: 错误说明。
+            reason: 内部端点错误原因（`not_leader` / `switching` / `unavailable`；网络层据此映射）。
+        """
+        super().__init__(message)
+        self.reason = reason
+
 
 class StaleLeaderError(ReplicationError):
     """epoch 校验失败：对端 leader 任期低于本地已知任期（旧 leader 的数据一律拒绝）。"""
@@ -394,6 +404,9 @@ class ReplicationSnapshot(BaseValueObject):
 
     last_known_at: float = 0.0
     """最后已知运行态的采集时刻（单调毫秒；02-5 判是否新鲜）。"""
+
+    start_offset: int = 0
+    """本节点日志可读起点（02-8 迁移预检判能否追平；缺省 0 = 兼容既有构造）。"""
 
 
 @dataclass(frozen=True)
@@ -1202,6 +1215,7 @@ class ReplicationCoordinator(ReplicationView):
                 else (member for member in state.replicas if member in state.last_known_isr)
             ),
             last_known_at=state.last_known_at,
+            start_offset=await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no),
         )
 
     async def on_append(self, *, topic_id: int, partition_no: int, offset: int) -> None:
@@ -1252,9 +1266,9 @@ class ReplicationCoordinator(ReplicationView):
         """
         state = await self.attach_partition(topic_id=request.topic_id, partition_no=request.partition_no)
         if state.role is not ReplicaRole.LEADER:
-            raise ReplicaUnavailableError(f"本节点不是分区 leader：{state.key}")
+            raise ReplicaUnavailableError(f"本节点不是分区 leader：{state.key}", reason="not_leader")
         if state.switch_state != SWITCH_STATE_IDLE:
-            raise ReplicaUnavailableError(f"分区处于切换窗口，暂停副本拉取：{state.key}")
+            raise ReplicaUnavailableError(f"分区处于切换窗口，暂停副本拉取：{state.key}", reason="switching")
         if request.epoch > state.epoch:
             raise StaleLeaderError(f"leader 任期过期：本地 {state.epoch} < 请求方 {request.epoch}（分区 {state.key}）")
         if request.follower not in state.followers:

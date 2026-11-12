@@ -195,3 +195,42 @@ async def test_expand_unknown_topic_returns_350001(service: TopicService, curren
     """增分区时主题不存在：`350001`。"""
     with pytest.raises(MsgTopicNotFoundError):
         await service.expand_partitions(tenant=current_tenant, topic_id=999999, partition_count=2)
+
+
+async def test_create_and_expand_write_assignments(
+    db_session: AsyncSession,
+    current_tenant: CurrentTenant,
+    make_request: MakeRequest,
+) -> None:
+    """02-8：装配分配器后建主题 / 增分区写副本集与 leader；旧分区不重写。"""
+    from bms_core.core.concurrent import ConcurrentStableFrozenList
+    from bms_core.db.unit_of_work import DbUnitOfWork
+
+    from bms_msg.services.partition_assignment import (
+        PartitionAssigner,
+        PartitionAssignmentConfig,
+    )
+
+    session = cast("DbSession", db_session)
+    assigner = PartitionAssigner(
+        PartitionAssignmentConfig(
+            enabled=True,
+            node_id="msg-1",
+            nodes=ConcurrentStableFrozenList(("msg-1", "msg-2", "msg-3")),
+            replication_factor=2,
+            min_insync_replicas=1,
+        )
+    )
+    service = TopicService(
+        TopicRepository(session), PartitionRepository(session), DbUnitOfWork(session), assigner=assigner
+    )
+    topic = await service.create_topic(tenant=current_tenant, request=make_request(partition_count=2))
+    _detail, partitions = await service.get_topic(tenant=current_tenant, topic_id=int(topic.id))
+    first = [list(partition.replicas) for partition in partitions]
+    assert all(len(replicas) == 2 for replicas in first)
+    assert {partition.leader for partition in partitions} == {first[0][0], first[1][0]}
+
+    _topic, expanded = await service.expand_partitions(tenant=current_tenant, topic_id=int(topic.id), partition_count=4)
+    assert [partition.partition_no for partition in expanded] == [0, 1, 2, 3]
+    assert [list(partition.replicas)[:1] for partition in expanded[:2]] == [[first[0][0]], [first[1][0]]]
+    assert all(len(partition.replicas) == 2 for partition in expanded[2:])

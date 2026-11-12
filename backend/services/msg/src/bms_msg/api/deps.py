@@ -48,6 +48,7 @@ from bms_msg.repositories.topic import TopicRepository
 from bms_msg.repositories.topic_acl import MsgTopicAclRepository, MsgTopicAclScopeRepository
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.rpc.registry import RpcRegistry
+from bms_msg.services.partition_assignment import PartitionAssigner
 from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.tenant.resolve import frame_tenant, management_tenant
@@ -77,6 +78,7 @@ __all__ = [
     "OffsetPurgerDep",
     "OffsetResetterDep",
     "OffsetStoreDep",
+    "PartitionAssignerDep",
     "PartitionDirectoryDep",
     "QuotaCacheDep",
     "QuotaServiceDep",
@@ -564,6 +566,22 @@ PartitionDirectoryDep = Annotated[PartitionDirectory, Depends(get_partition_dire
 
 TopicCleanupDep = Annotated[TopicCleanupService, Depends(get_topic_cleanup_service)]
 """路由参数写法：`cleanup: TopicCleanupDep`（删主题清理编排）。"""
+
+
+def get_partition_assigner(request: Request) -> PartitionAssigner | None:
+    """取分区分配器（02-8；最小测试 app 未装配时为 None）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        PartitionAssigner | None: 分配器；未装配为 None（不写副本集，兼容既有单测）。
+    """
+    return cast("PartitionAssigner | None", getattr(request.app.state, "partition_assigner", None))
+
+
+PartitionAssignerDep = Annotated[PartitionAssigner | None, Depends(get_partition_assigner)]
+"""路由参数写法：ssigner: PartitionAssignerDep（None 表示不写副本集）。"""
 
 
 def get_storage_gate(request: Request) -> StorageGate | None:

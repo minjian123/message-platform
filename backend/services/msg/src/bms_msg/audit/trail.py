@@ -49,6 +49,7 @@ __all__ = [
     "OFFSET_REF_TYPE",
     "OFFSET_RESET_ACTION",
     "QUOTA_UPDATE_ACTION",
+    "REBALANCE_ACTION",
     "REPLAY_ACTION",
     "REPLAY_REF_TYPE",
     "TOPIC_CREATE_ACTION",
@@ -125,6 +126,9 @@ ACCESS_DENIED_ACTION = "msg:access.denied"
 LEADER_SWITCH_ACTION = "msg:partition.failover"
 """分区切主（配置变更 / 敏感操作，强审计；02-5）。"""
 
+REBALANCE_ACTION = "msg:partition.rebalance"
+"""分区副本重平衡 / 迁移（配置变更 / 敏感操作，强审计；02-8）。"""
+
 ACCESS_AUDIT_CLASS = "access"
 """访问异常类别键（非基座缺省类别，由 msg 自定义）。"""
 
@@ -158,6 +162,7 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         DLQ_ARCHIVE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="死信归档"),
         MESSAGE_DELETE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="删消息"),
         LEADER_SWITCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区切主"),
+        REBALANCE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区重平衡"),
         ACCESS_DENIED_ACTION: AuditClass(ACCESS_AUDIT_CLASS, strong=False, label="访问异常"),
     }
 )

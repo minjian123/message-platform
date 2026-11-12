@@ -235,3 +235,34 @@ def test_register_registry_resolves_by_plugin_name(tmp_path: Path) -> None:
         assert isinstance(resolved, MsgHealthCheckRegistry)
     finally:
         plugins.reset()
+
+
+async def test_internal_replication_check_and_factory(tmp_path: Path) -> None:
+    """02-8：内部服务检查项按存活判定；多实例时注册且顺序在 database 之前。"""
+    from bms_msg.health import InternalReplicationUnavailableError, MsgInternalReplicationCheck
+
+    alive = True
+    check = MsgInternalReplicationCheck(alive=lambda: alive)
+    assert check.key == "msg_internal_replication"
+    assert "内部复制" in check.describe()
+    assert (await check.check()).ok is True
+    alive = False
+    with pytest.raises(InternalReplicationUnavailableError):
+        await check.check()
+
+    root = tmp_path / "data"
+    app = FastAPI()
+    app.state.storage_watermark = _watermark(root, _Usage(100))
+    app.state.file_store = FileMessageStore(directory=PartitionDirectory(root=root), fsync_mode="os")
+    app.state.engine_registry = cast("EngineRegistry", SimpleNamespace())
+    app.state.internal_required = True
+    app.state.internal_server = SimpleNamespace(alive=True)
+    registry = MsgHealthCheckRegistryFactory(Settings(), app).create()
+    keys = [item.key for item in registry.checks()]
+    assert "msg_internal_replication" in keys
+
+    app.state.internal_server = None
+    registry = MsgHealthCheckRegistryFactory(Settings(), app).create()
+    check_item = next(item for item in registry.checks() if item.key == "msg_internal_replication")
+    with pytest.raises(InternalReplicationUnavailableError):
+        await check_item.check()

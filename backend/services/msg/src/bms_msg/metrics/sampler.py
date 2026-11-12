@@ -30,6 +30,7 @@ from bms_msg.metrics.traffic import get_traffic_metrics
 from bms_msg.models.dead_letter import DLQ_ACTIVE_STATUSES
 from bms_msg.models.replay import MsgReplayTask
 from bms_msg.repositories.topic import TopicRepository
+from bms_msg.services.migration_ledger import MigrationLedger
 
 __all__ = ["MetricsSampler"]
 
@@ -50,6 +51,7 @@ class MetricsSampler(BaseFrameworkObject):
         uow_factory: UowFactory,
         watermark: StorageWatermark,
         tenant_lookup: TenantLookup,
+        migration: MigrationLedger | None = None,
         interval_seconds: float = METRICS_SAMPLE_INTERVAL_SECONDS,
     ) -> None:
         """初始化。
@@ -63,6 +65,7 @@ class MetricsSampler(BaseFrameworkObject):
             uow_factory: 平台库工作单元工厂（主题反查 / 重放任务状态统计）。
             watermark: 存储水位（强制刷新）。
             tenant_lookup: 租户源（主键 → 编码）。
+            migration: 迁移台账（02-8；None 表示不采样迁移指标）。
             interval_seconds: 采样周期（默认 15s）。
         """
         self._snapshots = snapshots
@@ -73,6 +76,7 @@ class MetricsSampler(BaseFrameworkObject):
         self._uow_factory = uow_factory
         self._watermark = watermark
         self._tenant_lookup = tenant_lookup
+        self._migration = migration
         self._interval = interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._tenant_codes: ConcurrentStableDict[str, str] = ConcurrentStableDict()
@@ -137,6 +141,18 @@ class MetricsSampler(BaseFrameworkObject):
             self._sample_ingress()
         except Exception as exc:
             _LOGGER.warning("msg_metrics_sample_failed", dimension="ingress", error=type(exc).__name__)
+        try:
+            await self._sample_migration()
+        except Exception as exc:
+            _LOGGER.warning("msg_metrics_sample_failed", dimension="migration", error=type(exc).__name__)
+
+    async def _sample_migration(self) -> None:
+        """按状态汇总迁移台账并写快照（02-8；未装配台账时跳过）。"""
+        if self._migration is None:
+            return
+        status = await self._migration.count_by_status()
+        remaining = await self._migration.sum_remaining()
+        self._snapshots.replace(migration=status, migration_remaining=remaining)
 
     def _sample_ingress(self) -> None:
         """差分累计入口消息数，写入本周期速率快照（06-1-1 概览「入口吞吐」）。

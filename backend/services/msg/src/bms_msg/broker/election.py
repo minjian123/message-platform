@@ -42,6 +42,7 @@ __all__ = [
     "InProcessLeaderControlTransport",
     "LeaderControlTransport",
     "LeaderSwitchError",
+    "LeaderSwitchMetrics",
     "LeaderSwitchService",
     "LeaderSwitchStore",
     "SwitchApplyCommand",
@@ -55,6 +56,15 @@ __all__ = [
 ]
 
 _LOGGER = get_logger("bms_msg.election")
+
+LEADER_SWITCH_METRIC_NAME = "msg_leader_switch_total"
+"""切主结果计数器名（02-8；标签 `result`）。"""
+
+LEADER_SWITCH_RESULT_DEGRADED = "degraded"
+"""切主结果：`isr_verified=false`（force 或无法验证 ISR），不计通过。"""
+
+LEADER_SWITCH_RESULT_FAILED = "failed"
+"""切主结果：预检 / CAS / 控制通道失败。"""
 
 SWITCH_STATE_IDLE = "idle"
 """切换状态：空闲（可写）。"""
@@ -414,6 +424,30 @@ class InProcessLeaderControlTransport(LeaderControlTransport):
         return await coordinator.apply_switch(command)
 
 
+class LeaderSwitchMetrics(BaseFrameworkObject):
+    """切主结果计数（02-8）：`result` 为闭集标签，不按分区 / 节点分键（防基数爆炸）。"""
+
+    def __init__(self) -> None:
+        """初始化（全零）。"""
+        self._counts: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+
+    def record(self, result: str) -> None:
+        """记一次切主结果。
+
+        Args:
+            result: `truncated` / `retained` / `noop` / `degraded` / `failed`。
+        """
+        self._counts.set(result, self._counts.get(result, 0) + 1)
+
+    def snapshot(self) -> ConcurrentStableDict[str, int]:
+        """取当前计数快照（插入序）。
+
+        Returns:
+            ConcurrentStableDict[str, int]: 结果 → 次数。
+        """
+        return ConcurrentStableDict(self._counts)
+
+
 class LeaderSwitchService(BaseFrameworkObject):
     """手动切换领域服务（单分区 / 主题批量；首期只被内部流程调用）。"""
 
@@ -426,6 +460,7 @@ class LeaderSwitchService(BaseFrameworkObject):
         audit: AuditEmitter,
         grace_ms: int,
         follower_fresh_ms: int,
+        metrics: LeaderSwitchMetrics | None = None,
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
@@ -438,6 +473,7 @@ class LeaderSwitchService(BaseFrameworkObject):
             audit: 审计出口（begin fail-closed；finished fail-open）。
             grace_ms: 停写宽限（毫秒）。
             follower_fresh_ms: 最后已知 ISR 的新鲜窗口（毫秒；通常取 `lag_time_max_ms`）。
+            metrics: 切主结果计数（可选；None 表示不采集）。
             clock: 单调毫秒时钟（用例注入）。
             sleep: 异步等待函数（用例注入零等待）。
         """
@@ -447,6 +483,7 @@ class LeaderSwitchService(BaseFrameworkObject):
         self._audit = audit
         self._grace_ms = int(grace_ms)
         self._follower_fresh_ms = int(follower_fresh_ms)
+        self._metrics = metrics
         self._clock = clock if clock is not None else _monotonic_ms
         self._sleep = sleep if sleep is not None else asyncio.sleep
 
@@ -462,6 +499,14 @@ class LeaderSwitchService(BaseFrameworkObject):
         Raises:
             LeaderSwitchError: 预检 / CAS / 控制通道失败（`reason` 区分）。
         """
+        try:
+            return await self._switch_partition(request)
+        except Exception:
+            if self._metrics is not None:
+                self._metrics.record(LEADER_SWITCH_RESULT_FAILED)
+            raise
+
+    async def _switch_partition(self, request: SwitchPartitionRequest) -> SwitchResult:
         started = self._clock()
         state = await self._store.load_partition(topic_id=request.topic_id, partition_no=request.partition_no)
         if state is None:
@@ -740,6 +785,8 @@ class LeaderSwitchService(BaseFrameworkObject):
             result_text = SWITCH_RESULT_RETAINED
         else:
             result_text = SWITCH_RESULT_NOOP
+        if self._metrics is not None:
+            self._metrics.record(result_text if isr_verified else LEADER_SWITCH_RESULT_DEGRADED)
         effective_watermark = watermark if watermark is not None else applied.to_leo
         finished = await self._store.finish_switch(
             topic_id=state.topic_id,
@@ -867,6 +914,8 @@ class LeaderSwitchService(BaseFrameworkObject):
         Returns:
             SwitchResult: no-op 结果。
         """
+        if self._metrics is not None:
+            self._metrics.record(SWITCH_RESULT_NOOP)
         return SwitchResult(
             topic_id=state.topic_id,
             partition_no=state.partition_no,

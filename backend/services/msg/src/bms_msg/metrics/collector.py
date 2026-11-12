@@ -19,6 +19,8 @@ from prometheus_client.metrics_core import (
     Metric,
 )
 
+from bms_msg.broker.election import LeaderSwitchMetrics
+from bms_msg.broker.network import TransportErrorMetrics
 from bms_msg.broker.replication import ReplicationMetrics, ReplicationMetricsSnapshot
 from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.metrics.names import LATENCY_BUCKETS_MS, METRIC_HELP
@@ -58,6 +60,8 @@ class MsgMetricsCollector:
         lifecycle: SnapshotSource,
         purge: SnapshotSource,
         replication: ReplicationMetrics | None = None,
+        leader_switch: LeaderSwitchMetrics | None = None,
+        transport_errors: TransportErrorMetrics | None = None,
     ) -> None:
         """初始化。
 
@@ -71,6 +75,8 @@ class MsgMetricsCollector:
             lifecycle: 租户生命周期计数。
             purge: 租户到期清理计数。
             replication: 复制指标采集点（02-4；None 表示复制组件未装配）。
+            leader_switch: 切主结果计数（02-8；None 表示未装配）。
+            transport_errors: 传输错误计数（02-8；None 表示未装配）。
         """
         self._service = service
         self._traffic = traffic
@@ -81,6 +87,8 @@ class MsgMetricsCollector:
         self._lifecycle = lifecycle
         self._purge = purge
         self._replication = replication
+        self._leader_switch = leader_switch
+        self._transport_errors = transport_errors
 
     def describe(self) -> ConcurrentStableList[Metric]:
         """产出指标名集合（注册期冲突检测；只读、无副作用）。
@@ -108,6 +116,9 @@ class MsgMetricsCollector:
         self._collect_counters(families, name="msg_tenant_purge_total", source=self._purge)
         families.add(self._isr_family())
         self._collect_replication(families)
+        self._collect_leader_switch(families)
+        self._collect_transport_errors(families)
+        self._collect_migration(families)
         return families
 
     def _collect_traffic(self, families: ConcurrentStableList[Metric]) -> None:
@@ -317,6 +328,51 @@ class MsgMetricsCollector:
             lag.add_metric(labels, float(row.lag_records))
         families.add(isr)
         families.add(lag)
+
+    def _collect_leader_switch(self, families: ConcurrentStableList[Metric]) -> None:
+        """切主结果计数（02-8；按 `result` 闭集打标签）。"""
+        if self._leader_switch is None:
+            return
+        family = CounterMetricFamily(
+            "msg_leader_switch_total", _help("msg_leader_switch_total"), labels=["service", "result"]
+        )
+        for result, value in self._leader_switch.snapshot().items():
+            family.add_metric([self._service, str(result)], float(value))
+        if family.samples:
+            families.add(family)
+
+    def _collect_transport_errors(self, families: ConcurrentStableList[Metric]) -> None:
+        """传输失败计数（02-8；键为 operation|reason）。"""
+        if self._transport_errors is None:
+            return
+        family = CounterMetricFamily(
+            "msg_replication_transport_errors_total",
+            _help("msg_replication_transport_errors_total"),
+            labels=["service", "operation", "reason"],
+        )
+        for key, value in self._transport_errors.snapshot().items():
+            operation, _, reason = str(key).partition("|")
+            family.add_metric([self._service, operation, reason], float(value))
+        if family.samples:
+            families.add(family)
+
+    def _collect_migration(self, families: ConcurrentStableList[Metric]) -> None:
+        """迁移台账状态与剩余条数（02-8；采样器写快照）。"""
+        snapshot = self._snapshots.snapshot
+        if snapshot.migration:
+            family = GaugeMetricFamily(
+                "msg_partition_migration_tasks", _help("msg_partition_migration_tasks"), labels=["service", "status"]
+            )
+            for status, value in snapshot.migration.items():
+                family.add_metric([self._service, str(status)], float(value))
+            families.add(family)
+        remaining = GaugeMetricFamily(
+            "msg_partition_migration_remaining_records",
+            _help("msg_partition_migration_remaining_records"),
+            labels=["service"],
+        )
+        remaining.add_metric([self._service], float(snapshot.migration_remaining))
+        families.add(remaining)
 
     def _decode_key(self, key: str) -> ConcurrentStableList[str]:
         """把事件点采集器的内部键还原成业务标签值列表。

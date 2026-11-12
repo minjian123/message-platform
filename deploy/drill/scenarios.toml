@@ -1,12 +1,12 @@
-# 六类故障演练场景单源（任务 07-6-1 起；07-6-2 升 schema 2）
+# 九类故障演练场景单源（07-6 六类本机 + 02-8 三类多实例；07-6-2 升 schema 2）
 #
 # 唯一事实源：注入方式、观测指标、判据（原文 / 记录键 / 硬或可降级 / 证据要求）、恢复预算
 # 都只在这里写一次。`python -m ops.drill plan` 渲染场景表，`criteria` 渲染判据表，
 # `checklist` 渲染发版前检查清单；用例断言三处与文档逐行一致，防漂移。
 #
-# 校验规则（`ops.drill.env.validate_scenarios`）：六类必须齐备、`inject` 落在闭集、
+# 校验规则（`ops.drill.env.validate_scenarios`）：本机六类 + 多实例三类必须齐备、`inject` 落在闭集、
 # `observe` 非空、判据键场景内唯一、`severity` 落在 hard / degradable、`record_keys`
-# 非空且不与 `aux_record_keys` 相交、`name` 唯一、`schema_version = 2`。
+# 非空且不与 `aux_record_keys` 相交、`name` 唯一、`target` 为 local / docker、`schema_version = 2`。
 
 schema_version = 2
 
@@ -253,3 +253,197 @@ expect = "三段分别取证：入口拒绝、重投有界转死信、主动拒�
   record_keys = ["nack_queryable"]
   severity = "degradable"
   evidence = "管理面响应"
+
+# ---------------------------------------------------------------------------
+# 多实例容器演练（02-8；`target = "docker"`，由 `python -m ops.cluster_drill` 执行）
+# 共用判据（已提交不丢 / 无双写 / 客户端刷新）在三类场景各登记一次：记录按场景独立，
+# 判据键在场景内唯一即可。
+# ---------------------------------------------------------------------------
+
+[[scenarios]]
+name = "replica_crash"
+title = "副本进程崩溃（SIGKILL / SIGTERM 两档）"
+target = "docker"
+inject = "container_kill"
+observe = ["msg_leader_switch_total", "msg_isr_size", "msg_publish_errors_total"]
+recovery_budget_ms = 300000
+expect = "杀 leader 容器后切主成功；已提交不丢；旧 leader 重启降 follower 并重入 ISR"
+
+  [[scenarios.criterion]]
+  key = "committed_not_lost"
+  text = "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费"
+  record_keys = ["committed_not_lost"]
+  severity = "hard"
+  evidence = "记录 criteria[] + before/after 分区快照与消息 ID 集合"
+
+  [[scenarios.criterion]]
+  key = "no_double_write"
+  text = "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033"
+  record_keys = ["no_double_write"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 旧 / 新 leader 写响应"
+
+  [[scenarios.criterion]]
+  key = "client_refresh"
+  text = "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功"
+  record_keys = ["client_refresh"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 客户端刷新轨迹"
+
+  [[scenarios.criterion]]
+  key = "leader_switched"
+  text = "DB leader 变为目标且 epoch 递增"
+  record_keys = ["leader_switched"]
+  severity = "hard"
+  evidence = "记录 criteria[] + `ops.failover status` 输出"
+
+  [[scenarios.criterion]]
+  key = "old_leader_fenced"
+  text = "旧 leader 重启后为 follower，对旧 leader 写被拒或由客户端改投"
+  record_keys = ["old_leader_fenced"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 旧 leader 快照与写响应"
+
+  [[scenarios.criterion]]
+  key = "isr_shrink_rejoin"
+  text = "故障期 ISR 收缩，重启后重新入 ISR"
+  record_keys = ["isr_shrink_rejoin"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 三段 ISR 快照"
+
+  [[scenarios.criterion]]
+  key = "rto_within_budget"
+  text = "注入开始到恢复判据通过的时长在预算内"
+  record_keys = ["rto_within_budget"]
+  severity = "degradable"
+  evidence = "记录 rto_ms 与 recovery_budget_ms"
+
+  [[scenarios.criterion]]
+  key = "isr_verified"
+  text = "切主结果 isr_verified=true（force 降级不计通过）"
+  record_keys = ["isr_verified"]
+  severity = "degradable"
+  evidence = "记录 criteria[] + 切换结果字段"
+
+[[scenarios]]
+name = "network_partition_multi"
+title = "多实例网络分区（整容器断网）"
+target = "docker"
+inject = "network_disconnect"
+observe = ["msg_publish_errors_total", "msg_isr_size", "msg_replication_lag_records"]
+recovery_budget_ms = 300000
+expect = "断网 leader 租约后拒写；切主不双写；ISR 收缩后重入；客户端可刷新"
+
+  [[scenarios.criterion]]
+  key = "committed_not_lost"
+  text = "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费"
+  record_keys = ["committed_not_lost"]
+  severity = "hard"
+  evidence = "记录 criteria[] + before/after 分区快照与消息 ID 集合"
+
+  [[scenarios.criterion]]
+  key = "no_double_write"
+  text = "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033"
+  record_keys = ["no_double_write"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 旧 / 新 leader 写响应"
+
+  [[scenarios.criterion]]
+  key = "client_refresh"
+  text = "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功"
+  record_keys = ["client_refresh"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 客户端刷新轨迹"
+
+  [[scenarios.criterion]]
+  key = "leader_lease_expired"
+  text = "断网 leader 在租约后写返回 350033 lease_expired"
+  record_keys = ["leader_lease_expired"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 写响应 data.reason"
+
+  [[scenarios.criterion]]
+  key = "follower_isr_shrink"
+  text = "断网 follower 被踢出 ISR，恢复后重新入 ISR"
+  record_keys = ["follower_isr_shrink"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 三段 ISR 快照"
+
+  [[scenarios.criterion]]
+  key = "retained_tail_documented"
+  text = "旧 leader 不可达时切换结果为 retained，retained_tail 与风险可读且 isr_verified=true"
+  record_keys = ["retained_tail_documented"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 切换结果与风险说明"
+
+  [[scenarios.criterion]]
+  key = "rto_within_budget"
+  text = "注入开始到恢复判据通过的时长在预算内"
+  record_keys = ["rto_within_budget"]
+  severity = "degradable"
+  evidence = "记录 rto_ms 与 recovery_budget_ms"
+
+  [[scenarios.criterion]]
+  key = "isr_verified"
+  text = "切主结果 isr_verified=true（force 降级不计通过）"
+  record_keys = ["isr_verified"]
+  severity = "degradable"
+  evidence = "记录 criteria[] + 切换结果字段"
+
+[[scenarios]]
+name = "split_brain_multi"
+title = "多实例脑裂（隔离旧 leader 但进程存活）"
+target = "docker"
+inject = "split_brain"
+observe = ["msg_leader_switch_total", "msg_isr_size", "msg_publish_errors_total"]
+recovery_budget_ms = 300000
+expect = "双主认知期间只有一侧可写；旧 leader 恢复后降 follower 并截断发散尾部"
+
+  [[scenarios.criterion]]
+  key = "committed_not_lost"
+  text = "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费"
+  record_keys = ["committed_not_lost"]
+  severity = "hard"
+  evidence = "记录 criteria[] + before/after 分区快照与消息 ID 集合"
+
+  [[scenarios.criterion]]
+  key = "no_double_write"
+  text = "任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033"
+  record_keys = ["no_double_write"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 旧 / 新 leader 写响应"
+
+  [[scenarios.criterion]]
+  key = "client_refresh"
+  text = "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功"
+  record_keys = ["client_refresh"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 客户端刷新轨迹"
+
+  [[scenarios.criterion]]
+  key = "stale_leader_rejected"
+  text = "隔离侧超租约后不再接受写，恢复后降 follower"
+  record_keys = ["stale_leader_rejected"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 隔离侧写响应与快照"
+
+  [[scenarios.criterion]]
+  key = "rejoin_demotes"
+  text = "旧 leader 重新加入后为 follower；本地 LEO > 新 leader 时截断发散尾部"
+  record_keys = ["rejoin_demotes"]
+  severity = "hard"
+  evidence = "记录 criteria[] + 重连后角色与 LEO"
+
+  [[scenarios.criterion]]
+  key = "rto_within_budget"
+  text = "注入开始到恢复判据通过的时长在预算内"
+  record_keys = ["rto_within_budget"]
+  severity = "degradable"
+  evidence = "记录 rto_ms 与 recovery_budget_ms"
+
+  [[scenarios.criterion]]
+  key = "isr_verified"
+  text = "切主结果 isr_verified=true（force 降级不计通过）"
+  record_keys = ["isr_verified"]
+  severity = "degradable"
+  evidence = "记录 criteria[] + 切换结果字段"

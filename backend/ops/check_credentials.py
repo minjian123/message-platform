@@ -33,6 +33,7 @@ from bms_core.core.concurrent import (
     ConcurrentStableDict,
     ConcurrentStableFrozenList,
     ConcurrentStableList,
+    ConcurrentStableSet,
 )
 from bms_core.core.config import load_settings
 from bms_core.core.exceptions import ConfigError
@@ -371,6 +372,22 @@ def parse_compose_items(text: str) -> ConcurrentStableDict[str, tuple[str, int]]
     return items
 
 
+_COMPOSE_REFERENCE = re.compile(r"\$\{([A-Z0-9_]+)")
+"""编排里任意位置的 .env 插值键（含 olumes 的宿主目录键）。"""
+
+
+def compose_referenced_keys(text: str) -> ConcurrentStableSet[str]:
+    """取编排全文引用的模板键（宿主插值键可能只出现在 olumes，不在 x-service-env）。
+
+    Args:
+        text: 编排全文。
+
+    Returns:
+        ConcurrentStableSet[str]: 被引用的键。
+    """
+    return ConcurrentStableSet(_COMPOSE_REFERENCE.findall(text))
+
+
 def _read_or_empty(root: Path, rel: Path) -> str:
     """读文本文件；缺失返回空串（由对应检查项报文，不抛异常打断其余项）。
 
@@ -489,11 +506,11 @@ def check_key_coverage(root: Path) -> ConcurrentStableList[str]:
     """
     found: ConcurrentStableList[str] = ConcurrentStableList()
     template = parse_env_items(_read_or_empty(root, TEMPLATE_RELATIVE))
-    compose = parse_compose_items(_read_or_empty(root, COMPOSE_RELATIVE))
+    referenced = compose_referenced_keys(_read_or_empty(root, COMPOSE_RELATIVE))
     for key in template:
         if key in HOST_ONLY_KEYS:
             continue
-        if key not in compose:
+        if key not in referenced:
             found.add(f"{COMPOSE_RELATIVE.as_posix()}: 未覆盖模板键 {key}")
     return found
 

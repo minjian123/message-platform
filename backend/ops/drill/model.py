@@ -118,6 +118,9 @@ class DrillScenario:
     expect: str
     """期望观察（记录与文档用）。"""
 
+    target: str = "local"
+    """执行目标（local = 本机隔离实例；docker = 多实例容器演练）。"""
+
 
 @dataclass(frozen=True)
 class ScenarioSet:

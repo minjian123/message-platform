@@ -94,3 +94,24 @@ python -m ops.drill release --confirm release    # 六类全跑 → 记录 → �
 - **不要**在共享环境跳过 `--confirm`：二次确认是硬前置，不是可选参数。
 - **不要**手改 `RELEASE_CHECKLIST.md`：它是生成物，`checklist --check` 会判漂移。
 - **不要**把真实地址与凭据写进仓库：演练键位只从进程环境变量读取。
+
+## 9. 多实例场景（02-8）
+
+`scenarios.toml` 新增可选 `target`（缺省 `local`）：本机六类保持 `target=local`；多实例三类为
+`replica_crash` / `network_partition_multi` / `split_brain_multi`（`target=docker`），由
+`python -m ops.cluster_drill` 在开发服务器上执行（独立项目 / 容器名 / 卷 / 演练库前缀）。
+
+```bash
+cd backend
+python -m ops.cluster_drill plan
+python -m ops.cluster_drill run replica_crash --confirm replica_crash [--skip-provision] [--topic-id N]
+python -m ops.cluster_drill run network_partition_multi --confirm network_partition_multi
+python -m ops.cluster_drill run split_brain_multi --confirm split_brain_multi
+python -m ops.cluster_drill verify --records <记录目录>
+python -m ops.cluster_drill cleanup
+```
+
+- 演练环境键位见 `cluster.env.example`（真实主机 / 凭据只落 `cluster.env`，不入库）。
+- `--env prod|production` 硬拒绝；任何注入前必须 `--confirm <场景>`；退出码 `0` 通过 / `1` 失败 / `2` 降级。
+- `force` 或 `isr_verified=false` 只记「降级」，不计通过；`data_loss=true` 或硬判据非 `ok` 直接失败。
+- `ops.drill run` 只跑本机六类；对 `target=docker` 场景会提示改用 `ops.cluster_drill`。

@@ -5,6 +5,7 @@
 """
 
 import configparser
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -18,12 +19,12 @@ from bms_msg.broker.deadletter import DatabaseDeadLetterQueue
 from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
-from bms_msg.broker.election import InProcessLeaderControlTransport, LeaderSwitchService
+from bms_msg.broker.election import LeaderSwitchService
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
 from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.network import HttpLeaderControlTransport, HttpReplicaTransport
 from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replication import (
-    InProcessReplicaTransport,
     ReplicatedMessageStore,
     ReplicationCoordinator,
     ReplicationMetrics,
@@ -88,6 +89,7 @@ def test_factory_surface_lists_are_declared() -> None:
     assert [record.table_name for record in factory.table_records()] == [
         "msg_topic",
         "msg_partition",
+        "msg_partition_migration",
         "msg_replay_task",
         "msg_tenant_lifecycle",
         "msg_quota",
@@ -108,6 +110,7 @@ def test_table_registry_register_is_idempotent() -> None:
     assert table_names() == (
         "msg_topic",
         "msg_partition",
+        "msg_partition_migration",
         "msg_replay_task",
         "msg_tenant_lifecycle",
         "msg_quota",
@@ -182,6 +185,9 @@ def test_application_assembles_replication_when_enabled(monkeypatch: pytest.Monk
     monkeypatch.setenv("MSG_REPLICATION_NODES", "n1,n2")
     monkeypatch.setenv("MSG_REPLICATION_FACTOR", "2")
     monkeypatch.setenv("MSG_REPLICATION_MIN_INSYNC", "2")
+    monkeypatch.setenv("MSG_REPLICATION_INTERNAL_PORT", "8001")
+    monkeypatch.setenv("MSG_REPLICATION_INTERNAL_HOST", "127.0.0.1")
+    monkeypatch.setenv("MSG_REPLICATION_NODE_ENDPOINTS", "n2=http://n2:8001")
     registry = default_plugin_registry()
     registry.reset()
     try:
@@ -191,10 +197,39 @@ def test_application_assembles_replication_when_enabled(monkeypatch: pytest.Monk
         assert app.state.replication.config.replication_factor == 2
         assert list(app.state.replication.config.nodes) == ["n1", "n2"]
         assert isinstance(app.state.replication_metrics, ReplicationMetrics)
-        assert isinstance(app.state.replication_transport, InProcessReplicaTransport)
+        assert isinstance(app.state.replication_transport, HttpReplicaTransport)
         assert isinstance(app.state.leader_switch, LeaderSwitchService)
-        assert isinstance(app.state.leader_control, InProcessLeaderControlTransport)
+        assert isinstance(app.state.leader_control, HttpLeaderControlTransport)
         request = cast("object", SimpleNamespace(app=app))
         assert get_leader_switch(request) is app.state.leader_switch  # type: ignore[arg-type]
     finally:
         registry.reset()
+
+
+async def test_start_internal_replication_hook(tmp_path: Path) -> None:
+    """02-8：未启用端口时空转；启用后起 8001 并登记关闭句柄。"""
+    from bms_core.core.concurrent import ConcurrentStableList
+    from fastapi import FastAPI
+
+    from bms_msg.broker.network import InternalChannelConfig
+    from bms_msg.main import start_internal_replication
+
+    app = FastAPI()
+    app.state.replication = None
+    assert await start_internal_replication(app) is None
+    assert getattr(app.state, "internal_server", None) is None
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    app.state.internal_channel = InternalChannelConfig(host="127.0.0.1", port=port)
+    registered: ConcurrentStableList[object] = ConcurrentStableList()
+    app.state.resources = SimpleNamespace(register=registered.add)
+    await start_internal_replication(app)
+    try:
+        assert app.state.internal_server is not None
+        assert app.state.internal_server.alive is True
+        assert registered
+    finally:
+        assert app.state.internal_server is not None
+        await app.state.internal_server.aclose()

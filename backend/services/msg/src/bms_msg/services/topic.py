@@ -11,6 +11,8 @@
   的唯一来源（详细设计 §3.3）。
 """
 
+from dataclasses import dataclass, field
+
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import get_settings
 from bms_core.core.exceptions import ConfigError, ParamError
@@ -41,6 +43,7 @@ from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 from bms_msg.repositories.topic_cleanup import TopicCleanupRepository
 from bms_msg.schemas.topic import TopicCreateRequest
+from bms_msg.services.partition_assignment import PartitionAssigner
 from bms_msg.tenant.context import CurrentTenant
 
 __all__ = ["MAX_LIST_SIZE", "TopicService"]
@@ -50,6 +53,25 @@ MAX_LIST_SIZE = 100
 
 _LOGGER = get_logger("bms_msg.topic")
 """主题服务日志（只出结构化事件：`msg_topic_cache` 的失效记录）。"""
+
+
+@dataclass(frozen=True)
+class AssignmentColumns:
+    """一次「建主题 / 增分区」要写入分区行的分配列（02-8）。
+
+    单独成对象而非三参数散传：三列必须同源（同一分区号），拆开容易错配。
+    """
+
+    replicas_by_no: ConcurrentStableDict[int, ConcurrentStableList[str]] = field(
+        default_factory=lambda: ConcurrentStableDict[int, ConcurrentStableList[str]]()
+    )
+    """分区号 → 副本集。"""
+
+    leader_by_no: ConcurrentStableDict[int, str] = field(default_factory=lambda: ConcurrentStableDict[int, str]())
+    """分区号 → leader。"""
+
+    min_insync_replicas: int = 0
+    """分区级最小同步副本数（0 = 继承全局）。"""
 
 
 class TopicService:
@@ -64,6 +86,7 @@ class TopicService:
         cache: TopicCache | None = None,
         quota: QuotaService | None = None,
         cleanups: TopicCleanupRepository | None = None,
+        assigner: PartitionAssigner | None = None,
     ) -> None:
         """初始化。
 
@@ -74,6 +97,7 @@ class TopicService:
             cache: 进程内主题快照缓存（None = 不失效；数据面读最新值靠它）。
             quota: 配额服务（None = 不判主题数配额，兼容既有单测）。
             cleanups: 清理台账仓储（None = 不具备删除受理能力，兼容既有单测）。
+            assigner: 分区副本分配器（02-8；None = 不写副本集，兼容既有单测）。
         """
         self._topics = topics
         self._partitions = partitions
@@ -81,6 +105,7 @@ class TopicService:
         self._cache = cache
         self._quota = quota
         self._cleanups = cleanups
+        self._assigner = assigner
 
     async def create_topic(self, *, tenant: CurrentTenant, request: TopicCreateRequest) -> MsgTopic:
         """创建主题（同事务写主题行 + N 条分区行）。
@@ -115,11 +140,15 @@ class TopicService:
                 retention_bytes=request.retention_bytes,
                 cleanup_policy=request.cleanup_policy or CLEANUP_DELETE,
             )
+            columns = self._assignment_columns(topic_id=int(topic.id), start_no=0, count=request.partition_count)
             await self._partitions.add_partitions(
                 topic_id=int(topic.id),
                 start_no=0,
                 count=request.partition_count,
                 leader=_leader_id(),
+                replicas_by_no=columns.replicas_by_no,
+                leader_by_no=columns.leader_by_no,
+                min_insync_replicas=columns.min_insync_replicas,
             )
         self._invalidate(tenant_id=int(tenant.tenant_id), namespace=request.namespace, name=request.name)
         return topic
@@ -215,11 +244,15 @@ class TopicService:
             if partition_count < current:
                 raise MsgPartitionCountInvalidError(f"分区数只能增不能减：现 {current}，目标 {partition_count}")
             if partition_count > current:
+                columns = self._assignment_columns(topic_id=topic_id, start_no=current, count=partition_count - current)
                 await self._partitions.add_partitions(
                     topic_id=topic_id,
                     start_no=current,
                     count=partition_count - current,
                     leader=_leader_id(),
+                    replicas_by_no=columns.replicas_by_no,
+                    leader_by_no=columns.leader_by_no,
+                    min_insync_replicas=columns.min_insync_replicas,
                 )
                 topic = await self._topics.update(topic_id, partition_count=partition_count) or topic
             partitions = await self._partitions.list_by_topic(topic_id)
@@ -328,6 +361,34 @@ class TopicService:
         if self._cleanups is None:
             raise ConfigError("查清理进度需要清理台账仓储（TopicCleanupRepository）")
         return await self._cleanups.get_by_topic(topic_id)
+
+    def _assignment_columns(self, *, topic_id: int, start_no: int, count: int) -> AssignmentColumns:
+        """计算建主题 / 增分区要写入的分配列（未装配分配器时返回空列）。
+
+        Args:
+            topic_id: 主题主键。
+            start_no: 起始分区号。
+            count: 分区数。
+
+        Returns:
+            AssignmentColumns: 三列同源的分配结果。
+        """
+        if self._assigner is None:
+            return AssignmentColumns()
+        replicas_by_no: ConcurrentStableDict[int, ConcurrentStableList[str]] = ConcurrentStableDict()
+        leader_by_no: ConcurrentStableDict[int, str] = ConcurrentStableDict()
+        min_insync = 0
+        for partition_no, assignment in self._assigner.assign_range(
+            topic_id=topic_id, start_no=start_no, count=count
+        ).items():
+            replicas_by_no.set(partition_no, ConcurrentStableList(assignment.replicas))
+            leader_by_no.set(partition_no, assignment.leader)
+            min_insync = assignment.min_insync_replicas
+        return AssignmentColumns(
+            replicas_by_no=replicas_by_no,
+            leader_by_no=leader_by_no,
+            min_insync_replicas=min_insync,
+        )
 
     def _ensure_writable_state(self, topic: MsgTopic) -> None:
         """校验主题处于可写状态（`active` 才允许写；`disabled` / `deleting` 一律拒绝）。

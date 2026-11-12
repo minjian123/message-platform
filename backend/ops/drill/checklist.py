@@ -68,12 +68,17 @@ def build_checklist(scenario_set: ScenarioSet) -> str:
         str: Markdown 文本（结尾带换行）。
     """
     rows: ConcurrentStableList[str] = ConcurrentStableList(_HEADER)
-    rows.add("| # | 场景 | 命令 | 期望观察 | 记录 |")
-    rows.add("| --- | --- | --- | --- | --- |")
+    rows.add("| # | 场景 | 目标 | 命令 | 期望观察 | 记录 |")
+    rows.add("| --- | --- | --- | --- | --- | --- |")
     for index, scenario in enumerate(scenario_set.scenarios, start=1):
+        command = (
+            f"`python -m ops.cluster_drill run {scenario.name} --confirm {scenario.name}`"
+            if scenario.target == "docker"
+            else f"`python -m ops.drill run {scenario.name} --confirm {scenario.name}`"
+        )
         rows.add(
-            f"| {index} | `{scenario.name}` | "
-            f"`python -m ops.drill run {scenario.name} --confirm {scenario.name}` | "
+            f"| {index} | `{scenario.name}` | `{scenario.target}` | "
+            f"{command} | "
             f"{scenario.expect} | `MSG_DRILL_REPORT_DIR/{scenario.name}.json` |"
         )
     rows.add("")
@@ -94,7 +99,7 @@ def build_checklist(scenario_set: ScenarioSet) -> str:
     rows.add("## 6. 签核")
     rows.add("")
     rows.add("| 场景 | 结论 | 记录 | 复核人 |")
-    rows.add("| --- | --- | --- | --- |")
+    rows.add("| --- | --- | --- | --- | --- |")
     for scenario in scenario_set.scenarios:
         rows.add(f"| `{scenario.name}` | | `{scenario.name}.json` | |")
     rows.add("")

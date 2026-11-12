@@ -27,6 +27,8 @@ from ops.drill import checklist as checklist_mod
 from ops.drill import evidence as evidence_mod
 from ops.drill.engine import execute, load_scenario, plan_lines, reset_work_dir, scenario_names
 from ops.drill.env import (
+    TARGET_DOCKER,
+    TARGET_LOCAL,
     DrillConfig,
     DrillError,
     backup_evidence,
@@ -136,6 +138,10 @@ def _scenario_set(config: DrillConfig) -> ScenarioSet:
 def _run(config: DrillConfig, args: argparse.Namespace) -> int:
     """执行 `run` 子命令。"""
     scenario = load_scenario(config, args.scenario)
+    if scenario.target == TARGET_DOCKER:
+        raise DrillError(
+            f"drill.scenario {scenario.name} 是多实例场景，请用 python -m ops.cluster_drill run {scenario.name}"
+        )
     require_confirmation(scenario.name, args.confirm)
     if args.dry_run:
         print(f"[PLAN] {scenario.name} · {scenario.title}（dry-run，零执行）")
@@ -277,13 +283,24 @@ def _release(config: DrillConfig, args: argparse.Namespace) -> int:
     if args.dry_run:
         print("[PLAN] release（dry-run，零执行）")
         for scenario in scenario_set.scenarios:
+            if scenario.target == TARGET_DOCKER:
+                print(f"  [{scenario.name}] {scenario.title}（多实例场景，由 ops.cluster_drill 执行）")
+                continue
             print(f"  [{scenario.name}] {scenario.title}")
             for line in plan_lines(config, scenario):
                 print(f"    {line}")
         return 0
+    local_set = ScenarioSet(
+        schema_version=scenario_set.schema_version,
+        updated_at=scenario_set.updated_at,
+        owner=scenario_set.owner,
+        scenarios=ConcurrentStableFrozenList(
+            scenario for scenario in scenario_set.scenarios if scenario.target == TARGET_LOCAL
+        ),
+    )
     report = run_release(
         config,
-        scenario_set,
+        local_set,
         rerun_reason=args.rerun_reason,
         backup=backup_evidence(config),
         service_version=_service_versions()[0],

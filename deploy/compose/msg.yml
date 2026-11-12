@@ -72,11 +72,29 @@ x-service-env: &service-env
   MSG_REPLICATION_EPOCH_REFRESH_MS: ${MSG_REPLICATION_EPOCH_REFRESH_MS:-}
   MSG_REPLICATION_LEADER_LEASE_MS: ${MSG_REPLICATION_LEADER_LEASE_MS:-}
   MSG_REPLICATION_SWITCH_GRACE_MS: ${MSG_REPLICATION_SWITCH_GRACE_MS:-}
+  # 02-8 内部复制通道（单实例保持空值 = 不监听 8001；cluster profile 覆盖为 8001）
+  MSG_REPLICATION_INTERNAL_PORT: ${MSG_REPLICATION_INTERNAL_PORT:-}
+  MSG_REPLICATION_INTERNAL_HOST: ${MSG_REPLICATION_INTERNAL_HOST:-}
+  MSG_REPLICATION_NODE_ENDPOINTS: ${MSG_REPLICATION_NODE_ENDPOINTS:-}
+  MSG_REPLICATION_INTERNAL_TIMEOUT_MS: ${MSG_REPLICATION_INTERNAL_TIMEOUT_MS:-}
+  MSG_REPLICATION_INTERNAL_CONNECT_TIMEOUT_MS: ${MSG_REPLICATION_INTERNAL_CONNECT_TIMEOUT_MS:-}
+  MSG_REPLICATION_FETCH_MAX_BYTES: ${MSG_REPLICATION_FETCH_MAX_BYTES:-}
   # 消息数据根：`data/` 与 `offsets/` 两个子目录各挂一卷（容器内路径固定，不随环境改）
   MSG_DATA_DIR: /var/lib/msg
   # 启动期声明上报（注册表是权威来源）：部署态保持 true——上报被拒即拒启，不静默降级；
   # 仅离线冒烟（平台未参与）时经 .env 置 false，声明装载校验归任务 07-1-2。
   BMS_REGISTRY__REGISTER_ON_STARTUP: ${BMS_REGISTRY__REGISTER_ON_STARTUP:-true}
+
+x-cluster-env: &cluster-env
+  # 三实例共用口径：节点标识与内部地址一一对应（Compose DNS 即内部 DNS）
+  MSG_REPLICATION_ENABLED: "true"
+  MSG_REPLICATION_NODES: msg-1,msg-2,msg-3
+  MSG_REPLICATION_FACTOR: "3"
+  MSG_REPLICATION_MIN_INSYNC: "2"
+  MSG_REPLICATION_INTERNAL_PORT: "8001"
+  MSG_REPLICATION_NODE_ENDPOINTS: msg-1=http://msg-1:8001,msg-2=http://msg-2:8001,msg-3=http://msg-3:8001
+  # 三实例不重复登记产品声明（登记由 07-8 决定；演练 / 集群默认关闭）
+  BMS_REGISTRY__REGISTER_ON_STARTUP: "false"
 
 services:
   msg:
@@ -94,6 +112,65 @@ services:
       - ${MSG_OFFSETS_HOST_DIR:?MSG_OFFSETS_HOST_DIR required}:/var/lib/msg/offsets
     environment:
       <<: *service-env
+    networks:
+      - platform
+
+  # ---------------------------------------------------------------------------
+  # 三实例（02-8）：显式服务而非 --scale——Compose 缩放副本没有稳定 DNS 名，
+  # 无法把 node_id 与内部地址一一对应。`msg` 保持默认单实例，三实例用 profile 隔离。
+  # 拉起：docker compose -f compose/msg.yml --profile cluster up -d msg-1 msg-2 msg-3
+  # ---------------------------------------------------------------------------
+  msg-1:
+    profiles: ["cluster"]
+    image: ${MSG_REGISTRY_IMAGE_PREFIX:?MSG_REGISTRY_IMAGE_PREFIX required}/msg:${MSG_TAG:?MSG_TAG required}
+    container_name: msg-1
+    restart: unless-stopped
+    stop_grace_period: 45s
+    expose:
+      - "8000"
+      - "8001"
+    volumes:
+      - ${MSG_DATA_HOST_DIR_1:?MSG_DATA_HOST_DIR_1 required}:/var/lib/msg/data
+      - ${MSG_OFFSETS_HOST_DIR_1:?MSG_OFFSETS_HOST_DIR_1 required}:/var/lib/msg/offsets
+    environment:
+      <<: [*cluster-env, *service-env]
+      MSG_REPLICATION_NODE_ID: msg-1
+    networks:
+      - platform
+
+  msg-2:
+    profiles: ["cluster"]
+    image: ${MSG_REGISTRY_IMAGE_PREFIX:?MSG_REGISTRY_IMAGE_PREFIX required}/msg:${MSG_TAG:?MSG_TAG required}
+    container_name: msg-2
+    restart: unless-stopped
+    stop_grace_period: 45s
+    expose:
+      - "8000"
+      - "8001"
+    volumes:
+      - ${MSG_DATA_HOST_DIR_2:?MSG_DATA_HOST_DIR_2 required}:/var/lib/msg/data
+      - ${MSG_OFFSETS_HOST_DIR_2:?MSG_OFFSETS_HOST_DIR_2 required}:/var/lib/msg/offsets
+    environment:
+      <<: [*cluster-env, *service-env]
+      MSG_REPLICATION_NODE_ID: msg-2
+    networks:
+      - platform
+
+  msg-3:
+    profiles: ["cluster"]
+    image: ${MSG_REGISTRY_IMAGE_PREFIX:?MSG_REGISTRY_IMAGE_PREFIX required}/msg:${MSG_TAG:?MSG_TAG required}
+    container_name: msg-3
+    restart: unless-stopped
+    stop_grace_period: 45s
+    expose:
+      - "8000"
+      - "8001"
+    volumes:
+      - ${MSG_DATA_HOST_DIR_3:?MSG_DATA_HOST_DIR_3 required}:/var/lib/msg/data
+      - ${MSG_OFFSETS_HOST_DIR_3:?MSG_OFFSETS_HOST_DIR_3 required}:/var/lib/msg/offsets
+    environment:
+      <<: [*cluster-env, *service-env]
+      MSG_REPLICATION_NODE_ID: msg-3
     networks:
       - platform
 

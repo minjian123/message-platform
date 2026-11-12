@@ -99,6 +99,8 @@ RUN python -m pip uninstall -y pip
 ENV PATH=/opt/msg/backend/.venv/bin:$PATH
 USER msg
 EXPOSE 8000
+# 02-8：内部复制 / 控制通道（仅平台网络可达；EXPOSE 只作文档性声明，容器网络内端口本就可达）
+EXPOSE 8001
 # 健康检查判据 = 就绪（`/readyz`，与网关摘流同一判据，任务 07-1-2）：
 # 存活由进程是否退出表达（Docker 只在进程退出时按 restart 策略重启，**不因 unhealthy 重启**），
 # 把判据放在就绪侧，`docker ps` 的 Health.Status 才与「能不能服务」一致。

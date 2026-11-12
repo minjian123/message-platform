@@ -136,3 +136,11 @@ python -m ops.check_credentials
 | 业务写返回 507 但容器 healthy | `msg_storage_rejected_total` 与水位日志 | 水位拒绝只拦发布、不摘实例：清盘或扩容后重试 |
 | 停机 45s 后仍有 SIGKILL | 日志收尾行 | 一并调 `stop_grace_period` 与 `[server].graceful_timeout_seconds`（只改编排一处） |
 | 启动即退、日志 `CatalogError` | 声明目录是否缺件 | 镜像必须带 `deploy/registry`（本镜像已 COPY，见 Dockerfile） |
+
+## 8. 多实例与集群演练（02-8）
+
+- **单实例默认不变**：`docker compose -f compose/msg.yml up -d` 只起 `msg`，复制关闭。
+- **三实例**：`docker compose -f compose/msg.yml --profile cluster up -d msg-1 msg-2 msg-3`（显式列服务，避免连带启动默认 `msg`）；每实例独立 `data` / `offsets` 卷，容器内 8000 + 8001（内部复制仅平台网络）。
+- **生产网关**：叠加 `-f compose/msg-cluster.gateway.yml` 给三实例加别名 `msg`，网关上游 `msg:8000` 口径不变；drill 不启用该层。
+- **回退单实例**：先 `ops.rebalance` 收敛副本集 / 切主，再停三实例、`up -d` 起 `msg`；分配结果留在 `msg_partition.replicas`。
+- **集群演练**：见 `deploy/drill/README.md`「多实例场景」节；记录落工作区根 `tmp/msg/cluster-drill/`，不污染平台数据。

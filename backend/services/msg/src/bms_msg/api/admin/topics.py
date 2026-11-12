@@ -23,6 +23,7 @@ from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
 from bms_msg.api.deps import (
     AuditSinkDep,
     CurrentTenantDep,
+    PartitionAssignerDep,
     QuotaServiceDep,
     TopicAclServiceDep,
     TopicCacheDep,
@@ -56,6 +57,7 @@ from bms_msg.schemas.topic import (
     TopicPartitionExpandRequest,
     TopicRetentionUpdate,
 )
+from bms_msg.services.partition_assignment import PartitionAssigner
 from bms_msg.services.topic import MAX_LIST_SIZE, TopicService
 
 __all__ = ["router"]
@@ -125,6 +127,7 @@ def _service(
     cache: TopicCache | None = None,
     quota: QuotaService | None = None,
     cleanups: TopicCleanupRepository | None = None,
+    assigner: PartitionAssigner | None = None,
 ) -> TopicService:
     """组装主题服务（请求级平台库会话注入）。
 
@@ -134,6 +137,7 @@ def _service(
             读路径不经缓存，管理面永远读库最新）。
         quota: 配额服务（创建主题时判主题数配额）。
         cleanups: 清理台账仓储（删主题 / 查清理进度需要）。
+        assigner: 分区副本分配器（02-8；None = 不写副本集）。
 
     Returns:
         TopicService: 主题服务。
@@ -146,6 +150,7 @@ def _service(
         cache=cache,
         quota=quota,
         cleanups=cleanups,
+        assigner=assigner,
     )
 
 
@@ -342,6 +347,7 @@ async def create_topic(
     quota: QuotaServiceDep,
     sink: AuditSinkDep,
     acl: TopicAclServiceDep,
+    assigner: PartitionAssignerDep,
 ) -> ApiResponse[TopicItem]:
     """创建主题（指定分区数，返回完整元数据）。
 
@@ -355,7 +361,7 @@ async def create_topic(
         topic=req.name,
         action=ACL_ACTION_MANAGE,
     )
-    topic = await _service(uow, cache=cache, quota=quota).create_topic(tenant=tenant, request=req)
+    topic = await _service(uow, cache=cache, quota=quota, assigner=assigner).create_topic(tenant=tenant, request=req)
     await _audit_create(
         sink,
         tenant_id=int(tenant.tenant_id),
@@ -503,6 +509,7 @@ async def expand_topic_partitions(
     cache: TopicCacheDep,
     sink: AuditSinkDep,
     acl: TopicAclServiceDep,
+    assigner: PartitionAssignerDep,
 ) -> ApiResponse[TopicDetail]:
     """扩分区（**只增不减**：目标值不大于现状即 350009）。
 
@@ -517,7 +524,7 @@ async def expand_topic_partitions(
         action=ACL_ACTION_MANAGE,
     )
     before = int(topic.partition_count)
-    updated, partitions = await _service(uow, cache=cache).expand_partitions(
+    updated, partitions = await _service(uow, cache=cache, assigner=assigner).expand_partitions(
         tenant=tenant, topic_id=topic_id, partition_count=req.partition_count
     )
     await _audit_write(

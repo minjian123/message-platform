@@ -28,12 +28,19 @@ from fastapi import FastAPI
 
 from bms_msg.broker.recovery import RecoveryLedger
 from bms_msg.broker.watermark import StorageUnavailableError, StorageWatermark
-from bms_msg.core.config import RECOVERY_CHECK_KEY, STORAGE_CHECK_KEY, STORAGE_PROBE_NAME
+from bms_msg.core.config import (
+    RECOVERY_CHECK_KEY,
+    REPLICATION_INTERNAL_CHECK_KEY,
+    STORAGE_CHECK_KEY,
+    STORAGE_PROBE_NAME,
+)
 
 __all__ = [
     "MSG_HEALTH_REGISTRY",
+    "InternalReplicationUnavailableError",
     "MsgHealthCheckRegistry",
     "MsgHealthCheckRegistryFactory",
+    "MsgInternalReplicationCheck",
     "MsgRecoveryCheck",
     "MsgRecoveryDegradedError",
     "MsgStorageCheck",
@@ -57,6 +64,52 @@ class StorageProbeError(OSError):
 
 class MsgRecoveryDegradedError(RuntimeError):
     """恢复期发生过截断或段损坏（数据有损；非必需项，不摘实例）。"""
+
+
+class InternalReplicationUnavailableError(RuntimeError):
+    """内部复制服务未就绪（多实例必需项：缺了就是无复制，必须摘流）。"""
+
+
+class MsgInternalReplicationCheck(BaseHealthCheck):
+    """内部复制服务检查项（02-8；多实例时必需）。"""
+
+    def __init__(self, *, alive: Callable[[], bool]) -> None:
+        """初始化。
+
+        Args:
+            alive: 存活判定（服务任务存活且已完成首次绑定）。
+        """
+        self._alive = alive
+
+    @property
+    def key(self) -> str:
+        """检查项键（msg_internal_replication）。
+
+        Returns:
+            str: 检查项键。
+        """
+        return REPLICATION_INTERNAL_CHECK_KEY
+
+    def describe(self) -> str:
+        """元信息描述。
+
+        Returns:
+            str: 检查项说明。
+        """
+        return f"内部复制服务健康检查（{self.key}：8001 监听存活；多实例必需项）"
+
+    async def check(self) -> HealthCheckResult:
+        """执行检查：内部服务未就绪即失败。
+
+        Returns:
+            HealthCheckResult: 通过时的结果（ok=True）。
+
+        Raises:
+            InternalReplicationUnavailableError: 服务未启动 / 任务已退出。
+        """
+        if not self._alive():
+            raise InternalReplicationUnavailableError("内部复制服务未就绪（8001 未监听或任务已退出）")
+        return HealthCheckResult(name=self.key, ok=True)
 
 
 class MsgStorageCheck(BaseHealthCheck):
@@ -210,6 +263,15 @@ class MsgHealthCheckRegistryFactory(BasePluginFactory[MsgHealthCheckRegistry]):
         self._settings = settings
         self._app = app
 
+    def _internal_alive(self) -> bool:
+        """内部服务存活判定（未装配时 False）。
+
+        Returns:
+            bool: 服务任务存活且已完成首次绑定。
+        """
+        server = getattr(self._app.state, "internal_server", None)
+        return bool(server is not None and getattr(server, "alive", False))
+
     def create(self, options: None = None) -> MsgHealthCheckRegistry:
         """构造注册表并登记检查项。
 
@@ -228,6 +290,8 @@ class MsgHealthCheckRegistryFactory(BasePluginFactory[MsgHealthCheckRegistry]):
         store = self._app.state.file_store
         registry.register(MsgStorageCheck(watermark=watermark, root=watermark.root))
         registry.register(MsgRecoveryCheck(ledger=store.recovery_ledger))
+        if bool(getattr(self._app.state, "internal_required", False)):
+            registry.register(MsgInternalReplicationCheck(alive=self._internal_alive))
         registry.register(DatabaseHealthCheck(self._app.state.engine_registry))
         return registry
 

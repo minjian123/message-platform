@@ -177,6 +177,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
         for table in (
             "msg_topic",
             "msg_partition",
+            "msg_partition_migration",
             "msg_replay_task",
             "msg_tenant_lifecycle",
             "msg_quota",

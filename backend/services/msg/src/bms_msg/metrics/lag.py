@@ -53,6 +53,12 @@ class LagSnapshot(BaseValueObject):
     replay_failed: int = 0
     """失败重放任务累计数（按 `failed` 状态任务数；非严格单调）。"""
 
+    migration: ConcurrentStableFrozenDict[str, int] = field(default_factory=lambda: ConcurrentStableFrozenDict())
+    """`status → 迁移台账行数`（02-8 采样器读台账）。"""
+
+    migration_remaining: int = 0
+    """所有 `catching_up` 迁移任务的剩余条数之和（02-8）。"""
+
     messages_in_window: int = 0
     """本采样周期的入口消息数（06-1-1：概览「入口吞吐」数字卡的分子）。"""
 
@@ -85,6 +91,8 @@ class MetricsSnapshotStore(BaseFrameworkObject):
         replay: ConcurrentStableDict[str, int] | None = None,
         replay_replayed: int | None = None,
         replay_failed: int | None = None,
+        migration: ConcurrentStableDict[str, int] | None = None,
+        migration_remaining: int | None = None,
         messages_in_window: int | None = None,
         window_seconds: float | None = None,
     ) -> None:
@@ -97,6 +105,8 @@ class MetricsSnapshotStore(BaseFrameworkObject):
             replay: 重放任务数（None 表示不更新）。
             replay_replayed: 重放累计写入条数（None 表示不更新）。
             replay_failed: 失败重放任务累计数（None 表示不更新）。
+            migration: 迁移台账状态计数（None 表示不更新）。
+            migration_remaining: 迁移剩余条数之和（None 表示不更新）。
             messages_in_window: 本周期入口消息数（None 表示不更新）。
             window_seconds: 本周期实际秒数（None 表示不更新）。
         """
@@ -108,6 +118,10 @@ class MetricsSnapshotStore(BaseFrameworkObject):
             replay=ConcurrentStableFrozenDict(replay) if replay is not None else current.replay,
             replay_replayed=replay_replayed if replay_replayed is not None else current.replay_replayed,
             replay_failed=replay_failed if replay_failed is not None else current.replay_failed,
+            migration=ConcurrentStableFrozenDict(migration) if migration is not None else current.migration,
+            migration_remaining=(
+                migration_remaining if migration_remaining is not None else current.migration_remaining
+            ),
             messages_in_window=(messages_in_window if messages_in_window is not None else current.messages_in_window),
             window_seconds=window_seconds if window_seconds is not None else current.window_seconds,
         )

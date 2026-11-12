@@ -254,7 +254,13 @@ def test_load_scenarios_real_file() -> None:
 
     assert not errors
     assert validate_scenarios(scenario_set, 240_000) == []
-    assert [item.name for item in scenario_set.scenarios] == list(engine.scenario_names())
+    local = [item.name for item in scenario_set.scenarios if item.target == "local"]
+    assert local == list(engine.scenario_names())
+    assert [item.name for item in scenario_set.scenarios if item.target == "docker"] == [
+        "replica_crash",
+        "network_partition_multi",
+        "split_brain_multi",
+    ]
 
 
 def test_validate_scenarios_reports_each_problem() -> None:

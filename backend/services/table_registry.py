@@ -33,6 +33,13 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         note="分区定义与检查点（leader / 副本 / LEO / HW / epoch）",
     ),
     TableRecord(
+        table_name="msg_partition_migration",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="分区迁移台账（计划项 / 动作 / 副本集 / 切主结果 / 追平进度）",
+    ),
+    TableRecord(
         table_name="msg_replay_task",
         owner="msg",
         domain=MSG_DOMAIN,

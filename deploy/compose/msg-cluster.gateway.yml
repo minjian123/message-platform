@@ -1,0 +1,31 @@
+# 生产网关别名覆盖层（02-8）
+#
+# 用途：给三实例加 Compose DNS 别名 `msg`，让平台网关上游 `msg:8000` 口径保持不变。
+# **drill 不启用本层**：演练与平台生产集群共用平台网络时，别名 `msg` 会与既有单实例 DNS 冲突；
+# 演练只用 `msg-1..3` 直连（见 `msg-drill.override.yml`）。
+#
+# 用法：
+#   docker compose -f compose/msg.yml -f compose/msg-cluster.gateway.yml \
+#     --profile cluster up -d msg-1 msg-2 msg-3
+
+services:
+  msg-1:
+    networks:
+      platform:
+        aliases:
+          - msg
+  msg-2:
+    networks:
+      platform:
+        aliases:
+          - msg
+  msg-3:
+    networks:
+      platform:
+        aliases:
+          - msg
+
+networks:
+  platform:
+    external: true
+    name: ${PLATFORM_NETWORK:-deploy_default}

@@ -1,0 +1,31 @@
+# 演练覆盖层（02-8）
+#
+# 用途：在本机 / 开发服务器以独立容器名与回环端口跑三实例，供 `ops.cluster_drill` 注入故障。
+# - 容器名 `msg-drill-1..3`：不与生产 `msg-1..3` 冲突；
+# - 仅把业务 8000 绑到 `127.0.0.1:<高位端口>` 供 SSH 隧道访问；内部 8001 仍只在容器网络内；
+# - 数据卷宿主目录由 `deploy/drill/cluster.env` 指向独立演练目录（不入库）；
+# - 不启用 `msg` 网关别名（本层不引用 `msg-cluster.gateway.yml`）。
+#
+# 用法（开发机）：
+#   docker compose -f compose/msg.yml -f compose/msg-drill.override.yml \
+#     --env-file drill/cluster.env --profile cluster up -d msg-1 msg-2 msg-3
+
+services:
+  msg-1:
+    container_name: msg-drill-1
+    ports:
+      - "127.0.0.1:${MSG_DRILL_PORT_1:-18800}:8000"
+    environment:
+      BMS_REGISTRY__REGISTER_ON_STARTUP: "false"
+  msg-2:
+    container_name: msg-drill-2
+    ports:
+      - "127.0.0.1:${MSG_DRILL_PORT_2:-18801}:8000"
+    environment:
+      BMS_REGISTRY__REGISTER_ON_STARTUP: "false"
+  msg-3:
+    container_name: msg-drill-3
+    ports:
+      - "127.0.0.1:${MSG_DRILL_PORT_3:-18802}:8000"
+    environment:
+      BMS_REGISTRY__REGISTER_ON_STARTUP: "false"

@@ -279,7 +279,13 @@ def test_real_scenarios_source_is_valid() -> None:
 def test_criteria_rendering_matches_design() -> None:
     """判据表渲染与详细设计 §5 逐行一致（防两处漂移）。"""
     scenario_set, _ = load_scenarios(REPO_ROOT / "deploy" / "drill" / "scenarios.toml")
-    rendered = list(render_criteria_rows(scenario_set))
+    local_set = ScenarioSet(
+        schema_version=scenario_set.schema_version,
+        updated_at=scenario_set.updated_at,
+        owner=scenario_set.owner,
+        scenarios=ConcurrentStableFrozenList(item for item in scenario_set.scenarios if item.target == "local"),
+    )
+    rendered = list(render_criteria_rows(local_set))
 
     text = DESIGN.read_text(encoding="utf-8")
     start = text.index("| 场景 | # | 判据 | 级别 | 记录键 | 证据要求 |")

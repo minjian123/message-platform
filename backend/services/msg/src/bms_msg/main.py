@@ -37,8 +37,9 @@ from bms_core.audit.classes import AuditClass
 from bms_core.audit.emit import AuditEventEmitter
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.config import Settings
+from bms_core.core.exceptions import ConfigError
 from bms_core.core.logging import get_logger
-from bms_core.core.plugin import register_plugin
+from bms_core.core.plugin import register_plugin, resolve_plugin
 from bms_core.core.resources import ResourceManager
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
@@ -47,6 +48,7 @@ from bms_core.db.tenant import TenantLookup
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.events.consumer_records import EventConsumerRecord
 from bms_core.extension import RESOURCE_ACL_KEY, SCOPE_RULE_KEY, ExtensionRequirement
+from bms_core.oauth.token import BaseServiceTokenIssuer
 from bms_core.permission.rbac import RBAC_PROVIDER_NAME
 from bms_core.registry.forms import FormRecord
 from bms_core.services.module_registry import ModuleRecord
@@ -60,6 +62,7 @@ from bms_msg.acl.keys import MSG_TOPIC_ACL_PLUGIN
 from bms_msg.acl.port import MsgTopicAclFactory
 from bms_msg.api.access_audit import AccessAnomalyAuditMiddleware
 from bms_msg.api.frame.gate import register_frame_handlers
+from bms_msg.api.internal.app import create_internal_app
 from bms_msg.api.router import api_router, frame_router
 from bms_msg.audit.trail import ACTION_CLASSES
 from bms_msg.broker.backpressure import RateLimiter, default_rate_limit_tuning
@@ -69,11 +72,27 @@ from bms_msg.broker.delay import DelayMetrics
 from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
-from bms_msg.broker.election import InProcessLeaderControlTransport, LeaderSwitchService
+from bms_msg.broker.election import (
+    InProcessLeaderControlTransport,
+    LeaderControlTransport,
+    LeaderSwitchMetrics,
+    LeaderSwitchService,
+)
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
 from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.internal_server import (
+    InternalReplicationServer,
+    InternalServerCloser,
+)
 from bms_msg.broker.lifecycle import DelayCloser, OffsetFlusher, StorageCloser, start_background_tasks
 from bms_msg.broker.metrics import BackpressureMetrics
+from bms_msg.broker.network import (
+    HttpLeaderControlTransport,
+    HttpReplicaTransport,
+    InternalChannelConfig,
+    ServiceTokenProvider,
+    TransportErrorMetrics,
+)
 from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replay import AuditSink, ReplayAuditor, ReplayRunner, UowFactory
 from bms_msg.broker.replication import (
@@ -82,6 +101,7 @@ from bms_msg.broker.replication import (
     ReplicatedMessageStore,
     ReplicationCoordinator,
     ReplicationMetrics,
+    ReplicaTransport,
 )
 from bms_msg.broker.retention import RetentionThrottle
 from bms_msg.broker.scheduler import DelayScheduler, DelayWheel
@@ -100,6 +120,8 @@ from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.services.leader_switch import DbLeaderSwitchStore
+from bms_msg.services.migration_ledger import DbMigrationLedger
+from bms_msg.services.partition_assignment import PartitionAssigner, PartitionAssignmentConfig
 from bms_msg.services.replication_topology import DbReplicaTopologyLoader
 from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
@@ -119,6 +141,29 @@ from services.module_registry import MSG_SERVICE_RECORDS
 from services.table_registry import MSG_TABLE_RECORDS
 
 _LOGGER = get_logger("bms_msg.main")
+
+
+async def start_internal_replication(app: FastAPI) -> None:
+    """启动 8001 内部复制服务（02-8；单实例 / 未启用端口时空转）。
+
+    **为什么在启动钩子里**：内部应用要共享已装配的复制协调器；启动钩子在装配完成后、就绪标记前
+    执行。关闭句柄在此登记（晚于后台循环），逆序释放即「先停内部服务 → 再停后台循环 → 刷盘」。
+
+    Args:
+        app: 应用实例（取内部通道配置与资源管理器）。
+
+    Raises:
+        InternalServerError: 端口占用 / 绑定失败 / 就绪超时（服务拒启）。
+    """
+    channel = getattr(app.state, "internal_channel", None)
+    if channel is None or int(channel.port) <= 0:
+        return
+    internal_app = create_internal_app(app)
+    server = InternalReplicationServer(internal_app, host=str(channel.host), port=int(channel.port))
+    await server.start()
+    app.state.internal_server = server
+    resources = cast("ResourceManager", app.state.resources)
+    resources.register(InternalServerCloser(server=server))
 
 
 async def load_dead_letter_index(app: FastAPI) -> None:
@@ -203,7 +248,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         Returns:
             ConcurrentStableList[StartupHook]: 启动钩子（执行序）。
         """
-        return ConcurrentStableList([load_dead_letter_index, start_background_tasks])
+        return ConcurrentStableList([load_dead_letter_index, start_background_tasks, start_internal_replication])
 
     def configure_service(self, app: FastAPI, settings: Settings) -> None:
         """数据面进程级状态注入：消息存储（含唤醒包装） / 位点 / 死信 / 投递状态 / 组存储 /
@@ -252,11 +297,41 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 02-3：双向依赖只能后绑——store 构造时要 realigner，位点判越界时要 store 的 LEO。
         offset_store.bind_ceiling(file_store)
         app.state.file_store = file_store
-        # 02-4：复制运行态（协调器 + 指标 + 拓扑加载器 + 进程内传输）。
+        # 02-4：复制运行态（协调器 + 指标 + 拓扑加载器 + 传输实现）。
         # **store 传未包装的 file_store**：协调器内 follower 落盘直连存储，避免「包装器再通知自己」递归。
         replica_config = ReplicaConfig.from_env()
         replication_metrics = ReplicationMetrics()
-        replication_transport = InProcessReplicaTransport()
+        # 02-8：多实例使用 8001 网络传输；单实例保留进程内实现（单测与零变化口径）。
+        internal_channel = InternalChannelConfig.from_env(
+            enabled=replica_config.enabled,
+            node_id=replica_config.node_id,
+            nodes=replica_config.nodes,
+            business_port=int(settings.server.port),
+        )
+        transport_metrics = TransportErrorMetrics()
+        switch_metrics = LeaderSwitchMetrics()
+        if internal_channel.port > 0:
+            try:
+                issuer = cast(
+                    "BaseServiceTokenIssuer",
+                    resolve_plugin(
+                        "service_token",
+                        settings.service_token.provider,
+                        expected_version=BaseServiceTokenIssuer.contract_version,
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - 仅在多实例缺签发者时触发（fail-closed）
+                raise ConfigError(f"多实例部署需要可用的服务令牌签发者：{type(exc).__name__}: {exc}") from exc
+            tokens = ServiceTokenProvider(issuer)
+            replication_transport: ReplicaTransport = HttpReplicaTransport(
+                config=internal_channel, tokens=tokens, metrics=transport_metrics
+            )
+            leader_control: LeaderControlTransport = HttpLeaderControlTransport(
+                config=internal_channel, tokens=tokens, metrics=transport_metrics
+            )
+        else:
+            replication_transport = InProcessReplicaTransport()
+            leader_control = InProcessLeaderControlTransport()
         replication = ReplicationCoordinator(
             config=replica_config,
             store=file_store,
@@ -268,11 +343,14 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             waiter=waiter,
             metrics=replication_metrics,
         )
-        replication_transport.register(replica_config.node_id, replication)
-        # 02-5：切换控制通道（进程内；02-8 换网络实现）与手动切主领域服务。
+        if isinstance(replication_transport, InProcessReplicaTransport):
+            replication_transport.register(replica_config.node_id, replication)
+        # 02-5：切换控制通道（单实例进程内 / 多实例网络）与手动切主领域服务。
         # 服务只依赖 LeaderSwitchStore / LeaderControlTransport 两个协议，管理端点在 06-2 接入。
-        leader_control = InProcessLeaderControlTransport()
-        leader_control.register(replica_config.node_id, replication)
+        if isinstance(leader_control, InProcessLeaderControlTransport):
+            leader_control.register(replica_config.node_id, replication)
+        else:
+            leader_control.register_local(replica_config.node_id, replication)
         app.state.leader_control = leader_control
         app.state.leader_switch = LeaderSwitchService(
             enabled=replica_config.enabled,
@@ -281,16 +359,25 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             audit=sink,
             grace_ms=replica_config.switch_grace_ms,
             follower_fresh_ms=replica_config.lag_time_max_ms,
+            metrics=switch_metrics,
         )
         app.state.replication = replication
         app.state.replication_metrics = replication_metrics
         app.state.replication_transport = replication_transport
-        if replica_config.enabled and len(replica_config.nodes) > 1:
-            _LOGGER.warning(
-                "msg_replication_transport_inprocess",
-                nodes=len(replica_config.nodes),
-                detail="当前只有进程内传输；跨实例复制需 02-8 的网络实现，启用前请确认部署形态",
+        app.state.internal_channel = internal_channel
+        app.state.internal_required = internal_channel.port > 0
+        app.state.internal_server = None
+        app.state.transport_metrics = transport_metrics
+        app.state.switch_metrics = switch_metrics
+        app.state.partition_assigner = PartitionAssigner(
+            PartitionAssignmentConfig(
+                enabled=replica_config.enabled,
+                node_id=replica_config.node_id,
+                nodes=replica_config.nodes,
+                replication_factor=replica_config.replication_factor,
+                min_insync_replicas=replica_config.min_insync_replicas,
             )
+        )
         # **包装顺序硬约束**：复制推进在内层、唤醒在外层（先更新 HW，再唤醒长轮询）。
         app.state.message_store = NotifyingMessageStore(
             ReplicatedMessageStore(file_store, replication=replication), waiter
@@ -321,6 +408,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.msg_rate_limiter = RateLimiter(default_rate_limit_tuning())
         # 06-5：死信换持久化实现（平台库短事务 + 启动加载内存索引）；`uow_factory` 必须先就位。
         app.state.uow_factory = platform_uow_factory(app)
+        # 02-8：迁移台账（ops.rebalance 与指标采样共用同一仓储）。
+        app.state.migration_ledger = DbMigrationLedger(uow_factory=app.state.uow_factory)
         app.state.dead_letter_queue = DatabaseDeadLetterQueue(uow_factory=app.state.uow_factory)
         app.state.delivery_state = DeliveryState()
         app.state.group_store = InMemoryGroupStore()
@@ -438,6 +527,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             lifecycle=get_tenant_lifecycle_metrics(),
             purge=get_tenant_purge_metrics(),
             replication=getattr(app.state, "replication_metrics", None),
+            leader_switch=getattr(app.state, "switch_metrics", None),
+            transport_errors=getattr(app.state, "transport_metrics", None),
         )
         registered = app.state.metrics.register_collector(collector)
         if not registered:
@@ -454,6 +545,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             uow_factory=app.state.uow_factory,
             watermark=app.state.storage_watermark,
             tenant_lookup=cast("TenantLookup", app.state.tenant_source),
+            migration=getattr(app.state, "migration_ledger", None),
         )
 
     def audit_classes(self) -> ConcurrentStableDict[str, AuditClass]:

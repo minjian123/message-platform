@@ -1112,3 +1112,130 @@ DRILL_OUTPUT_TAIL_CHARS = 2_048
 
 DRILL_PARTITION_NO = 0
 """演练默认分区号（单分区主题，避免分区分配噪声）。"""
+
+# ---------------------------------------------------------------------------
+# 02-8 多实例部署与故障切换验收：内部通道 / 分配迁移 / 集群演练（不进 Settings）
+# ---------------------------------------------------------------------------
+
+REPLICATION_INTERNAL_PORT_ENV = "MSG_REPLICATION_INTERNAL_PORT"
+"""内部复制端口环境变量（0 = 不启用；单实例 / 仅进程内）。"""
+
+REPLICATION_INTERNAL_HOST_ENV = "MSG_REPLICATION_INTERNAL_HOST"
+"""内部复制监听地址环境变量。"""
+
+REPLICATION_NODE_ENDPOINTS_ENV = "MSG_REPLICATION_NODE_ENDPOINTS"
+"""节点地址映射环境变量（`node_id=http://host:port` 逗号分隔；多实例必填，可省略自身）。"""
+
+REPLICATION_INTERNAL_TIMEOUT_MS_ENV = "MSG_REPLICATION_INTERNAL_TIMEOUT_MS"
+"""内部通道读超时环境变量（毫秒）。"""
+
+REPLICATION_INTERNAL_CONNECT_TIMEOUT_MS_ENV = "MSG_REPLICATION_INTERNAL_CONNECT_TIMEOUT_MS"
+"""内部通道连接超时环境变量（毫秒）。"""
+
+REPLICATION_FETCH_MAX_BYTES_ENV = "MSG_REPLICATION_FETCH_MAX_BYTES"
+"""单次拉取响应软上限环境变量（字节）。"""
+
+DEFAULT_REPLICATION_INTERNAL_PORT = 0
+"""内部端口缺省值：0 = 不启用（单实例零变化）。"""
+
+DEFAULT_REPLICATION_INTERNAL_HOST = "0.0.0.0"
+"""内部监听地址缺省值：容器内监听全部网卡、仅平台网络可达。"""
+
+DEFAULT_REPLICATION_INTERNAL_TIMEOUT_MS = 2_000
+"""内部读超时缺省值（毫秒）：覆盖一页拉取与控制命令。"""
+
+DEFAULT_REPLICATION_INTERNAL_CONNECT_TIMEOUT_MS = 500
+"""内部连接超时缺省值（毫秒）：不可达节点快速失败、交给协调器退避。"""
+
+DEFAULT_REPLICATION_FETCH_MAX_BYTES = 8 * 1024 * 1024
+"""单次拉取响应软上限缺省值（8 MiB）：至少返回 1 条，单条超限照常返回并记 warning。"""
+
+REPLICATION_INTERNAL_PROTOCOL_VERSION = 1
+"""内部复制 / 控制协议版本（调用方遇到未知版本按不可达处理，不做尽力解析）。"""
+
+REPLICATION_INTERNAL_PATH_PREFIX = "/internal/replication"
+"""内部路由前缀（独立 ASGI 应用只挂此后缀；业务 8000 完全不可见）。"""
+
+REPLICATION_INTERNAL_HEALTH_PATH = "/internal/replication/healthz"
+"""内部健康探针路径（唯一不鉴权的内部端点）。"""
+
+REPLICATION_INTERNAL_CHECK_KEY = "msg_internal_replication"
+"""多实例就绪检查项键（必需项：内部服务任务存活且端口已绑）。"""
+
+MIGRATION_PLAN_ID_PREFIX = "rb"
+"""迁移计划标识前缀（`rb-<UTC 时间>-<短随机>`）。"""
+
+MIGRATION_PLAN_ID_MAX_LENGTH = 64
+"""迁移计划标识上限（对齐列宽）。"""
+
+MIGRATION_OPERATOR_MAX_LENGTH = 128
+"""迁移执行人上限（对齐列宽）。"""
+
+MIGRATION_REASON_MAX_LENGTH = 512
+"""迁移原因 / 错误上限（对齐列宽；超长截断）。"""
+
+MIGRATION_DEFAULT_WAIT_MS = 60_000
+"""`ops.rebalance apply` 缺省等待追平预算（毫秒）。"""
+
+MIGRATION_PROGRESS_POLL_MS = 1_000
+"""追平进度轮询间隔（毫秒）：与拓扑刷新周期同频，避免无效查库。"""
+
+MIGRATION_CATCH_UP_BUDGET_MS = 120_000
+"""单分区追平预算缺省值（毫秒）：超预算记 `failed`，不无限等待。"""
+
+MIGRATION_FORCE_DEGRADED_NOTE = "isr_verified=false：force 切主无法证明目标在 ISR，按降级记录、不计通过"
+"""force 切主的台账备注（写入 `error` 供 status / 记录判读）。"""
+
+MIGRATION_STEP_LEADER_SWITCH = "leader_switch"
+"""迁移步骤：切主。"""
+
+MIGRATION_STEP_UPDATE_REPLICAS = "update_replicas"
+"""迁移步骤：写副本集。"""
+
+CLUSTER_DRILL_ENV_FILE_ENV = "MSG_CLUSTER_DRILL_ENV_FILE"
+"""集群演练环境文件路径环境变量（凭据 / 主机只落不入库的该文件）。"""
+
+CLUSTER_DRILL_DEFAULT_ENV = "test"
+"""集群演练缺省环境（隔离演练项目）。"""
+
+CLUSTER_DRILL_PROD_ENVS = ("prod", "production")
+"""禁止执行集群演练的环境名（生产演练走人工流程，无逃生开关）。"""
+
+CLUSTER_DRILL_PROJECT = "msg-drill"
+"""演练 compose 项目名（与生产项目隔离）。"""
+
+CLUSTER_DRILL_CONTAINER_PREFIX = "msg-drill"
+"""演练容器名前缀（`msg-drill-1..3`，避免与生产同名）。"""
+
+CLUSTER_DRILL_DB_PREFIX = "msgdrill"
+"""演练库前缀（演练库 / Redis 键隔离标识）。"""
+
+CLUSTER_DRILL_NETWORK = "msg-drill-net"
+"""演练独立网络名（不复用平台网络时使用）。"""
+
+CLUSTER_DRILL_REPORT_DIR = f"{WORKSPACE_TMP_DIR}/cluster-drill"
+"""集群演练记录缺省落点（相对仓根，实际落工作区根 `tmp/msg/cluster-drill/`）。"""
+
+CLUSTER_DRILL_RECORD_SCHEMA_VERSION = 1
+"""集群演练记录格式版本（复用 07-6 记录契约，只增字段）。"""
+
+CLUSTER_DRILL_READY_TIMEOUT_SEC = 120
+"""演练实例就绪轮询超时（秒）：三实例冷启动含建表与插件装配。"""
+
+CLUSTER_DRILL_PROBE_INTERVAL_MS = 2_000
+"""演练探针轮询间隔（毫秒）：跨 SSH 调用不宜过密。"""
+
+CLUSTER_DRILL_SSH_TIMEOUT_SEC = 300
+"""远程命令超时（秒）：镜像构建与 compose 起停需要更长时间。"""
+
+CLUSTER_DRILL_DATA_ACKS_ALL = 20
+"""每场景 `acks=all` 生产条数（足够覆盖切换窗口，又不把演练拖长）。"""
+
+CLUSTER_DRILL_DATA_ACKS_LOCAL = 10
+"""每场景 `acks=1` 对照生产条数。"""
+
+CLUSTER_DRILL_PORT_BASE = 18_800
+"""演练实例宿主回环端口基址（drill 覆盖层按实例递增绑定 127.0.0.1）。"""
+
+CLUSTER_DRILL_TUNNEL_WAIT_MS = 5_000
+"""本机 SSH 隧道建立后的等待（毫秒）。"""

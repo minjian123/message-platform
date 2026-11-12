@@ -27,7 +27,7 @@
 | `topic_id` | DECIMAL(38,0) | 否 | 与 `partition_no` 复合唯一 | 逻辑外键 → `msg_topic.id`（同库，不建物理外键） |
 | `partition_no` | INT | 否 | 同上 | 分区号（0 起，**只追加不重排**） |
 | `leader` | VARCHAR(128) | 否 | — | 当前 leader 标识（首期单机为实例标识） |
-| `replicas` | JSON | 否 | 默认 `[]` | 副本列表（8B_05 复制使用） |
+| `replicas` | JSON | 否 | 默认 `[]` | 副本列表（02-8 写分区分配结果；空 = 未分配，协调器按配置兜底） |
 | `checkpoint_leo` | BIGINT | 否 | 默认 0 | 检查点 LEO（周期落库；实时值在内存，重启后由日志扫描恢复） |
 | `checkpoint_hw` | BIGINT | 否 | 默认 0 | 检查点 HW（提交位点） |
 | `epoch` | INT | 否 | 默认 0 | 领导者任期（8B_05 防脑裂；02-4 起写入记录头并由 follower 校验） |
@@ -71,5 +71,6 @@
 | 2026-11-04 | v1 | 新建表结构（平台库；随任务 01-1 定稿：`replicas` / `checkpoint_leo` / `checkpoint_hw` / `epoch` 一并预留，避免 8B_05 复制落地时改表） | minjian |
 | 2026-11-11 | v2 | 增 `min_insync_replicas`（02-4：每分区可覆盖的最小同步副本数，0 = 继承全局；`replicas` 由 02-8 写分区分配结果） | minjian |
 | 2026-11-11 | v3 | 增 9 个切换列：`switch_state` / `switch_started_at` / `switch_from_leader` / `switch_from_epoch` / `last_switch_at` / `last_switch_by` / `last_switch_epoch` / `last_switch_result` / `last_truncate_to`（02-5：两阶段停写、epoch 递增与切换结果可查；全部有缺省 / 可空，旧行不需回填） | minjian |
+| 2026-11-12 | v4 | `replicas` 语义变更（02-8）：从「只读 / 配置兜底」变为「分配结果写入」；建主题 / 增分区 / `ops.rebalance` 共用同一分配器，结构不变 | minjian |
 
 > 数据表设计 · 与 bms《[数据库开发规范](../../../../bms文档/规范/数据库开发规范.md)》「数据表文件规范」节配套

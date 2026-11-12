@@ -293,7 +293,11 @@ def test_factory_exposes_startup_hook() -> None:
     """应用工厂把钩子登记在 `startup_hooks()`（不是 `configure_service()`：那时事件循环还没起）。"""
     hooks = ApplicationFactory().startup_hooks()
 
-    assert [hook.__name__ for hook in hooks] == ["load_dead_letter_index", "start_background_tasks"]
+    assert [hook.__name__ for hook in hooks] == [
+        "load_dead_letter_index",
+        "start_background_tasks",
+        "start_internal_replication",
+    ]
 
 
 @pytest.mark.kiwi_id(2467)

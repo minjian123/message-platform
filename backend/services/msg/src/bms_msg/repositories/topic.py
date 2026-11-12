@@ -7,7 +7,7 @@
   事务边界在服务层工作单元。
 """
 
-from bms_core.core.concurrent import ConcurrentStableList, ConcurrentStableSet
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.repositories.base_db_repository import BaseDbRepository
 from sqlalchemy import ColumnElement, delete, func, select
 
@@ -135,7 +135,15 @@ class PartitionRepository(BaseDbRepository[MsgPartition]):
         return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
 
     async def add_partitions(
-        self, *, topic_id: int, start_no: int, count: int, leader: str
+        self,
+        *,
+        topic_id: int,
+        start_no: int,
+        count: int,
+        leader: str,
+        replicas_by_no: ConcurrentStableDict[int, ConcurrentStableList[str]] | None = None,
+        leader_by_no: ConcurrentStableDict[int, str] | None = None,
+        min_insync_replicas: int = 0,
     ) -> ConcurrentStableList[MsgPartition]:
         """追加 `count` 个分区（分区号从 `start_no` 起连续，只追加不重排）。
 
@@ -143,14 +151,31 @@ class PartitionRepository(BaseDbRepository[MsgPartition]):
             topic_id: 主题 ID。
             start_no: 起始分区号（= 主题原分区数）。
             count: 追加数量（须为正）。
-            leader: 新分区的 leader 标识。
+            leader: 缺省 leader 标识（未在 `leader_by_no` 中给出时使用）。
+            replicas_by_no: 分区号 → 副本集（02-8 分配结果；None = 不写副本集）。
+            leader_by_no: 分区号 → leader（02-8 分配结果；None = 用缺省 leader）。
+            min_insync_replicas: 分区级最小同步副本数（0 = 继承全局）。
 
         Returns:
             ConcurrentStableList[MsgPartition]: 新建分区（插入序）。
         """
         created: ConcurrentStableList[MsgPartition] = ConcurrentStableList()
         for partition_no in range(start_no, start_no + count):
-            created.add(await self.create(topic_id=topic_id, partition_no=partition_no, leader=leader))
+            replicas: ConcurrentStableList[str] = (
+                replicas_by_no.get(partition_no, ConcurrentStableList[str]())
+                if replicas_by_no is not None
+                else ConcurrentStableList[str]()
+            )
+            chosen_leader = leader_by_no.get(partition_no, leader) if leader_by_no is not None else leader
+            created.add(
+                await self.create(
+                    topic_id=topic_id,
+                    partition_no=partition_no,
+                    leader=chosen_leader,
+                    replicas=replicas,
+                    min_insync_replicas=int(min_insync_replicas),
+                )
+            )
         return created
 
     async def delete_by_topic(self, topic_id: int) -> int:

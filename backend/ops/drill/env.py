@@ -39,7 +39,11 @@ from bms_msg.core.config import (
 from ops.drill.model import SEVERITIES, SEVERITY_HARD, DrillCriterionSpec, DrillScenario, ScenarioSet
 
 __all__ = [
+    "DOCKER_INJECT_METHODS",
     "INJECT_METHODS",
+    "LOCAL_INJECT_METHODS",
+    "TARGET_DOCKER",
+    "TARGET_LOCAL",
     "DrillConfig",
     "DrillError",
     "backup_evidence",
@@ -51,10 +55,26 @@ __all__ = [
     "validate_scenarios",
 ]
 
-INJECT_METHODS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+TARGET_LOCAL = "local"
+"""演练目标：本机隔离实例（07-6 六类）。"""
+
+TARGET_DOCKER = "docker"
+"""演练目标：多实例容器（02-8 三类）。"""
+
+LOCAL_INJECT_METHODS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
     ("sigkill_sigterm", "fill_volume", "controlled_write", "tcp_proxy", "unacked_inflight", "invalid_and_exhausted")
 )
-"""注入方式闭集：六类场景各一，写错即场景非法（防止「场景名换了、注入没换」）。"""
+"""本机隔离实例的注入方式闭集（六类场景各一）。"""
+
+DOCKER_INJECT_METHODS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+    ("container_kill", "network_disconnect", "split_brain")
+)
+"""多实例容器的注入方式闭集（三类场景各一）。"""
+
+INJECT_METHODS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+    [*LOCAL_INJECT_METHODS, *DOCKER_INJECT_METHODS]
+)
+"""注入方式全量闭集（写错即场景非法，防止「场景名换了、注入没换」）。"""
 
 _ISOLATED_ENVS: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(("test", "dev", "local"))
 """视为隔离环境的标识（演练前备份记 `not_applicable`）。"""
@@ -319,6 +339,7 @@ def load_scenarios(path: Path) -> tuple[ScenarioSet, ConcurrentStableFrozenList[
                     aux_record_keys=_frozen(table.get("aux_record_keys")),
                     recovery_budget_ms=int(cast("int", table.get("recovery_budget_ms") or 0)),
                     expect=str(table.get("expect") or ""),
+                    target=str(table.get("target") or TARGET_LOCAL),
                 )
             )
     raw_meta = cast("dict[str, object]", raw.get("meta")) if isinstance(raw.get("meta"), dict) else None
@@ -352,6 +373,8 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
         errors.add("场景单源缺少 meta.owner")
     seen: ConcurrentStableSet[str] = ConcurrentStableSet()
     methods: ConcurrentStableSet[str] = ConcurrentStableSet()
+    local_methods: ConcurrentStableSet[str] = ConcurrentStableSet()
+    docker_methods: ConcurrentStableSet[str] = ConcurrentStableSet()
     for scenario in scenario_set.scenarios:
         where = scenario.name or "(缺少 name)"
         if not scenario.name:
@@ -362,10 +385,23 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
             seen.add(scenario.name)
         if not scenario.title:
             errors.add(f"{where}：title 为空")
+        if scenario.target not in (TARGET_LOCAL, TARGET_DOCKER):
+            errors.add(f"{where}：target = {scenario.target!r} 非法（可选 {TARGET_LOCAL} / {TARGET_DOCKER}）")
+        elif scenario.target == TARGET_LOCAL and scenario.inject not in LOCAL_INJECT_METHODS:
+            errors.add(
+                f"{where}：target=local 的 inject = {scenario.inject!r} 非法（可选 {' / '.join(LOCAL_INJECT_METHODS)}）"
+            )
+        elif scenario.target == TARGET_DOCKER and scenario.inject not in DOCKER_INJECT_METHODS:
+            allowed = " / ".join(DOCKER_INJECT_METHODS)
+            errors.add(f"{where}：target=docker 的 inject = {scenario.inject!r} 非法（可选 {allowed}）")
         if scenario.inject not in INJECT_METHODS:
             errors.add(f"{where}：inject = {scenario.inject!r} 非法（可选 {' / '.join(INJECT_METHODS)}）")
         else:
             methods.add(scenario.inject)
+            if scenario.target == TARGET_LOCAL:
+                local_methods.add(scenario.inject)
+            elif scenario.target == TARGET_DOCKER:
+                docker_methods.add(scenario.inject)
         if not scenario.observe:
             errors.add(f"{where}：observe 为空（至少一个指标）")
         if not scenario.criterion:
@@ -379,9 +415,12 @@ def validate_scenarios(scenario_set: ScenarioSet, budget_ms: int) -> ConcurrentS
             errors.add(
                 f"{where}：recovery_budget_ms 超出配置预算一个量级（{scenario.recovery_budget_ms} > {budget_ms}×10）"
             )
-    for method in INJECT_METHODS:
-        if method not in methods:
-            errors.add(f"缺少注入方式 {method!r}（六类必须齐备）")
+    for method in LOCAL_INJECT_METHODS:
+        if method not in local_methods:
+            errors.add(f"缺少本机注入方式 {method!r}（六类必须齐备）")
+    for method in DOCKER_INJECT_METHODS:
+        if method not in docker_methods:
+            errors.add(f"缺少注入方式 {method!r}（多实例三类必须齐备）")
     return ConcurrentStableFrozenList(errors)
 
 

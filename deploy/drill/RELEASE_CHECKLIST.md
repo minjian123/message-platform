@@ -22,14 +22,17 @@ python -m ops.drill release --confirm release --rerun-reason "发版前复跑"
 
 ## 3. 六类场景（按声明序）
 
-| # | 场景 | 命令 | 期望观察 | 记录 |
-| --- | --- | --- | --- | --- |
-| 1 | `process_crash` | `python -m ops.drill run process_crash --confirm process_crash` | 两档各一轮：杀进程后以同一数据根重启，已确认不丢、未确认重投、offset 连续 | `MSG_DRILL_REPORT_DIR/process_crash.json` |
-| 2 | `disk_full` | `python -m ops.drill run disk_full --confirm disk_full` | 注入期拒绝写且就绪转 503，清理后自动恢复；进程全程不退出 | `MSG_DRILL_REPORT_DIR/disk_full.json` |
-| 3 | `slow_disk` | `python -m ops.drill run slow_disk --confirm slow_disk` | 压测写入期间发布确认仍正确；延迟上升只作方向性判定，绝对阈值归部署阶段 | `MSG_DRILL_REPORT_DIR/slow_disk.json` |
-| 4 | `network_partition` | `python -m ops.drill run network_partition --confirm network_partition` | 代理切 drop 后发布失败、切回 pass 后成功；实例自身探针全程正常 | `MSG_DRILL_REPORT_DIR/network_partition.json` |
-| 5 | `stuck_consumer` | `python -m ops.drill run stuck_consumer --confirm stuck_consumer` | 在途达上限即暂停推送；逐条确认后立即恢复，offset 唯一 | `MSG_DRILL_REPORT_DIR/stuck_consumer.json` |
-| 6 | `poison_message` | `python -m ops.drill run poison_message --confirm poison_message` | 三段分别取证：入口拒绝、重投有界转死信、主动拒绝即时终结；均不阻塞后续 | `MSG_DRILL_REPORT_DIR/poison_message.json` |
+| # | 场景 | 目标 | 命令 | 期望观察 | 记录 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `process_crash` | `local` | `python -m ops.drill run process_crash --confirm process_crash` | 两档各一轮：杀进程后以同一数据根重启，已确认不丢、未确认重投、offset 连续 | `MSG_DRILL_REPORT_DIR/process_crash.json` |
+| 2 | `disk_full` | `local` | `python -m ops.drill run disk_full --confirm disk_full` | 注入期拒绝写且就绪转 503，清理后自动恢复；进程全程不退出 | `MSG_DRILL_REPORT_DIR/disk_full.json` |
+| 3 | `slow_disk` | `local` | `python -m ops.drill run slow_disk --confirm slow_disk` | 压测写入期间发布确认仍正确；延迟上升只作方向性判定，绝对阈值归部署阶段 | `MSG_DRILL_REPORT_DIR/slow_disk.json` |
+| 4 | `network_partition` | `local` | `python -m ops.drill run network_partition --confirm network_partition` | 代理切 drop 后发布失败、切回 pass 后成功；实例自身探针全程正常 | `MSG_DRILL_REPORT_DIR/network_partition.json` |
+| 5 | `stuck_consumer` | `local` | `python -m ops.drill run stuck_consumer --confirm stuck_consumer` | 在途达上限即暂停推送；逐条确认后立即恢复，offset 唯一 | `MSG_DRILL_REPORT_DIR/stuck_consumer.json` |
+| 6 | `poison_message` | `local` | `python -m ops.drill run poison_message --confirm poison_message` | 三段分别取证：入口拒绝、重投有界转死信、主动拒绝即时终结；均不阻塞后续 | `MSG_DRILL_REPORT_DIR/poison_message.json` |
+| 7 | `replica_crash` | `docker` | `python -m ops.cluster_drill run replica_crash --confirm replica_crash` | 杀 leader 容器后切主成功；已提交不丢；旧 leader 重启降 follower 并重入 ISR | `MSG_DRILL_REPORT_DIR/replica_crash.json` |
+| 8 | `network_partition_multi` | `docker` | `python -m ops.cluster_drill run network_partition_multi --confirm network_partition_multi` | 断网 leader 租约后拒写；切主不双写；ISR 收缩后重入；客户端可刷新 | `MSG_DRILL_REPORT_DIR/network_partition_multi.json` |
+| 9 | `split_brain_multi` | `docker` | `python -m ops.cluster_drill run split_brain_multi --confirm split_brain_multi` | 双主认知期间只有一侧可写；旧 leader 恢复后降 follower 并截断发散尾部 | `MSG_DRILL_REPORT_DIR/split_brain_multi.json` |
 
 ## 4. 判定口径
 
@@ -52,13 +55,16 @@ python -m ops.drill release --confirm release --rerun-reason "发版前复跑"
 ## 6. 签核
 
 | 场景 | 结论 | 记录 | 复核人 |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `process_crash` | | `process_crash.json` | |
 | `disk_full` | | `disk_full.json` | |
 | `slow_disk` | | `slow_disk.json` | |
 | `network_partition` | | `network_partition.json` | |
 | `stuck_consumer` | | `stuck_consumer.json` | |
 | `poison_message` | | `poison_message.json` | |
+| `replica_crash` | | `replica_crash.json` | |
+| `network_partition_multi` | | `network_partition_multi.json` | |
+| `split_brain_multi` | | `split_brain_multi.json` | |
 
 ## 7. 判据速查
 
@@ -70,3 +76,6 @@ python -m ops.drill release --confirm release --rerun-reason "发版前复跑"
 | `network_partition` | `tcp_proxy` | `msg_publish_errors_total`、`msg_rpc_duration_ms`、`msg_consumer_lag` | 断连档发布失败（客户端可见的连接错误）；断连期实例本身健康（故障只在链路）；恢复后客户端可重连并发布成功；已确认消息不重复投递、积压追平 |
 | `stuck_consumer` | `unacked_inflight` | `msg_inflight_messages`、`msg_inflight_bytes`、`msg_consumer_lag` | 在途填满后 consume 返回 paused=true（背压生效）；在途条数不超过上限（内存有界）；积压可观测（msg_consumer_lag 上升）；确认后恢复消费、积压归零且不重复 |
 | `poison_message` | `invalid_and_exhausted` | `msg_dlq_total`、`msg_consume_errors_total`、`msg_consumer_lag` | 非法载荷被入口拒绝（HTTP 4xx 或业务码非 0）；重投次数不超过上限（5）；重投超限后进死信（msg_dlq_total 增长）；死信管理面可查（按 message_id 命中）；毒消息终结后同分区后续消息可消费（不阻塞）；主动 nack 即时转死信；主动 nack 的死信管理面可查 |
+| `replica_crash` | `container_kill` | `msg_leader_switch_total`、`msg_isr_size`、`msg_publish_errors_total` | 故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费；任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033；写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功；DB leader 变为目标且 epoch 递增；旧 leader 重启后为 follower，对旧 leader 写被拒或由客户端改投；故障期 ISR 收缩，重启后重新入 ISR；注入开始到恢复判据通过的时长在预算内；切主结果 isr_verified=true（force 降级不计通过） |
+| `network_partition_multi` | `network_disconnect` | `msg_publish_errors_total`、`msg_isr_size`、`msg_replication_lag_records` | 故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费；任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033；写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功；断网 leader 在租约后写返回 350033 lease_expired；断网 follower 被踢出 ISR，恢复后重新入 ISR；旧 leader 不可达时切换结果为 retained，retained_tail 与风险可读且 isr_verified=true；注入开始到恢复判据通过的时长在预算内；切主结果 isr_verified=true（force 降级不计通过） |
+| `split_brain_multi` | `split_brain` | `msg_leader_switch_total`、`msg_isr_size`、`msg_publish_errors_total` | 故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费；任意采样时刻最多一个节点 writable=true；旧 leader 超租约写返回 350033；写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功；隔离侧超租约后不再接受写，恢复后降 follower；旧 leader 重新加入后为 follower；本地 LEO > 新 leader 时截断发散尾部；注入开始到恢复判据通过的时长在预算内；切主结果 isr_verified=true（force 降级不计通过） |
