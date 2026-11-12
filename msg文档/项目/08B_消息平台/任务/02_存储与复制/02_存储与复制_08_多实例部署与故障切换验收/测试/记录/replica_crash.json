@@ -15,14 +15,26 @@
     "version": "0.1.0",
     "contract_version": "0.1.0"
   },
-  "started_at": "2026-11-12T06:56:41.818102+00:00",
-  "finished_at": "2026-11-12T06:59:09.964853+00:00",
+  "started_at": "2026-11-12T13:50:36.826569+00:00",
+  "finished_at": "2026-11-12T13:53:56.193840+00:00",
   "injection": {
     "method": "container_kill",
-    "detail": "杀 leader 容器后切主成功；已提交不丢；旧 leader 重启降 follower 并重入 ISR",
+    "detail": "杀 leader 容器后**不人工切主**、预算内自动换主（02-9）；已提交不丢；旧 leader 重启降 follower 并重入 ISR",
     "artifact": "msg-drill"
   },
   "commands": [
+    {
+      "step": "build",
+      "result": "ok"
+    },
+    {
+      "step": "network_create",
+      "result": "ok"
+    },
+    {
+      "step": "compose_up",
+      "result": "ok"
+    },
     {
       "step": "reset_cluster",
       "result": "ok"
@@ -34,19 +46,20 @@
     {
       "step": "create_topic",
       "result": "ok",
-      "topic": "drill.replica.probe.replica_crash.1794466601",
-      "topic_id": "58773927868910030406184865974190080"
+      "topic": "drill.replica.probe.replica_crash.1794491436",
+      "topic_id": "58781455844693854115144377609224192"
     },
     {
-      "step": "failover",
-      "result": "ok"
+      "step": "auto_switch",
+      "result": "ok",
+      "elapsed_ms": "3083"
     }
   ],
   "artifacts": [],
   "logs": {},
   "samples": {
     "before": {
-      "captured_at": "2026-11-12T06:57:33.746839+00:00",
+      "captured_at": "2026-11-12T13:52:40.905501+00:00",
       "readyz_status": 200,
       "readyz_ok": true,
       "healthz_ok": true,
@@ -58,31 +71,38 @@
       "detail": ""
     },
     "during": {
-      "captured_at": "2026-11-12T06:58:07.901116+00:00",
+      "captured_at": "2026-11-12T13:52:56.668993+00:00",
       "readyz_status": 200,
       "readyz_ok": true,
       "healthz_ok": true,
       "metrics": {
         "msg_leader_switch_total": 0,
-        "msg_isr_size": 7.0,
+        "msg_isr_size": 8.0,
         "msg_publish_errors_total": 21.0
       },
       "detail": ""
     },
     "after": {
-      "captured_at": "2026-11-12T06:58:40.915601+00:00",
+      "captured_at": "2026-11-12T13:53:28.128500+00:00",
       "readyz_status": 200,
       "readyz_ok": true,
       "healthz_ok": true,
       "metrics": {
         "msg_leader_switch_total": 0,
         "msg_isr_size": 9.0,
-        "msg_publish_errors_total": 39.0
+        "msg_publish_errors_total": 42.0
       },
       "detail": ""
     }
   },
   "criteria": [
+    {
+      "key": "auto_switch_within_budget",
+      "expect": "杀 leader 后不执行人工切主，预算内 DB leader 自动变化（自动选举生效）",
+      "actual": "3.1s 内自动换主（未人工切主，预算 30s）",
+      "result": "ok",
+      "passed": true
+    },
     {
       "key": "committed_not_lost",
       "expect": "故障前 acks=all 成功且 offset < HW 的消息切换后全部可消费",
@@ -100,28 +120,28 @@
     {
       "key": "client_refresh",
       "expect": "写旧 leader 得 350033 → metadata_version 增大 → 改投新 leader 成功",
-      "actual": "触发 350033 改投 21 次后写入成功",
+      "actual": "触发 350033 改投 18 次后写入成功",
       "result": "ok",
       "passed": true
     },
     {
       "key": "leader_switched",
       "expect": "DB leader 变为目标且 epoch 递增",
-      "actual": "3 个分区换主（显式切主 3 项）",
+      "actual": "1 个分区换主（显式切主 0 项）",
       "result": "ok",
       "passed": true
     },
     {
       "key": "old_leader_fenced",
       "expect": "旧 leader 重启后为 follower，对旧 leader 写被拒或由客户端改投",
-      "actual": "3 个分区 epoch 提升，旧 leader 写入被围栏",
+      "actual": "1 个分区 epoch 提升，旧 leader 写入被围栏",
       "result": "ok",
       "passed": true
     },
     {
       "key": "isr_shrink_rejoin",
       "expect": "故障期 ISR 收缩，重启后重新入 ISR",
-      "actual": "ISR 9→7→9（收缩后回升）",
+      "actual": "ISR 9→8→9（收缩后回升）",
       "result": "ok",
       "passed": true
     },
@@ -135,12 +155,12 @@
     {
       "key": "isr_verified",
       "expect": "切主结果 isr_verified=true（force 降级不计通过）",
-      "actual": "显式切主时 ISR 验证通过",
+      "actual": "自动选举后 ISR 回升到 9",
       "result": "ok",
       "passed": true
     }
   ],
-  "rto_ms": 148144,
+  "rto_ms": 199365,
   "data_loss": false,
   "backup": {
     "mode": "not_applicable",
