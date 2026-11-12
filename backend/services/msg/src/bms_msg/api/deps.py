@@ -9,6 +9,7 @@
 """
 
 from collections.abc import AsyncGenerator, Callable
+from contextlib import aclosing
 from typing import Annotated, cast
 
 from bms_core.core.config import get_settings
@@ -884,8 +885,11 @@ async def get_topic_acl_session(request: Request) -> AsyncGenerator[DbSession | 
     if not _resource_acl_declared(request):
         yield None
         return
-    async for session in get_platform_write_db(request):
-        yield session
+    # 手工驱动基座的会话依赖并在退出时关闭（不走 `async for`：请求结束是 GeneratorExit 关闭，
+    # 循环「正常耗尽」分支不可达，会留下无意义的分支缺口）。
+    source = cast("AsyncGenerator[DbSession]", get_platform_write_db(request))
+    async with aclosing(source) as sessions:
+        yield await anext(sessions)
 
 
 def get_topic_acl_service(
