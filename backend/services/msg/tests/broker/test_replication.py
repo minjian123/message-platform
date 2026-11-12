@@ -1120,3 +1120,52 @@ async def test_pull_loop_skips_leader_and_pops_backoff_on_success() -> None:
     await follower.aclose()
     await leader.aclose()
     assert follower_state.local_leo == 1
+
+
+async def test_promotion_by_refresh_rebuilds_follower_progress() -> None:
+    """刷新升主：按副本集重建 follower 进度表，旧 leader 的拉取不得被拒（02-8 真机缺陷回归）。
+
+    构造期只登记「非 leader」副本，升主后原 leader 不在表里；若不重建，`serve_fetch` 会
+    永久 503「follower 不在副本集内」，ISR 卡死、`acks=all` 提交超时。
+    """
+
+    class _MutableTopology(_Topology):
+        def __init__(self, *, nodes: tuple[str, ...]) -> None:
+            super().__init__(nodes=nodes, min_insync=2)
+            self.leader = nodes[0]
+
+        async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology:
+            del force
+            return PartitionTopology(
+                replicas=ConcurrentStableFrozenList(self.nodes),
+                min_insync_replicas=2,
+                epoch=1,
+                leader=self.leader,
+            )
+
+    topology = _MutableTopology(nodes=("n1", "n2"))
+    coordinator = ReplicationCoordinator(
+        config=_config(node_id="n2"),
+        store=InMemoryMessageStore(),
+        topology_loader=cast("ReplicaTopologyLoader", topology),
+    )
+    state = await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.role.name == "FOLLOWER"
+
+    topology.leader = "n2"
+    await coordinator.refresh_once()
+
+    assert state.role.name == "LEADER"
+    result = await coordinator.serve_fetch(
+        ReplicaFetchRequest(
+            leader="n2",
+            follower="n1",
+            topic_id=TOPIC_ID,
+            partition_no=PARTITION_NO,
+            from_offset=0,
+            max_messages=10,
+            epoch=1,
+        )
+    )
+    assert result.leader_epoch == 1
+    assert "n1" in state.followers

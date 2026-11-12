@@ -1572,6 +1572,23 @@ class ReplicationCoordinator(ReplicationView):
             state.local_leo = await self._store.leo(topic_id=state.topic_id, partition_no=state.partition_no)
             state.leader_leo = state.local_leo
             state.hw = min(state.hw, state.local_leo)
+            # 升主必须按副本集重建 follower 进度表：构造期只登记「非 leader」副本，
+            # 原 leader 不在表里会让它的拉取被永久拒绝（同 `_apply_leader_change`）。
+            previous: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict(state.followers)
+            rebuilt: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict()
+            for member in state.replicas:
+                if member == self._config.node_id:
+                    continue
+                progress = previous.get(member)
+                rebuilt.set(
+                    member,
+                    FollowerProgress(
+                        leo=progress.leo if progress is not None else state.local_leo,
+                        last_fetch_ms=self._clock(),
+                        in_sync=False,
+                    ),
+                )
+            state.followers = rebuilt
             state.leadership_confirmed_at = self._clock()
             state.last_known_hw = max(state.last_known_hw, state.hw)
             state.last_known_isr = ConcurrentStableSet((self._config.node_id,))
@@ -1630,9 +1647,9 @@ class ReplicationCoordinator(ReplicationView):
             topology = await self._load_topology(topic_id=key[0], partition_no=key[1], force=True)
             if topology is None:
                 continue
-            self._observe_topology(state, topology)
+            await self._observe_topology(state, topology)
 
-    def _observe_topology(self, state: PartitionReplication, topology: PartitionTopology) -> None:
+    async def _observe_topology(self, state: PartitionReplication, topology: PartitionTopology) -> None:
         """把一次拓扑加载结果合入运行态（切换状态、epoch、leader 与租约确认）。
 
         Args:
@@ -1649,14 +1666,19 @@ class ReplicationCoordinator(ReplicationView):
             state.epoch = topology.epoch
         new_leader = topology.leader or (topology.replicas[0] if topology.replicas else state.leader)
         if new_leader != state.leader:
-            self._apply_leader_change(state, new_leader=new_leader)
+            await self._apply_leader_change(state, new_leader=new_leader)
         if state.role is ReplicaRole.LEADER and state.switch_state == SWITCH_STATE_IDLE:
             state.leadership_confirmed_at = now
         if state.role is ReplicaRole.FOLLOWER and topology.switch_state == SWITCH_STATE_IDLE:
             state.last_known_at = max(state.last_known_at, now)
 
-    def _apply_leader_change(self, state: PartitionReplication, *, new_leader: str) -> None:
+    async def _apply_leader_change(self, state: PartitionReplication, *, new_leader: str) -> None:
         """按拓扑变更切换本节点角色（leader ↔ follower）。
+
+        **升主必须重建 followers 表**：构造运行态时只登记「非 leader」副本，升主后原 leader
+        不在表中，`serve_fetch` 会以「follower 不在副本集内」永久拒绝其拉取（ISR 卡死、
+        `acks=all` 提交超时）。这里按副本集重建进度表（本节点除外），并把 ISR 收敛为自身，
+        由后续拉取 / 扫描按真实 LEO 重新扩张。
 
         Args:
             state: 分区运行态。
@@ -1669,6 +1691,23 @@ class ReplicationCoordinator(ReplicationView):
         if state.role is ReplicaRole.LEADER:
             state.leader_leo = state.local_leo
             state.hw = min(state.hw, state.local_leo)
+            start = await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no)
+            previous: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict(state.followers)
+            current: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict()
+            for member in state.replicas:
+                if member == state.leader:
+                    continue
+                progress = previous.get(member)
+                current.set(
+                    member,
+                    FollowerProgress(
+                        leo=progress.leo if progress is not None else start,
+                        last_fetch_ms=self._clock(),
+                        in_sync=False,
+                    ),
+                )
+            state.followers = current
+            state.isr = ConcurrentStableSet((self._config.node_id,))
         else:
             state.leader_leo = 0
         if was_leader and state.role is ReplicaRole.FOLLOWER:
