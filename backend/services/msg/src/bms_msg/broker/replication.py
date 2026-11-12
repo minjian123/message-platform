@@ -128,6 +128,15 @@ _REFRESH_LOAD_TIMEOUT_SEC = 2.0
 _MOUNT_LOAD_TIMEOUT_SEC = 2.0
 """单轮分配枚举超时（秒）：DB 卡死时放弃本轮挂载，等下一轮重试（02-10）。"""
 
+_MEMBERSHIP_APPLIED = "applied"
+"""副本集收敛结果：已按新集合收敛（02-8-3）。"""
+
+_MEMBERSHIP_DETACHED = "detached"
+"""副本集收敛结果：本节点已被移出并完成卸载（02-8-3）。"""
+
+_MEMBERSHIP_INVALID = "invalid"
+"""副本集收敛结果：非法分配（leader 不在集合内），本轮不收敛（02-8-3）。"""
+
 ReplicaKey = tuple[int, int]
 """分区键：`(topic_id, partition_no)`。"""
 
@@ -653,6 +662,11 @@ class ReplicationMetrics(BaseFrameworkObject):
         """记一次挂载（02-10）。"""
         self._mounted += 1
 
+    def unrecord_mount(self) -> None:
+        """撤销一次挂载计数（02-8-3 卸载；不会低于 0）。"""
+        if self._mounted > 0:
+            self._mounted -= 1
+
     def record_shrink(self) -> None:
         """记一次 ISR 收缩。"""
         self._shrink_total += 1
@@ -1028,6 +1042,42 @@ class ReplicationCoordinator(ReplicationView):
                     lag_records=state.lag_records(),
                 )
             return state
+
+    async def detach_partition(self, *, topic_id: int, partition_no: int, reason: str) -> bool:
+        """卸载分区（02-8-3：节点被移出副本集；只清运行态与指标，**不删本地数据**）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            reason: 卸载原因（日志字段）。
+
+        Returns:
+            bool: 实际卸载为 True（未挂载返回 False）。
+        """
+        key: ReplicaKey = (int(topic_id), int(partition_no))
+        async with self._attach_lock:
+            state = self._partitions.pop(key, None)
+            if state is None:
+                return False
+            was_hosted = state.hosted
+            state.hosted = False
+        # 拉取节拍与退避状态一并清理，避免卸载后残留键。
+        self._fetch_backoff.pop(key, None)
+        self._fetch_backoff_delay.pop(key, None)
+        self._fetch_failure_logged_at.pop(key, None)
+        self._fetch_due_at.pop(key, None)
+        self._idle_streak.pop(key, None)
+        self._metrics.forget(topic_id=state.topic_id, partition_no=state.partition_no)
+        if was_hosted:
+            self._metrics.unrecord_mount()
+        _LOGGER.info(
+            "msg_replication_partition_detached",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            reason=reason,
+            local_leo=state.local_leo,
+        )
+        return True
 
     async def _build_state(self, *, topic_id: int, partition_no: int) -> PartitionReplication:
         """构造分区运行态（拓扑解析 + 初始 HW）。
@@ -1520,6 +1570,10 @@ class ReplicationCoordinator(ReplicationView):
         Args:
             state: 分区运行态。
         """
+        if self._config.enabled and not state.hosted:
+            # 非承载节点（含卸载后在飞的拉取收尾）不输出该分区指标，避免旧行回来。
+            self._metrics.forget(topic_id=state.topic_id, partition_no=state.partition_no)
+            return
         self._metrics.update(
             topic_id=state.topic_id,
             partition_no=state.partition_no,
@@ -1834,6 +1888,11 @@ class ReplicationCoordinator(ReplicationView):
         state.switch_state = topology.switch_state
         if topology.epoch > state.epoch:
             state.epoch = topology.epoch
+        # 02-8-3：副本集变更先收敛（卸载 / 非法分配时本轮到此为止，避免把脏 leader 应用下去）。
+        if topology.replicas and topology.replicas != state.replicas:
+            outcome = await self._converge_membership(state, topology)
+            if outcome != _MEMBERSHIP_APPLIED:
+                return
         new_leader = topology.leader or (topology.replicas[0] if topology.replicas else state.leader)
         if new_leader != state.leader:
             await self._apply_leader_change(state, new_leader=new_leader)
@@ -1841,6 +1900,74 @@ class ReplicationCoordinator(ReplicationView):
             state.leadership_confirmed_at = now
         if state.role is ReplicaRole.FOLLOWER and topology.switch_state == SWITCH_STATE_IDLE:
             state.last_known_at = max(state.last_known_at, now)
+
+    async def _converge_membership(self, state: PartitionReplication, topology: PartitionTopology) -> str:
+        """按分配事实收敛运行态副本集（02-8-3：成员增删、ISR 剔除、卸载）。
+
+        以「当前 DB 副本集」为准收敛，天然幂等：迁移的 `expand` / `shrink` 两次写库各收敛一次，
+        不需要读台账判断迁移是否结束。
+
+        Args:
+            state: 分区运行态。
+            topology: 最新拓扑（`replicas` 非空）。
+
+        Returns:
+            str: `_MEMBERSHIP_APPLIED`（已收敛，可继续后续字段）/ `_MEMBERSHIP_DETACHED`（已卸载）/
+            `_MEMBERSHIP_INVALID`（非法分配，本轮不收敛）。
+        """
+        replicas = topology.replicas
+        new_leader = topology.leader or replicas[0]
+        if new_leader not in replicas:
+            # 非法分配（leader 被移出）：保留现状 + 告警，交迁移预检与人工修正，不自动改主。
+            _LOGGER.warning(
+                "msg_replication_leader_outside_replicas",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                leader=new_leader,
+                replicas=list(replicas),
+                detail="leader 不在副本集内，保留现 leader 并跳过本轮收敛",
+            )
+            return _MEMBERSHIP_INVALID
+        if self._config.node_id not in replicas:
+            await self.detach_partition(
+                topic_id=state.topic_id, partition_no=state.partition_no, reason="not_in_replicas"
+            )
+            return _MEMBERSHIP_DETACHED
+        previous = ConcurrentStableFrozenList(state.replicas)
+        removed: ConcurrentStableList[str] = ConcurrentStableList(
+            member for member in previous if member not in replicas
+        )
+        added: ConcurrentStableList[str] = ConcurrentStableList(member for member in replicas if member not in previous)
+        state.replicas = replicas
+        state.min_insync_replicas = self._effective_min_insync(topology.min_insync_replicas, len(replicas))
+        start = await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no)
+        now = self._clock()
+        current: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict()
+        for member in replicas:
+            if member == new_leader:
+                continue
+            progress = state.followers.get(member)
+            # 交集成员保留原位点与新鲜度（不重置，避免把健康成员踢出 ISR）；
+            # 新加入者按日志起点建进度且 `in_sync=False`，等拉取追平后由扫描路径重入。
+            current.set(
+                member,
+                progress if progress is not None else FollowerProgress(leo=start, last_fetch_ms=now, in_sync=False),
+            )
+        state.followers = current
+        state.isr = ConcurrentStableSet(member for member in state.isr if member in replicas)
+        if state.role is ReplicaRole.LEADER:
+            await self._advance_hw(state)
+        self._update_metrics(state)
+        _LOGGER.info(
+            "msg_replication_membership_changed",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            removed=list(removed),
+            added=list(added),
+            role=state.role.value,
+            isr_size=len(state.isr),
+        )
+        return _MEMBERSHIP_APPLIED
 
     async def _apply_leader_change(self, state: PartitionReplication, *, new_leader: str) -> None:
         """按拓扑变更切换本节点角色（leader ↔ follower）。
