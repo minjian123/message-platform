@@ -324,7 +324,9 @@ def write_release(report: ReleaseReport, directory: Path) -> tuple[Path, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     json_path = directory / "release.json"
     markdown_path = directory / "release.md"
-    json_path.write_text(json.dumps(plain(_document(report)), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(plain(_document(report)), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     rows: ConcurrentStableList[str] = ConcurrentStableList()
     rows.add("# 发版前故障演练记录")
     rows.add("")
@@ -357,5 +359,5 @@ def write_release(report: ReleaseReport, directory: Path) -> tuple[Path, Path]:
         for reason in report.reasons:
             rows.add(f"- {reason}")
     rows.add("")
-    markdown_path.write_text("\n".join(rows), encoding="utf-8")
+    markdown_path.write_text("\n".join(rows), encoding="utf-8", newline="\n")
     return json_path, markdown_path

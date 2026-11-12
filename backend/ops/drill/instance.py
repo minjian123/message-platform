@@ -74,8 +74,8 @@ def ensure_signing_keys(work_dir: Path) -> tuple[str, str]:
         .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         .decode("utf-8")
     )
-    priv_path.write_text(private_pem, encoding="utf-8")
-    pub_path.write_text(public_pem, encoding="utf-8")
+    priv_path.write_text(private_pem, encoding="utf-8", newline="\n")
+    pub_path.write_text(public_pem, encoding="utf-8", newline="\n")
     return private_pem, public_pem
 
 

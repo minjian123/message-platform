@@ -1087,8 +1087,8 @@ def write_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "02_场景×判据×证据对照表_07-6-2.json"
     markdown_path = out_dir / "02_场景×判据×证据对照表_07-6-2.md"
-    json_path.write_text(render_json(report, record_links=record_links), encoding="utf-8")
-    markdown_path.write_text(render_markdown(report, record_links=record_links), encoding="utf-8")
+    json_path.write_text(render_json(report, record_links=record_links), encoding="utf-8", newline="\n")
+    markdown_path.write_text(render_markdown(report, record_links=record_links), encoding="utf-8", newline="\n")
     return json_path, markdown_path
 
 

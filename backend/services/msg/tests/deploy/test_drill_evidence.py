@@ -783,6 +783,18 @@ def test_checklist_generate_and_check(tmp_path: Path) -> None:
     assert checklist.check_checklist(scenario_set, missing)
 
 
+def test_checklist_write_uses_lf_only(tmp_path: Path) -> None:
+    """清单落盘恒为 LF：Windows 文本模式不得把换行翻成 CRLF，否则工作树常驻假脏。"""
+    scenario_set, _ = load_scenarios(REPO_ROOT / "deploy" / "drill" / "scenarios.toml")
+    path = tmp_path / "RELEASE_CHECKLIST.md"
+
+    checklist.write_checklist(scenario_set, path)
+
+    raw = path.read_bytes()
+    assert b"\r" not in raw
+    assert raw.endswith(b"\n")
+
+
 def test_normalize_strips_trailing_and_newlines() -> None:
     """归一化：CRLF / 行尾空白 / 末尾空行。"""
     assert checklist.normalize("a  \r\nb\n\n") == "a\nb"
@@ -964,17 +976,19 @@ def test_cli_criteria_and_plan(
 
 
 def test_cli_checklist_write_and_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """命令行：checklist 生成与校验。"""
+    """命令行：checklist 生成与校验；落点指向 tmp，不写仓内清单（免工作树行尾残留）。"""
     _env(tmp_path, monkeypatch)
-    path = checklist.checklist_path(REPO_ROOT)
-    original = path.read_text(encoding="utf-8")
-    try:
-        assert drill_cli.main(["checklist"]) == 0
-        assert drill_cli.main(["checklist", "--check"]) == 0
-        path.write_text(original + "\n漂移", encoding="utf-8")
-        assert drill_cli.main(["checklist", "--check"]) == 1
-    finally:
-        path.write_text(original, encoding="utf-8")
+    path = tmp_path / "RELEASE_CHECKLIST.md"
+
+    def _tmp_path(_repo_root: Path) -> Path:
+        return path
+
+    monkeypatch.setattr(checklist, "checklist_path", _tmp_path)
+
+    assert drill_cli.main(["checklist"]) == 0
+    assert drill_cli.main(["checklist", "--check"]) == 0
+    path.write_text(path.read_text(encoding="utf-8") + "\n漂移", encoding="utf-8", newline="\n")
+    assert drill_cli.main(["checklist", "--check"]) == 1
 
 
 def test_cli_verify_pass_and_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

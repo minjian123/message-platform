@@ -366,7 +366,11 @@ def write_reports(
     json_path = directory / f"{report.scenario}.json"
     markdown_path = directory / f"{report.scenario}.md"
     json_path.write_text(
-        render_json(report, service_version=service_version, contract_version=contract_version), encoding="utf-8"
+        render_json(report, service_version=service_version, contract_version=contract_version),
+        encoding="utf-8",
+        newline="\n",
     )
-    markdown_path.write_text(render_markdown(report, title=title, service_version=service_version), encoding="utf-8")
+    markdown_path.write_text(
+        render_markdown(report, title=title, service_version=service_version), encoding="utf-8", newline="\n"
+    )
     return json_path, markdown_path

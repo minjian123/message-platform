@@ -136,7 +136,7 @@ def write_checklist(scenario_set: ScenarioSet, path: Path) -> Path:
         Path: 写入路径。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(build_checklist(scenario_set), encoding="utf-8")
+    path.write_text(build_checklist(scenario_set), encoding="utf-8", newline="\n")
     return path
 
 
