@@ -432,6 +432,9 @@ def test_sample_ttl_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("MSG_STORAGE_SAMPLE_TTL_MS", "abc")
     with pytest.raises(ValueError, match="取值非法"):
         StorageWatermark(root=tmp_path, usage=_Usage([100]))
+    monkeypatch.setenv("MSG_STORAGE_SAMPLE_TTL_MS", "")
+    from_env = StorageWatermark(root=tmp_path, usage=_Usage([100]))
+    assert from_env._ttl_ms == STORAGE_SAMPLE_TTL_MS  # pyright: ignore[reportPrivateUsage]
     assert (STORAGE_WARN_RATIO, STORAGE_REJECT_RATIO) == (0.70, 0.85)
 
 

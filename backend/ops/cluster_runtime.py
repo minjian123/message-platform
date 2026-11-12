@@ -12,14 +12,17 @@ from dataclasses import dataclass
 from typing import cast
 
 from bms_core.audit.emit import AuditEventEmitter
+from bms_core.core.assembly import register_platform_plugins
 from bms_core.core.config import Settings
 from bms_core.core.plugin import resolve_plugin
+from bms_core.core.resources import ResourceManager
 from bms_core.db.engine import EngineFactory
 from bms_core.db.keys import PLATFORM_DB_KEY
 from bms_core.db.registry import EngineRegistry
 from bms_core.db.session import SessionFactory, session_scope
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.oauth.token import BaseServiceTokenIssuer
+from fastapi import FastAPI
 
 from bms_msg.broker.election import LeaderSwitchMetrics, LeaderSwitchService
 from bms_msg.broker.network import (
@@ -109,7 +112,9 @@ async def build_runtime(*, settings: Settings | None = None) -> ClusterRuntime:
         ConfigError: 多实例端点 / 端口配置非法（fail-closed）。
         PluginError: 服务令牌签发者不可用。
     """
+    # CLI 入口需先登记平台插件工厂（outbox / 权限等），否则 EngineFactory 解析即报「未注册」
     resolved = settings if settings is not None else Settings()
+    register_platform_plugins(resolved, FastAPI(), ResourceManager())
     replica_config = ReplicaConfig.from_env()
     channel = InternalChannelConfig.from_env(
         enabled=replica_config.enabled,

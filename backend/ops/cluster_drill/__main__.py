@@ -15,6 +15,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from bms_core.core.concurrent import (
     ConcurrentStableDict,
@@ -23,7 +24,7 @@ from bms_core.core.concurrent import (
     ConcurrentStableList,
 )
 
-from ops.cluster_drill import inject, scenarios
+from ops.cluster_drill import chain, inject, scenarios
 from ops.cluster_drill.config import (
     ClusterDrillConfig,
     ClusterDrillError,
@@ -32,13 +33,17 @@ from ops.cluster_drill.config import (
     require_confirmation,
 )
 from ops.cluster_drill.probe import ProbeClient, metric_value
-from ops.cluster_drill.remote import RemoteRunner, build_image_script, compose_down_script, compose_up_script
+from ops.cluster_drill.remote import (
+    RemoteRunner,
+    SshTunnel,
+    build_image_script,
+    compose_down_script,
+    compose_up_script,
+    restart_script,
+)
 from ops.cluster_drill.report import write_cluster_report
 from ops.drill.env import TARGET_DOCKER, load_scenarios, validate_scenarios
 from ops.drill.model import (
-    RESULT_FAILED,
-    RESULT_OK,
-    RESULT_SKIPPED,
     Criterion,
     DrillReport,
     DrillScenario,
@@ -53,6 +58,12 @@ _EXIT_PARAM = 2
 
 _PROBE_INTERVAL_MS = 2_000
 """就绪轮询间隔（毫秒）。"""
+
+_INJECTION_SETTLE_SEC = 12.0
+"""注入后等待（秒）：ISR 收缩判据依赖 `lag_time_max_ms`（缺省 10s）内的拉取中断。"""
+
+_EXPECTED_ISR_PER_PARTITION = 3
+"""每分区的期望 ISR（三副本全同步）。"""
 
 
 class _Outcome:
@@ -86,7 +97,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--skip-provision", action="store_true", dest="skip_provision", help="跳过源码同步与镜像构建（复用已起实例）"
     )
-    run.add_argument("--topic-id", type=int, dest="topic_id", default=None, help="演练主题主键（切主用）")
+    run.add_argument("--topic-id", type=int, dest="topic_id", default=None, help="演练主题主键（省略则按参数新建）")
+    run.add_argument("--namespace", default="msg", help="命名空间（须为已启用 module_key）")
+    run.add_argument("--topic-name", dest="topic_name", default="drill.replica.probe", help="演练主题名")
+    run.add_argument("--tenant", default="demo", help="租户编码（数据面 dev 覆盖 / 管理面头）")
+    run.add_argument("--partition-count", type=int, dest="partition_count", default=3, help="新建主题的分区数")
+    run.add_argument("--publish-count", type=int, dest="publish_count", default=30, help="注入前 acks=all 发布条数")
     run.add_argument("--rerun-reason", dest="rerun_reason", default="", help="复跑原因")
 
     verify = sub.add_parser("verify", help="对账多实例记录并生成矩阵")
@@ -140,8 +156,8 @@ def run_plan(config: ClusterDrillConfig) -> int:
     return 0
 
 
-def _wait_ready(client: ProbeClient, timeout_sec: int) -> bool:
-    """轮询三实例就绪。
+async def _wait_ready(client: ProbeClient, timeout_sec: int) -> bool:
+    """轮询三实例就绪（异步等待，不嵌套事件循环）。
 
     Args:
         client: 探针。
@@ -152,9 +168,9 @@ def _wait_ready(client: ProbeClient, timeout_sec: int) -> bool:
     """
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        if asyncio.run(client.all_ready()):
+        if await client.all_ready():
             return True
-        time.sleep(_PROBE_INTERVAL_MS / 1000)
+        await asyncio.sleep(_PROBE_INTERVAL_MS / 1000)
     return False
 
 
@@ -192,22 +208,140 @@ async def _samples(client: ProbeClient, phase: str) -> ConcurrentStableList[Phas
     return result
 
 
-def _criteria_from_samples(samples: ConcurrentStableList[PhaseSample]) -> ConcurrentStableDict[str, tuple[str, str]]:
-    """由三段样本推导可观测判据（不可观测项留空由 `scenarios.build_criteria` 记 skipped）。
+def _isr_total(samples: ConcurrentStableList[PhaseSample]) -> int:
+    """某一段样本里的 ISR 合计（取三实例最大值，避免不可达实例拉低）。
 
     Args:
-        samples: 三段样本。
+        samples: 同一阶段的样本（每实例一条）。
 
     Returns:
-        ConcurrentStableDict[str, tuple[str, str]]: 记录键 → `(result, actual)`。
+        int: ISR 合计。
     """
-    facts: ConcurrentStableDict[str, tuple[str, str]] = ConcurrentStableDict()
-    after_ok = any(sample.readyz_ok for sample in samples if sample.phase == "after")
-    facts.set(
-        "rto_within_budget",
-        (RESULT_OK, "恢复后三段样本均可采集") if after_ok else (RESULT_FAILED, "恢复后三实例均不可达"),
-    )
-    return facts
+    return max((int(sample.metrics.get("msg_isr_size", 0)) for sample in samples), default=0)
+
+
+async def _topic_state(dsn: str, topic_id: int) -> chain.TopicState:
+    """取分区状态快照（直读平台库 `msg_partition`；不依赖容器内 CLI 插件引导）。
+
+    Args:
+        dsn: 平台库连接串。
+        topic_id: 主题主键。
+
+    Returns:
+        chain.TopicState: 分区状态。
+
+    Raises:
+        ClusterDrillError: 查询失败。
+    """
+    try:
+        return await chain.load_topic_state(dsn, topic_id=topic_id)
+    except chain.ChainError as exc:
+        raise ClusterDrillError(str(exc)) from exc
+
+
+async def _ensure_isr(
+    client: ProbeClient, drill: chain.DrillClient, target: int, *, rounds: int = 3, round_timeout_sec: float = 60
+) -> bool:
+    """预热 + 等 ISR 收敛到期望合计（落后副本需被写请求「碰一次」才建拉取态）。
+
+    Args:
+        client: 探针。
+        drill: 采集客户端（提供预热）。
+        target: 期望 ISR 合计（3 实例 × 分区数）。
+        rounds: 预热轮数上限。
+        round_timeout_sec: 每轮等待上限（秒）。
+
+    Returns:
+        bool: 收敛 True。
+    """
+    for _ in range(rounds):
+        await drill.warmup()
+        try:
+            await drill.publish("warm-commit", b"warmup-commit")
+        except chain.ChainError:
+            continue
+        if await _wait_isr(client, target, timeout_sec=round_timeout_sec):
+            return True
+    return False
+
+
+async def _wait_isr(client: ProbeClient, target: int, *, timeout_sec: float = 60) -> bool:
+    """等 ISR 回升到目标值（副本重入判据依赖 `lag_time_max_ms` 窗口）。
+
+    Args:
+        client: 探针。
+        target: 目标 ISR 合计（取三实例最大值）。
+        timeout_sec: 超时（秒）。
+
+    Returns:
+        bool: 达标 True。
+    """
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        total = 0
+        for index in range(3):
+            total = max(total, int(metric_value(await client.metrics(index), "msg_isr_size")))
+        if total >= target:
+            return True
+        await asyncio.sleep(3)
+    return False
+
+
+def _container_for(config: ClusterDrillConfig, node: str) -> str:
+    """把节点标识（`msg-1`）映射到演练容器名（`msg-drill-1`）。
+
+    Args:
+        config: 演练配置。
+        node: 节点标识（空 = 首个实例）。
+
+    Returns:
+        str: 容器名。
+    """
+    suffix = node.rsplit("-", 1)[-1] if node else ""
+    return f"{config.container_prefix}-{suffix}" if suffix else config.container_names[0]
+
+
+async def _leader_changed(
+    drill: chain.SingleShotPublisher,
+    bases: ConcurrentStableList[str],
+    old_leader: str,
+    partition_no: int,
+) -> bool:
+    """注入期探测：同一分区是否已由别的节点持写权。
+
+    Args:
+        drill: 采集客户端。
+        bases: 三实例地址（与容器序号对齐）。
+        old_leader: 注入前该分区 leader。
+        partition_no: 分区号。
+
+    Returns:
+        bool: 已换主 True。
+    """
+    for offset, base in enumerate(bases):
+        info = await drill.publish_at(base, "k0")
+        if int(cast("int", info.get("partition", -1))) != int(partition_no):
+            continue
+        node = str(info.get("leader") or "") or f"msg-{offset + 1}"
+        if node != old_leader:
+            return True
+    return False
+
+
+async def _probe_publish_fails(drill: chain.Publisher) -> bool:
+    """注入期探针：写一条消息，被拒（分区 / 租约到期）即 True。
+
+    Args:
+        drill: 采集客户端。
+
+    Returns:
+        bool: 写入是否被拒。
+    """
+    try:
+        await drill.publish("probe", b"during-probe")
+    except chain.ChainError:
+        return True
+    return False
 
 
 async def run_scenario(
@@ -219,6 +353,11 @@ async def run_scenario(
     skip_provision: bool,
     topic_id: int | None,
     rerun_reason: str,
+    namespace: str = "msg",
+    topic_name: str = "drill.replica.probe",
+    tenant: str = "demo",
+    partition_count: int = 3,
+    publish_count: int = 30,
 ) -> int:
     """执行一个多实例场景。
 
@@ -228,8 +367,13 @@ async def run_scenario(
         confirm: 二次确认值。
         dry_run: 只渲染动作。
         skip_provision: 跳过同步 / 构建。
-        topic_id: 演练主题主键（切主用；None 记录为遗留）。
+        topic_id: 演练主题主键（None = 按命名空间 / 名称新建）。
         rerun_reason: 复跑原因。
+        namespace: 命名空间（已启用 module_key）。
+        topic_name: 演练主题名。
+        tenant: 租户编码。
+        partition_count: 新建主题的分区数。
+        publish_count: 注入前 `acks=all` 发布条数。
 
     Returns:
         int: 退出码。
@@ -241,6 +385,8 @@ async def run_scenario(
         for step in steps:
             print(f"  [{step.phase}] {step.name}: {step.command}")
         return 0
+    dsn = chain.platform_dsn(config.variables, db_prefix=config.db_prefix)
+    run_topic = topic_name if topic_id is not None else f"{topic_name}.{scenario.name}.{int(time.time())}"
     outcome = _Outcome()
     runner = RemoteRunner(config)
     root = Path(__file__).resolve().parents[3]
@@ -254,57 +400,110 @@ async def run_scenario(
         outcome.commands.add(ConcurrentStableDict({"step": "build", "result": "ok" if build.ok else "failed"}))
         if not build.ok:
             raise ClusterDrillError(f"cluster-drill.remote 镜像构建失败：{build.stderr.strip()[:200]}")
-        up = runner.run(compose_up_script(config))
+        network = runner.run(inject.ensure_network_script(config))
+        outcome.commands.add(
+            ConcurrentStableDict({"step": "network_create", "result": "ok" if network.ok else "failed"})
+        )
+        if not network.ok:
+            raise ClusterDrillError(f"cluster-drill.remote 演练网络创建失败：{network.stderr.strip()[:200]}")
+        up = runner.run(compose_up_script(config, commit=commit))
         outcome.commands.add(ConcurrentStableDict({"step": "compose_up", "result": "ok" if up.ok else "failed"}))
         if not up.ok:
             raise ClusterDrillError(f"cluster-drill.remote 起三实例失败：{up.stderr.strip()[:200]}")
     bases: ConcurrentStableList[str] = ConcurrentStableList(f"http://127.0.0.1:{port}" for port in config.ports)
     client = ProbeClient(bases)
+    drill = chain.DrillClient(bases, tenant=tenant, namespace=namespace, topic=run_topic)
+    tunnel = SshTunnel(config)
+    tunnel.open()
+    records: ConcurrentStableList[chain.PublishRecord] = ConcurrentStableList()
+    markers: ConcurrentStableList[chain.PublishRecord] = ConcurrentStableList()
+    switch_items: ConcurrentStableFrozenList[chain.SwitchItem] = ConcurrentStableFrozenList()
+    before_state: chain.TopicState | None = None
+    after_state: chain.TopicState | None = None
+    probe_failed_during = False
+    recovery_ok = False
     try:
-        if not _wait_ready(client, config.ready_timeout_sec):
+        if not tunnel.wait_ready():
+            raise ClusterDrillError("cluster-drill.guard 本机 SSH 隧道未在预算内就绪")
+        # 每轮前置重置：上一轮结束后副本拉取态 / epoch 会残留（产品缺陷，见遗留），
+        # 不重置会让 ISR 永久停在 1，`acks=all` 直接 350032；重启可确定性回到健康基线。
+        reset = runner.run(restart_script(config))
+        outcome.commands.add(ConcurrentStableDict({"step": "reset_cluster", "result": "ok" if reset.ok else "failed"}))
+        if not reset.ok:
+            raise ClusterDrillError(f"cluster-drill.remote 重置三实例失败：{reset.stderr.strip()[:200]}")
+        if not await _wait_ready(client, config.ready_timeout_sec):
             raise ClusterDrillError("cluster-drill.guard 三实例未在预算内就绪")
-        before = asyncio.run(_samples(client, "before"))
-        inject.apply_steps(runner, steps, phase="inject")
-        during = asyncio.run(_samples(client, "during"))
-        if topic_id is not None:
-            switch = runner.docker_exec(
-                config.container_names[0],
-                f"python -m ops.failover switch --topic-id {int(topic_id)} --all-partitions "
-                f"--operator system:drill --reason {scenario.name}",
-            )
-            outcome.commands.add(ConcurrentStableDict({"step": "failover", "result": "ok" if switch.ok else "failed"}))
-        else:
-            outcome.issues.add(
+        if topic_id is None:
+            topic_id = await drill.ensure_topic(int(partition_count))
+            outcome.commands.add(
                 ConcurrentStableDict(
-                    {"step": "failover", "reason": "未提供 --topic-id，切主与数据完整性证据未采集", "owner": "02-8"}
+                    {"step": "create_topic", "result": "ok", "topic": run_topic, "topic_id": str(topic_id)}
                 )
             )
+        state = await _topic_state(dsn, topic_id)
+        expected_isr = _EXPECTED_ISR_PER_PARTITION * len(state.partitions)
+        if not await _ensure_isr(client, drill, expected_isr):
+            raise ClusterDrillError(f"cluster-drill.guard ISR 未在预算内收敛到 {expected_isr}")
+        records = await drill.publish_batch(int(publish_count), warm=False)
+        before = await _samples(client, "before")
+        before_state = await _topic_state(dsn, topic_id)
+        isr_before = _isr_total(before)
+        target = _container_for(config, before_state.leader_of(0))
+        steps = inject.steps_for(scenario.name, config, leader=target)
+        switch = runner.docker_exec(
+            config.container_names[0],
+            f"PATH=/opt/msg/backend/.venv/bin:$PATH BMS_APP__SERVICE=msg "
+            f"python -m ops.failover switch --topic-id {int(topic_id)} --all-partitions "
+            f"--operator system:drill --reason {scenario.name} --json",
+        )
+        outcome.commands.add(ConcurrentStableDict({"step": "failover", "result": "ok" if switch.ok else "failed"}))
+        if switch.ok:
+            switch_items = chain.parse_switch_result(chain.last_json_object(switch.stdout or ""))
+        inject.apply_steps(runner, steps, phase="inject")
+        await asyncio.sleep(_INJECTION_SETTLE_SEC)
+        during = await _samples(client, "during")
+        probe_failed_during = await _probe_publish_fails(drill)
+        old_leader = before_state.leader_of(0)
+        switched_during = await _leader_changed(drill, bases, old_leader, before_state.partitions[0].partition_no)
         inject.apply_steps(runner, steps, phase="recover")
-        if not _wait_ready(client, config.ready_timeout_sec):
+        recovery_ok = await _wait_ready(client, config.ready_timeout_sec)
+        if recovery_ok:
+            await drill.warmup()
+            recovery_ok = await _wait_isr(client, isr_before)
+        if not recovery_ok:
             outcome.issues.add(
                 ConcurrentStableDict({"step": "recover", "reason": "恢复后未在预算内全部就绪", "owner": "02-8"})
             )
-        after = asyncio.run(_samples(client, "after"))
+        after = await _samples(client, "after")
+        after_state = await _topic_state(dsn, topic_id)
+        demoted = False
+        if old_leader:
+            suffix = old_leader.rsplit("-", 1)[-1]
+            index = int(suffix) - 1 if suffix.isdigit() else 0
+            if 0 <= index < len(bases):
+                reported = await drill.probe_leader(bases[index])
+                demoted = bool(reported) and reported != old_leader
+        markers = await drill.publish_batch(chain.MARKER_ROUNDS)
     finally:
         await client.aclose()
+        await drill.aclose()
+        tunnel.close()
     outcome.rto_ms = int((time.monotonic() - started) * 1000)
     samples = ConcurrentStableList([*before, *during, *after])
-    facts = _criteria_from_samples(samples)
-    if topic_id is None:
-        for key in (
-            "committed_not_lost",
-            "no_double_write",
-            "client_refresh",
-            "leader_switched",
-            "old_leader_fenced",
-            "isr_shrink_rejoin",
-            "leader_lease_expired",
-            "follower_isr_shrink",
-            "retained_tail_documented",
-            "stale_leader_rejected",
-            "rejoin_demotes",
-        ):
-            facts.set(key, (RESULT_SKIPPED, "未提供演练主题，无法采集"))
+    facts = chain.derive_facts(
+        records=records,
+        markers=markers,
+        before=before_state,
+        after=after_state,
+        switch_items=switch_items,
+        isr_before=_isr_total(before),
+        isr_during=_isr_total(during),
+        isr_after=_isr_total(after),
+        probe_failed_during=probe_failed_during,
+        recovery_ok=recovery_ok,
+        old_leader_demoted=demoted,
+        switched_during=switched_during,
+    )
     outcome.criteria.extend(scenarios.build_criteria(scenario, facts))
     report = _report(config, scenario, outcome, samples, rerun_reason=rerun_reason)
     json_path, markdown_path = write_cluster_report(report, config.report_dir, title=scenario.title)
@@ -394,10 +593,12 @@ def run_cleanup(config: ClusterDrillConfig) -> int:
     Returns:
         int: 退出码（0 成功；远程失败 1）。
     """
-    result = RemoteRunner(config).run(compose_down_script(config))
+    runner = RemoteRunner(config)
+    result = runner.run(compose_down_script(config))
     if not result.ok:
         print(f"[FAIL] cluster-drill.cleanup 清理失败：{result.stderr.strip()[:200]}")
         return 1
+    runner.run(inject.remove_network_script(config))
     print(f"[OK] 已清理演练项目 {config.project}")
     return 0
 
@@ -457,6 +658,11 @@ def main(argv: ConcurrentStableList[str] | None = None) -> int:
                 skip_provision=bool(args.skip_provision),
                 topic_id=args.topic_id,
                 rerun_reason=str(args.rerun_reason),
+                namespace=str(args.namespace),
+                topic_name=str(args.topic_name),
+                tenant=str(args.tenant),
+                partition_count=int(args.partition_count),
+                publish_count=int(args.publish_count),
             )
         )
     except ClusterDrillError as exc:

@@ -54,7 +54,7 @@ def test_gateway_overlay_adds_alias_and_drill_does_not() -> None:
     assert "container_name: msg-drill" not in gateway
     for index in (1, 2, 3):
         assert f"container_name: msg-drill-{index}" in drill
-        assert f"127.0.0.1:${{MSG_DRILL_PORT_{index}:-1880{index - 1}}}:8000" in drill
+        assert f"127.0.0.1:${{MSG_CLUSTER_DRILL_PORT_{index}:-1880{index - 1}}}:8000" in drill
     assert "aliases" not in drill
 
 

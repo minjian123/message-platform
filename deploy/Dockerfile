@@ -82,6 +82,10 @@ COPY --from=builder /opt/msg /opt/msg
 # 迁移能力保留：分链迁移脚本（当前无脚本，按新基线重建时使用）
 COPY msg/backend/alembic ./alembic
 
+# 运维 / 演练 CLI（02-8：`docker exec ... python -m ops.failover|rebalance status` 供切主与快照；
+# 只拷脚本目录，不含依赖与凭据）
+COPY msg/backend/ops ./ops
+
 # 产品自持声明 / 域布局 / 公开契约（相对工作目录父级：/opt/msg/deploy/...）
 # 装配期装载清单时据此定位对端契约与域布局；缺件即装载校验失败（拒启），不静默跳过
 COPY msg/deploy/registry ../deploy/registry

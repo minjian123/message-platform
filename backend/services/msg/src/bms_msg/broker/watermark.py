@@ -525,7 +525,9 @@ def _resolve_ttl(ttl_ms: int | None) -> int:
     Raises:
         ValueError: 取值非正或非整数。
     """
-    raw: object = ttl_ms if ttl_ms is not None else os.environ.get(STORAGE_SAMPLE_TTL_MS_ENV, STORAGE_SAMPLE_TTL_MS)
+    raw: object = os.environ.get(STORAGE_SAMPLE_TTL_MS_ENV, STORAGE_SAMPLE_TTL_MS) if ttl_ms is None else ttl_ms
+    if str(raw).strip() == "":
+        return STORAGE_SAMPLE_TTL_MS
     try:
         value = int(str(raw))
     except (TypeError, ValueError) as exc:

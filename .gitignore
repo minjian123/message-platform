@@ -22,6 +22,8 @@ node_modules/
 # 本地凭据 / 资源（两份 .env 都不入库：deploy/.env 供 compose 插值，backend/.env 供本地裸跑的 dotenv 层）
 deploy/.env
 backend/.env
+# 集群演练环境（SSH / 演练库 / Redis 真实值；模板见 deploy/drill/cluster.env.example）
+deploy/drill/cluster.env
 msg文档/用户文档/本地资源.md
 
 # 消息数据根（02-1 缺省开发态落点：backend/var/lib/msg）
