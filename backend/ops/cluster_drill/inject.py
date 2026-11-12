@@ -18,9 +18,11 @@ __all__ = [
     "InjectionStep",
     "connect_command",
     "disconnect_command",
+    "ensure_attached_script",
     "ensure_network_script",
     "kill_command",
     "network_name",
+    "node_alias",
     "remove_network_script",
     "start_command",
     "steps_for",
@@ -75,6 +77,27 @@ def remove_network_script(config: ClusterDrillConfig) -> str:
     return f"docker network inspect {quoted} >/dev/null 2>&1 && docker network rm {quoted} >/dev/null 2>&1 || true"
 
 
+def ensure_attached_script(config: ClusterDrillConfig) -> str:
+    """确保三实例都已接入演练网络（幂等：已接入时报错被吞掉）。
+
+    上一轮若在恢复前中断，容器可能仍被断网；`docker restart` 不会重新接入网络，
+    故每轮注入前先兜底接入，否则注入命令会报 `is not connected to network`。
+
+    Args:
+        config: 演练配置。
+
+    Returns:
+        str: shell 脚本。
+    """
+    network = shlex.quote(network_name(config))
+    parts = [
+        f"docker network connect --alias {shlex.quote(node_alias(config, name))} {network} "
+        f"{shlex.quote(name)} >/dev/null 2>&1 || true"
+        for name in config.container_names
+    ]
+    return " ; ".join(parts)
+
+
 def kill_command(container: str, *, signal: str = "SIGKILL") -> str:
     """构造容器信号终止命令。
 
@@ -125,17 +148,36 @@ def disconnect_command(container: str, network: str) -> str:
     return f"docker network disconnect {shlex.quote(network)} {shlex.quote(container)}"
 
 
-def connect_command(container: str, network: str) -> str:
-    """构造整容器恢复网络命令。
+def node_alias(config: ClusterDrillConfig, container: str) -> str:
+    """容器名对应的副本节点 DNS 别名（`msg-drill-2` → `msg-2`）。
+
+    `MSG_REPLICATION_NODE_ENDPOINTS` 用 `msg-N` 寻址副本；`docker network connect`
+    不带 `--alias` 会丢掉 compose 注入的服务别名，重连后 DNS 解析失败、复制直接停摆。
+
+    Args:
+        config: 演练配置。
+        container: 容器名。
+
+    Returns:
+        str: 节点别名（形如 `msg-2`）。
+    """
+    suffix = container.rsplit("-", 1)[-1]
+    return f"msg-{suffix}" if suffix.isdigit() else container
+
+
+def connect_command(container: str, network: str, *, alias: str | None = None) -> str:
+    """构造整容器恢复网络命令（可带 DNS 别名）。
 
     Args:
         container: 容器名。
         network: 网络名。
+        alias: 副本节点 DNS 别名（重连必须带上，否则复制端点解析失败）。
 
     Returns:
         str: 命令。
     """
-    return f"docker network connect {shlex.quote(network)} {shlex.quote(container)}"
+    alias_part = f"--alias {shlex.quote(alias)} " if alias else ""
+    return f"docker network connect {alias_part}{shlex.quote(network)} {shlex.quote(container)}"
 
 
 @dataclass(frozen=True)
@@ -176,15 +218,34 @@ def steps_for(
         steps.add(InjectionStep(phase="inject", name="kill-leader", command=kill_command(target)))
         steps.add(InjectionStep(phase="recover", name="start-leader", command=start_command(target)))
     elif scenario == "network_partition_multi":
+        follower = next(name for name in names if name != target)
         steps.add(InjectionStep(phase="inject", name="disconnect-leader", command=disconnect_command(target, network)))
         steps.add(
-            InjectionStep(phase="inject", name="disconnect-follower", command=disconnect_command(names[1], network))
+            InjectionStep(phase="inject", name="disconnect-follower", command=disconnect_command(follower, network))
         )
-        steps.add(InjectionStep(phase="recover", name="connect-leader", command=connect_command(target, network)))
-        steps.add(InjectionStep(phase="recover", name="connect-follower", command=connect_command(names[1], network)))
+        steps.add(
+            InjectionStep(
+                phase="recover",
+                name="connect-leader",
+                command=connect_command(target, network, alias=node_alias(config, target)),
+            )
+        )
+        steps.add(
+            InjectionStep(
+                phase="recover",
+                name="connect-follower",
+                command=connect_command(follower, network, alias=node_alias(config, follower)),
+            )
+        )
     elif scenario == "split_brain_multi":
         steps.add(InjectionStep(phase="inject", name="isolate-old-leader", command=disconnect_command(target, network)))
-        steps.add(InjectionStep(phase="recover", name="rejoin-old-leader", command=connect_command(target, network)))
+        steps.add(
+            InjectionStep(
+                phase="recover",
+                name="rejoin-old-leader",
+                command=connect_command(target, network, alias=node_alias(config, target)),
+            )
+        )
     else:
         raise KeyError(f"未知的多实例场景：{scenario}")
     return steps

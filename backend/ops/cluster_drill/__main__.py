@@ -265,7 +265,7 @@ async def _ensure_isr(
     return False
 
 
-async def _wait_isr(client: ProbeClient, target: int, *, timeout_sec: float = 60) -> bool:
+async def _wait_isr(client: ProbeClient, target: int, *, timeout_sec: float = 180) -> bool:
     """等 ISR 回升到目标值（副本重入判据依赖 `lag_time_max_ms` 窗口）。
 
     Args:
@@ -431,6 +431,10 @@ async def run_scenario(
         outcome.commands.add(ConcurrentStableDict({"step": "reset_cluster", "result": "ok" if reset.ok else "failed"}))
         if not reset.ok:
             raise ClusterDrillError(f"cluster-drill.remote 重置三实例失败：{reset.stderr.strip()[:200]}")
+        attached = runner.run(inject.ensure_attached_script(config))
+        outcome.commands.add(
+            ConcurrentStableDict({"step": "network_attach", "result": "ok" if attached.ok else "failed"})
+        )
         if not await _wait_ready(client, config.ready_timeout_sec):
             raise ClusterDrillError("cluster-drill.guard 三实例未在预算内就绪")
         if topic_id is None:
@@ -472,7 +476,9 @@ async def run_scenario(
             recovery_ok = await _wait_isr(client, isr_before)
         if not recovery_ok:
             outcome.issues.add(
-                ConcurrentStableDict({"step": "recover", "reason": "恢复后未在预算内全部就绪", "owner": "02-8"})
+                ConcurrentStableDict(
+                    {"step": "recover", "reason": "恢复后未在预算内全部就绪（含 ISR 回升）", "owner": "02-8"}
+                )
             )
         after = await _samples(client, "after")
         after_state = await _topic_state(dsn, topic_id)

@@ -380,6 +380,10 @@ class DrillClient(BaseFrameworkObject):
             if round_no and round_no % 10 == 0:
                 # 长时间未成功：重新预热（副本拉取态 / epoch 可能已失效），再继续改投
                 await self.warmup()
+            # 轮次之间必须等：故障恢复后各节点的拓扑刷新是异步的（秒级），
+            # 若不等待，`350033` 会在毫秒内把 40 轮预算烧光（真机演练踩坑）。
+            if round_no:
+                await self._sleep(3.0)
             for attempt, base in enumerate(self._bases):
                 status, reply = await self._call("POST", base, "/api/v1/msg/publish", body)
                 data = _as_dict(reply.get("data"))

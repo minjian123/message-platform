@@ -279,10 +279,19 @@ def test_inject_commands_and_steps(tmp_path: Path) -> None:
     assert "docker network rm msg-drill-net" in cluster_inject.remove_network_script(config)
 
     assert len(steps_for("replica_crash", config)) == 2
-    assert len(steps_for("network_partition_multi", config)) == 4
+    partition_steps = steps_for("network_partition_multi", config, leader="msg-drill-2")
+    assert len(partition_steps) == 4
+    disconnected = [step.command for step in partition_steps if step.phase == "inject"]
+    assert all("msg-drill-2" not in command.split()[-1] for command in disconnected[1:])
     assert len(steps_for("split_brain_multi", config)) == 2
     with pytest.raises(KeyError):
         steps_for("unknown", config)
+
+    attach = cluster_inject.ensure_attached_script(config)
+    assert attach.count("docker network connect --alias msg-") == 3
+    assert cluster_inject.node_alias(config, "msg-drill-2") == "msg-2"
+    rejoin = steps_for("split_brain_multi", config, leader="msg-drill-2")[-1]
+    assert "--alias msg-2" in rejoin.command
 
 
 def test_apply_steps_failure_raises(tmp_path: Path) -> None:
