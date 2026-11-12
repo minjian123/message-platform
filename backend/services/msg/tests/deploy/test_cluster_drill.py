@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from ops.cluster_drill import __main__ as cluster_main
 from ops.cluster_drill import chain as chain_mod
+from ops.cluster_drill import cleanup as cluster_cleanup
 from ops.cluster_drill import inject as cluster_inject
 from ops.cluster_drill import remote as remote_mod
 from ops.cluster_drill.client import MetadataView, PublishOutcome, refresh_and_retry
@@ -427,28 +429,6 @@ def test_scenarios_build_criteria_and_degraded_note() -> None:
     assert missing_keys(scenario, ConcurrentStableDict()) == ["committed_not_lost"]
     assert degraded_note(False)[0] == "degraded"
     assert degraded_note(True)[0] == "ok"
-
-
-def test_cleanup_success_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """清理：先删项目与卷、再删演练网络；compose down 失败即报失败。"""
-    config = _config(tmp_path)
-    scripts: ConcurrentStableList[str] = ConcurrentStableList()
-
-    def ok_run(_runner: RemoteRunner, script: str) -> RemoteResult:
-        scripts.add(script)
-        return RemoteResult(code=0)
-
-    monkeypatch.setattr(cluster_main.RemoteRunner, "run", ok_run)
-    assert cluster_main.run_cleanup(config) == 0
-    assert "--profile cluster down --remove-orphans -v" in scripts[0]
-    assert "docker network rm msg-drill-net" in scripts[1]
-
-    def fail_run(_runner: RemoteRunner, script: str) -> RemoteResult:
-        del script
-        return RemoteResult(code=1, stderr="boom")
-
-    monkeypatch.setattr(cluster_main.RemoteRunner, "run", fail_run)
-    assert cluster_main.run_cleanup(config) == 1
 
 
 def test_plan_and_dry_run(tmp_path: Path) -> None:
@@ -1020,3 +1000,109 @@ def test_cluster_config_digest_and_backup(tmp_path: Path) -> None:
     backup = backup_evidence(config)
     assert backup["mode"] == "not_applicable"
     assert backup["reason"]
+
+
+def test_cleanup_success_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """清理：容器 / 卷 → 网络 → 演练库与 Redis → 宿主目录 → 镜像；失败项汇总报 1。"""
+    config = _config(tmp_path)
+    scripts: ConcurrentStableList[str] = ConcurrentStableList()
+
+    def ok_run(_runner: RemoteRunner, script: str) -> RemoteResult:
+        scripts.add(script)
+        return RemoteResult(code=0)
+
+    monkeypatch.setattr(cluster_main.RemoteRunner, "run", ok_run)
+    assert cluster_main.run_cleanup(config) == 0
+    assert "--profile cluster down --remove-orphans -v" in scripts[0]
+    assert "工作区不存在" in scripts[0]
+    assert "docker network rm msg-drill-net" in scripts[1]
+    assert "docker run --rm --network msg-drill-net --env-file" in scripts[2]
+    assert "deploy/drill/cluster.env" in scripts[2]
+    assert "DROP DATABASE" in scripts[2]
+    assert "flushdb" in scripts[2]
+    assert "shutil.rmtree" in scripts[3]
+    assert "/srv/msg-drill" in scripts[3]
+    assert "drill/msg:drill-*" in scripts[4]
+
+    def fail_run(_runner: RemoteRunner, script: str) -> RemoteResult:
+        del script
+        return RemoteResult(code=1, stderr="boom")
+
+    monkeypatch.setattr(cluster_main.RemoteRunner, "run", fail_run)
+    assert cluster_main.run_cleanup(config) == 1
+
+
+def test_cleanup_keep_data_skips_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--keep-data`：不动演练库 / Redis，其余照常清。"""
+    config = _config(tmp_path)
+    scripts: ConcurrentStableList[str] = ConcurrentStableList()
+
+    def ok_run(_runner: RemoteRunner, script: str) -> RemoteResult:
+        scripts.add(script)
+        return RemoteResult(code=0)
+
+    monkeypatch.setattr(cluster_main.RemoteRunner, "run", ok_run)
+    assert cluster_main.run_cleanup(config, keep_data=True) == 0
+    assert len(scripts) == 4
+    assert not any("DROP DATABASE" in script for script in scripts)
+
+
+def test_cleanup_skips_purge_without_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """服务器上无演练镜像：数据清理记 SKIP，不把清理判失败。"""
+    config = _config(tmp_path)
+    scripts: ConcurrentStableList[str] = ConcurrentStableList()
+
+    def run(_runner: RemoteRunner, script: str) -> RemoteResult:
+        scripts.add(script)
+        if "DROP DATABASE" in script:
+            return RemoteResult(code=cluster_cleanup.PURGE_SKIPPED_EXIT, stderr="无演练镜像")
+        return RemoteResult(code=0)
+
+    monkeypatch.setattr(cluster_main.RemoteRunner, "run", run)
+    assert cluster_main.run_cleanup(config) == 0
+    assert len(scripts) == 5
+
+
+def test_cleanup_rejects_unsafe_prefix(tmp_path: Path) -> None:
+    """删库前缀守卫：等于 `msg` / 为空 / 非法字符一律拒绝，且不执行任何远程动作。"""
+    base = _config(tmp_path)
+    for prefix in ("msg", "", "9drill", "msg-drill", "msg演练"):
+        guarded = replace(base, db_prefix=prefix)
+        with pytest.raises(ClusterDrillError):
+            cluster_cleanup.assert_safe_data_prefix(guarded)
+    assert cluster_cleanup.assert_safe_data_prefix(base) == "msgdrill"
+
+
+def test_cleanup_paths_and_scripts(tmp_path: Path) -> None:
+    """宿主目录只取环境文件给出的绝对路径；系统目录与非绝对路径丢弃。"""
+    variables = ConcurrentStableFrozenDict(
+        {
+            "PLATFORM_NETWORK": "msg-drill-net",
+            "MSG_DATA_HOST_DIR_1": "/srv/msg-drill/vol/msg-1/data",
+            "MSG_OFFSETS_HOST_DIR_1": "/srv/msg-drill/vol/msg-1/offsets",
+            "MSG_DATA_HOST_DIR_2": "relative/path",
+            "MSG_DATA_HOST_DIR_3": "/srv",
+        }
+    )
+    config = replace(_config(tmp_path), variables=variables)
+    paths = cluster_cleanup.target_paths(config)
+    assert "/srv/msg-drill" in paths
+    assert "/srv/msg-drill/vol/msg-1/data" in paths
+    assert "/srv/msg-drill/vol/msg-1/offsets" in paths
+    assert "relative/path" not in paths
+    assert "/srv" not in paths
+
+    script = cluster_cleanup.remove_paths_script(config)
+    assert "for target in" in script
+    assert "shutil.rmtree" in script
+    assert cluster_cleanup.remove_images_script().count("docker rmi") == 1
+
+    empty = replace(config, work_dir="/srv", variables=ConcurrentStableFrozenDict())
+    assert len(cluster_cleanup.target_paths(empty)) == 0
+    assert cluster_cleanup.remove_paths_script(empty) == "true"
+
+    duplicate = replace(
+        _config(tmp_path),
+        variables=ConcurrentStableFrozenDict({"MSG_DATA_HOST_DIR": "/srv/msg-drill", "MSG_DATA_HOST_DIR_1": ""}),
+    )
+    assert list(cluster_cleanup.target_paths(duplicate)) == ["/srv/msg-drill"]

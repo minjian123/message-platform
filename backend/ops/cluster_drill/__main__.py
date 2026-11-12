@@ -25,6 +25,7 @@ from bms_core.core.concurrent import (
 )
 
 from ops.cluster_drill import chain, inject, scenarios
+from ops.cluster_drill import cleanup as cluster_cleanup
 from ops.cluster_drill.config import (
     ClusterDrillConfig,
     ClusterDrillError,
@@ -37,7 +38,6 @@ from ops.cluster_drill.remote import (
     RemoteRunner,
     SshTunnel,
     build_image_script,
-    compose_down_script,
     compose_up_script,
     restart_script,
 )
@@ -108,7 +108,13 @@ def _parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="对账多实例记录并生成矩阵")
     verify.add_argument("--records", action="append", required=True, help="记录目录（可重复）")
 
-    sub.add_parser("cleanup", help="停止演练容器并删除演练卷（幂等）")
+    clean = sub.add_parser("cleanup", help="停止演练容器并清理卷 / 网络 / 演练库 / Redis / 工作区 / 镜像（幂等）")
+    clean.add_argument(
+        "--keep-data",
+        action="store_true",
+        dest="keep_data",
+        help="保留演练库与 Redis 数据（只清容器 / 卷 / 目录 / 镜像）",
+    )
     return parser
 
 
@@ -637,21 +643,45 @@ def _commit(root: Path) -> str:
     return (result.stdout or "").strip() or "unknown"
 
 
-def run_cleanup(config: ClusterDrillConfig) -> int:
-    """停止演练容器并删除演练卷（幂等）。
+def run_cleanup(config: ClusterDrillConfig, *, keep_data: bool = False) -> int:
+    """清理演练环境（幂等）：容器 / 卷 → 网络 → 演练库与 Redis → 宿主目录 → 镜像。
 
     Args:
         config: 演练配置。
+        keep_data: 保留演练库与 Redis 数据（只清容器 / 卷 / 目录 / 镜像）。
 
     Returns:
-        int: 退出码（0 成功；远程失败 1）。
+        int: 退出码（0 成功；1 远程失败；2 数据清理前置不满足）。
     """
+    if not keep_data:
+        try:
+            cluster_cleanup.assert_safe_data_prefix(config)
+        except ClusterDrillError as exc:
+            print(f"[FAIL] {exc}")
+            return _EXIT_PARAM
     runner = RemoteRunner(config)
-    result = runner.run(compose_down_script(config))
-    if not result.ok:
-        print(f"[FAIL] cluster-drill.cleanup 清理失败：{result.stderr.strip()[:200]}")
-        return 1
+    failures: ConcurrentStableList[str] = ConcurrentStableList()
+    down = runner.run(cluster_cleanup.cleanup_down_script(config))
+    if not down.ok:
+        failures.add(f"停容器 / 删卷：{down.stderr.strip()[:200]}")
     runner.run(inject.remove_network_script(config))
+    if not keep_data:
+        purge = runner.run(cluster_cleanup.purge_data_script(config, network=inject.network_name(config)))
+        if purge.code == cluster_cleanup.PURGE_SKIPPED_EXIT:
+            print(f"[SKIP] 数据清理跳过：{purge.stderr.strip()[:200]}")
+        elif not purge.ok:
+            failures.add(f"数据库 / Redis：{purge.stderr.strip()[:200]}")
+    paths = runner.run(cluster_cleanup.remove_paths_script(config))
+    if not paths.ok:
+        failures.add(f"宿主目录：{paths.stderr.strip()[:200]}")
+    images = runner.run(cluster_cleanup.remove_images_script())
+    if not images.ok:
+        failures.add(f"演练镜像：{images.stderr.strip()[:200]}")
+    if failures:
+        print(f"[FAIL] cluster-drill.cleanup 未完全清理（{len(failures)} 项）：")
+        for reason in failures:
+            print(f"  - {reason}")
+        return 1
     print(f"[OK] 已清理演练项目 {config.project}")
     return 0
 
@@ -691,7 +721,7 @@ def main(argv: ConcurrentStableList[str] | None = None) -> int:
         if args.command == "plan":
             return run_plan(config)
         if args.command == "cleanup":
-            return run_cleanup(config)
+            return run_cleanup(config, keep_data=bool(args.keep_data))
         if args.command == "verify":
             scenario_set = _scenario_set(config)
             return run_verify(

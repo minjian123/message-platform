@@ -108,10 +108,12 @@ python -m ops.cluster_drill run replica_crash --confirm replica_crash [--skip-pr
 python -m ops.cluster_drill run network_partition_multi --confirm network_partition_multi
 python -m ops.cluster_drill run split_brain_multi --confirm split_brain_multi
 python -m ops.cluster_drill verify --records <记录目录>
-python -m ops.cluster_drill cleanup
+python -m ops.cluster_drill cleanup [--keep-data]
 ```
 
 - 演练环境键位见 `cluster.env.example`（真实主机 / 凭据只落 `cluster.env`，不入库）。
+- `cleanup` 默认清：容器 / 卷 → 自建网络 → 全部 `{前缀}_*` 演练库 → 演练 Redis 库 → 工作区与宿主数据目录 → `drill/msg:drill-*` 镜像；`--keep-data` 保留演练库与 Redis。
+- 删库前校验演练库前缀（不得为空或 `msg`）；Redis 指向 0 号库时拒绝 flush；`cleanup` 幂等，可重复执行。
 - `--env prod|production` 硬拒绝；任何注入前必须 `--confirm <场景>`；退出码 `0` 通过 / `1` 失败 / `2` 降级。
 - `force` 或 `isr_verified=false` 只记「降级」，不计通过；`data_loss=true` 或硬判据非 `ok` 直接失败。
 - `ops.drill run` 只跑本机六类；对 `target=docker` 场景会提示改用 `ops.cluster_drill`。
