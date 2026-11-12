@@ -10,6 +10,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.db.session import DbSession
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bms_msg.models.topic import STATUS_DELETING
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 
 pytestmark = pytest.mark.kiwi_id(2489)
@@ -42,3 +43,22 @@ async def test_list_assignments_returns_all_partitions_in_order(db_session: Asyn
     ]
     replicas = {int(row.topic_id): list(row.replicas) for row in rows if int(row.topic_id) == int(second.id)}
     assert replicas[int(second.id)] == ["msg-1", "msg-2"]
+
+
+async def test_list_active_unscoped_returns_identities(db_session: AsyncSession) -> None:
+    """活跃主题枚举（不带租户条件）：返回身份三段名，删除中的主题不进清单。"""
+    topics = TopicRepository(cast("DbSession", db_session))
+    active = await topics.create(
+        tenant_id=7001, namespace="msg", name="assign.active", partition_count=1, retention_ms=1_000
+    )
+    deleting = await topics.create(
+        tenant_id=7001, namespace="msg", name="assign.deleting", partition_count=1, retention_ms=1_000
+    )
+    deleting.status = STATUS_DELETING
+    await db_session.flush()
+
+    rows = await topics.list_active_unscoped()
+    identities = {int(row.id): (int(row.tenant_id), row.namespace, row.name) for row in rows}
+    assert int(active.id) in identities
+    assert identities[int(active.id)] == (7001, "msg", "assign.active")
+    assert int(deleting.id) not in identities

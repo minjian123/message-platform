@@ -123,7 +123,7 @@ from bms_msg.rpc.idempotency import InProcessIdempotencyStore
 from bms_msg.services.leader_switch import DbLeaderSwitchStore
 from bms_msg.services.migration_ledger import DbMigrationLedger
 from bms_msg.services.partition_assignment import PartitionAssigner, PartitionAssignmentConfig
-from bms_msg.services.replication_topology import DbReplicaTopologyLoader
+from bms_msg.services.replication_topology import DbReplicaTopologyLoader, PartitionDirectoryBinder
 from bms_msg.services.topic_cleanup import TopicCleanupService
 from bms_msg.tenant.ledger import DbTenantLifecycleLedger
 from bms_msg.tenant.lifecycle import event_consumer_records as tenant_lifecycle_records
@@ -344,6 +344,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             transport=replication_transport,
             topology_loader=topology_loader,
             mount_source=topology_loader,
+            # 02-10：后台挂载没有请求上下文，主题目录须由挂载侧显式登记（否则取 LEO 抛未登记）。
+            directory=PartitionDirectoryBinder(app.state.partition_directory),
             waiter=waiter,
             metrics=replication_metrics,
         )

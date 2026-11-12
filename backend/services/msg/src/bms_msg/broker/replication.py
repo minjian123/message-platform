@@ -95,6 +95,7 @@ __all__ = [
     "PartitionReplication",
     "PartitionTopology",
     "ReplicaConfig",
+    "ReplicaDirectoryBinder",
     "ReplicaFetchRequest",
     "ReplicaFetchResult",
     "ReplicaKey",
@@ -380,6 +381,15 @@ class PartitionAssignment(BaseValueObject):
 
     replicas: ConcurrentStableFrozenList[str] = field(default_factory=lambda: ConcurrentStableFrozenList[str]())
     """库内副本集（可能为空：历史行按配置轮转推导）。"""
+
+    tenant_id: int = 0
+    """主题所属租户主键（0 表示未知；缺身份时不做目录登记）。"""
+
+    namespace: str = ""
+    """主题命名空间（空串表示未知）。"""
+
+    name: str = ""
+    """主题名（空串表示未知）。"""
 
 
 @dataclass(frozen=True)
@@ -734,6 +744,19 @@ class ReplicaMountSource(BaseFrameworkObject, ABC):
         """
 
 
+class ReplicaDirectoryBinder(BaseFrameworkObject, ABC):
+    """主题目录登记（02-10）：挂载前把主题三段名登记进分区目录表。
+
+    **为什么需要**：文件存储的分区目录按 `{租户}/{命名空间}/{主题}.{topic_id}` 定位，未登记的主题
+    取 LEO 会抛 `PartitionNotBoundError`——这正是「副本必须被某个请求碰过一次」的底层原因
+    （请求路径经 `TopicRouter.resolve` 顺手登记）。后台挂载必须显式补这一步。
+    """
+
+    @abstractmethod
+    def bind(self, *, tenant_id: int, namespace: str, name: str, topic_id: int) -> object:
+        """登记主题目录身份（幂等；返回值语义由实现决定）。"""
+
+
 class PartitionReplication:
     """单个分区的复制运行态（leader / follower 共用同一结构）。"""
 
@@ -912,6 +935,7 @@ class ReplicationCoordinator(ReplicationView):
         transport: ReplicaTransport | None = None,
         topology_loader: ReplicaTopologyLoader | None = None,
         mount_source: ReplicaMountSource | None = None,
+        directory: ReplicaDirectoryBinder | None = None,
         waiter: DeliveryWaiter | None = None,
         metrics: ReplicationMetrics | None = None,
         clock: Callable[[], float] | None = None,
@@ -924,6 +948,7 @@ class ReplicationCoordinator(ReplicationView):
             transport: 副本拉取传输（None 表示单机 / 仅 leader）。
             topology_loader: 分区拓扑加载器（None 表示纯配置兜底）。
             mount_source: 分区分配枚举源（None 表示不主动挂载，退回惰性挂载；02-10）。
+            directory: 主题目录登记（None 表示存储不要求登记；02-10 挂载前补登记）。
             waiter: 分区唤醒器（HW 推进时唤醒长轮询）。
             metrics: 复制指标采集点。
             clock: 单调毫秒时钟（用例注入以确定性驱动 ISR 判据）。
@@ -933,6 +958,7 @@ class ReplicationCoordinator(ReplicationView):
         self._transport = transport
         self._topology_loader = topology_loader
         self._mount_source = mount_source
+        self._directory = directory
         self._waiter = waiter
         self._metrics = metrics if metrics is not None else ReplicationMetrics()
         self._clock = clock if clock is not None else _monotonic_ms
@@ -1955,7 +1981,7 @@ class ReplicationCoordinator(ReplicationView):
             if mounted >= self._config.mount_batch:
                 remaining += 1
                 continue
-            if await self._mount_one(key):
+            if await self._mount_one(assignment):
                 mounted += 1
         self._mount_backlog = remaining
         if mounted or skipped or remaining:
@@ -1984,15 +2010,17 @@ class ReplicationCoordinator(ReplicationView):
         )
         return self._config.node_id in replicas
 
-    async def _mount_one(self, key: ReplicaKey) -> bool:
+    async def _mount_one(self, assignment: PartitionAssignment) -> bool:
         """挂载一个分区并立即首拉（02-10；失败逐分区隔离）。
 
         Args:
-            key: 分区键。
+            assignment: 分配事实（含主题身份，用于挂载前的目录登记）。
 
         Returns:
             bool: 挂载成功（不要求首拉成功）为 True。
         """
+        key: ReplicaKey = (int(assignment.topic_id), int(assignment.partition_no))
+        self._bind_directory(assignment)
         try:
             state = await self.attach_partition(topic_id=key[0], partition_no=key[1])
         except Exception as exc:
@@ -2013,6 +2041,24 @@ class ReplicationCoordinator(ReplicationView):
             else:
                 self._schedule_next_fetch(key=key, count=count)
         return True
+
+    def _bind_directory(self, assignment: PartitionAssignment) -> None:
+        """挂载前登记主题目录身份（02-10；缺身份或未装配登记器时跳过）。
+
+        文件存储的分区目录按主题三段名定位，未登记的主题取 LEO 会抛 `PartitionNotBoundError`
+        ——请求路径由 `TopicRouter.resolve` 顺手登记，后台挂载必须自己补这一步。
+
+        Args:
+            assignment: 分配事实。
+        """
+        if self._directory is None or not assignment.namespace or not assignment.name:
+            return
+        self._directory.bind(
+            tenant_id=int(assignment.tenant_id),
+            namespace=assignment.namespace,
+            name=assignment.name,
+            topic_id=int(assignment.topic_id),
+        )
 
     async def _mount_loop(self) -> None:
         """挂载循环（02-10）：首轮不等待；有 backlog 且本轮有进展则立即续轮（由 `aclose` 取消）。"""

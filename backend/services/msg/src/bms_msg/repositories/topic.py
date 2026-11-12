@@ -12,7 +12,7 @@ from bms_core.repositories.base_db_repository import BaseDbRepository
 from sqlalchemy import ColumnElement, delete, func, select
 
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import STATUS_DELETING, MsgTopic
+from bms_msg.models.topic import STATUS_ACTIVE, STATUS_DELETING, MsgTopic
 
 __all__ = ["PartitionRepository", "TopicRepository"]
 
@@ -92,6 +92,18 @@ class TopicRepository(BaseDbRepository[MsgTopic]):
             MsgTopic | None: 主题；不存在返回 None。
         """
         return await self._session.get(MsgTopic, topic_id)
+
+    async def list_active_unscoped(self) -> ConcurrentStableList[MsgTopic]:
+        """取全部活跃主题（**不带租户条件**；02-10 后台挂载枚举用）。
+
+        与 `get_by_id_unscoped` 同源：后台挂载没有请求租户上下文，默认查询会追加当前租户条件
+        而看不到别人的主题；这里只返回挂载需要的身份事实（`id` / `tenant_id` / `namespace` / `name`）。
+
+        Returns:
+            ConcurrentStableList[MsgTopic]: 活跃主题（按主键升序）。
+        """
+        statement = select(MsgTopic).where(MsgTopic.status == STATUS_ACTIVE).order_by(MsgTopic.id)
+        return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
 
     def _filters(self, namespace: str | None, keyword: str | None) -> tuple[ColumnElement[bool], ...]:
         """构造列表过滤条件（命名空间 / 名称模糊 / 排除清理中）。

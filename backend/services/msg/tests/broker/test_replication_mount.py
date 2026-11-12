@@ -33,6 +33,7 @@ from bms_msg.broker.replication import (
     PartitionAssignment,
     PartitionTopology,
     ReplicaConfig,
+    ReplicaDirectoryBinder,
     ReplicaFetchRequest,
     ReplicaFetchResult,
     ReplicaMountSource,
@@ -288,6 +289,29 @@ class _FailingTransport(ReplicaTransport):
         raise ReplicaUnavailableError("leader down")
 
 
+class _Binder(ReplicaDirectoryBinder):
+    """主题目录登记替身：记录每次登记的三段名。"""
+
+    def __init__(self) -> None:
+        """初始化（登记记录为空）。"""
+        self.calls: ConcurrentStableList[tuple[int, str, str, int]] = ConcurrentStableList()
+
+    def bind(self, *, tenant_id: int, namespace: str, name: str, topic_id: int) -> bool:
+        """记录一次登记。
+
+        Args:
+            tenant_id: 租户主键。
+            namespace: 命名空间。
+            name: 主题名。
+            topic_id: 主题主键。
+
+        Returns:
+            bool: 恒 False（无冲突）。
+        """
+        self.calls.add((int(tenant_id), namespace, name, int(topic_id)))
+        return False
+
+
 class _Cluster:
     """两节点进程内复制簇（可注入分配枚举与传输包装）。"""
 
@@ -300,6 +324,7 @@ class _Cluster:
         clock: _Clock | None = None,
         probe: bool = False,
         topology_nodes: Iterable[str] | None = None,
+        directory: ReplicaDirectoryBinder | None = None,
     ) -> None:
         """初始化（把 leader / follower 与传输、拓扑串起来）。
 
@@ -310,6 +335,7 @@ class _Cluster:
             clock: 单调毫秒时钟。
             probe: 是否包装传输以统计并发。
             topology_nodes: 拓扑加载器给出的副本集（缺省两节点全量）。
+            directory: 主题目录登记器（缺省不装配）。
         """
         base = _config() if config is None else config
         self.clock = clock if clock is not None else _Clock()
@@ -325,6 +351,7 @@ class _Cluster:
             transport=self.transport,
             topology_loader=cast("ReplicaTopologyLoader", topology),
             mount_source=source,
+            directory=directory,
             waiter=DeliveryWaiter(),
             metrics=self.metrics,
             clock=self.clock,
@@ -335,6 +362,7 @@ class _Cluster:
             transport=self.transport,
             topology_loader=cast("ReplicaTopologyLoader", topology),
             mount_source=source,
+            directory=directory,
             metrics=ReplicationMetrics(),
             clock=self.clock,
         )
@@ -357,6 +385,9 @@ def _assignment(
     topic_id: int = TOPIC_ID,
     partition_no: int = PARTITION_NO,
     replicas: Iterable[str] = NODES,
+    tenant_id: int = 0,
+    namespace: str = "",
+    name: str = "",
 ) -> PartitionAssignment:
     """构造一条分配事实。
 
@@ -364,6 +395,9 @@ def _assignment(
         topic_id: 主题主键。
         partition_no: 分区号。
         replicas: 库内副本集（空表示按轮转推导）。
+        tenant_id: 主题租户主键（0 表示未知身份）。
+        namespace: 主题命名空间（空表示未知身份）。
+        name: 主题名（空表示未知身份）。
 
     Returns:
         PartitionAssignment: 分配事实。
@@ -372,6 +406,9 @@ def _assignment(
         topic_id=topic_id,
         partition_no=partition_no,
         replicas=ConcurrentStableFrozenList(replicas),
+        tenant_id=tenant_id,
+        namespace=namespace,
+        name=name,
     )
 
 
@@ -482,6 +519,23 @@ async def test_mount_round_derives_replicas_when_rows_empty() -> None:
     )
     assert await cluster.leader.mount_once() == 1
     assert await cluster.follower.mount_once() == 0
+
+
+async def test_mount_binds_topic_directory_before_attach() -> None:
+    """挂载前登记主题目录：带身份的分配会登记三段名，缺身份则不登记（存储未登记会抛错）。"""
+    binder = _Binder()
+    cluster = _Cluster(
+        config=_config(),
+        source=_Source(
+            (
+                _assignment(tenant_id=7001, namespace="msg", name="drill.replica"),
+                _assignment(partition_no=1),
+            )
+        ),
+        directory=binder,
+    )
+    assert await cluster.leader.mount_once() == 2
+    assert list(binder.calls) == [(7001, "msg", "drill.replica", TOPIC_ID)]
 
 
 async def test_mount_round_is_idempotent() -> None:

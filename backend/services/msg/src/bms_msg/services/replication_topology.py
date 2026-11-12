@@ -17,13 +17,50 @@ from typing import cast
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenList, ConcurrentStableList
 from bms_core.db.session import DbSession
 
+from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.replay import UowFactory
-from bms_msg.broker.replication import PartitionAssignment, PartitionTopology, ReplicaMountSource, ReplicaTopologyLoader
+from bms_msg.broker.replication import (
+    PartitionAssignment,
+    PartitionTopology,
+    ReplicaDirectoryBinder,
+    ReplicaMountSource,
+    ReplicaTopologyLoader,
+)
 from bms_msg.core.config import MS_PER_SECOND
 from bms_msg.models.partition import MsgPartition
-from bms_msg.repositories.topic import PartitionRepository
+from bms_msg.repositories.topic import PartitionRepository, TopicRepository
 
-__all__ = ["DbReplicaTopologyLoader"]
+__all__ = ["DbReplicaTopologyLoader", "PartitionDirectoryBinder"]
+
+
+class PartitionDirectoryBinder(ReplicaDirectoryBinder):
+    """把文件存储的分区目录表接成复制挂载的目录登记（02-10）。
+
+    **为什么要适配层**：`broker/replication.py` 只认「登记主题身份」这一动作，不依赖文件存储实现；
+    目录表本身在 `broker/file_store.py`，由本层桥接，存储与复制两侧互不引用。
+    """
+
+    def __init__(self, directory: PartitionDirectory) -> None:
+        """初始化。
+
+        Args:
+            directory: 分区目录表（`topic_id → 租户 / 命名空间 / 名称`）。
+        """
+        self._directory = directory
+
+    def bind(self, *, tenant_id: int, namespace: str, name: str, topic_id: int) -> object:
+        """登记主题目录身份（幂等；冲突由目录表记日志并保留首次值）。
+
+        Args:
+            tenant_id: 租户主键。
+            namespace: 命名空间。
+            name: 主题名。
+            topic_id: 主题主键。
+
+        Returns:
+            object: 目录表的冲突标记（True 表示保留首次绑定）。
+        """
+        return self._directory.bind(tenant_id=int(tenant_id), namespace=namespace, name=name, topic_id=int(topic_id))
 
 
 class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
@@ -83,19 +120,40 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
     async def list_assignments(self) -> ConcurrentStableList[PartitionAssignment]:
         """枚举全部分区分配（02-10；只读、不走缓存，保证新建主题与迁移能被及时看见）。
 
+        同时带上主题身份（`tenant_id` / `namespace` / `name`）：后台挂载没有请求上下文，
+        文件存储的主题目录需要显式登记，否则取 LEO 会抛 `PartitionNotBoundError`。
+        已删除 / 清理中的主题不进清单（挂载它们只会拉起无主数据）。
+
         Returns:
             ConcurrentStableList[PartitionAssignment]: 分配事实（按 `(topic_id, partition_no)` 升序）。
         """
         async with self._uow_factory() as uow:
-            rows = await PartitionRepository(cast("DbSession", uow.session)).list_assignments()
-        return ConcurrentStableList(
-            PartitionAssignment(
-                topic_id=int(row.topic_id),
-                partition_no=int(row.partition_no),
-                replicas=ConcurrentStableFrozenList(str(item) for item in row.replicas),
+            session = cast("DbSession", uow.session)
+            topics = await TopicRepository(session).list_active_unscoped()
+            rows = await PartitionRepository(session).list_assignments()
+        identities: ConcurrentStableDict[int, tuple[int, str, str]] = ConcurrentStableDict()
+        for topic in topics:
+            identities.set(
+                int(topic.id),
+                (int(topic.tenant_id), str(topic.namespace), str(topic.name)),
             )
-            for row in rows
-        )
+        assignments: ConcurrentStableList[PartitionAssignment] = ConcurrentStableList()
+        for row in rows:
+            identity = identities.get(int(row.topic_id))
+            if identity is None:
+                continue
+            tenant_id, namespace, name = identity
+            assignments.add(
+                PartitionAssignment(
+                    topic_id=int(row.topic_id),
+                    partition_no=int(row.partition_no),
+                    replicas=ConcurrentStableFrozenList(str(item) for item in row.replicas),
+                    tenant_id=tenant_id,
+                    namespace=namespace,
+                    name=name,
+                )
+            )
+        return assignments
 
     async def _topic_rows(self, *, topic_id: int, force: bool = False) -> ConcurrentStableList[MsgPartition]:
         """取某主题的分区行（缓存命中且未过期即复用；`force` 绕过缓存）。
