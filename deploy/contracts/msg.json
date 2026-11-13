@@ -745,6 +745,33 @@
         "title": "ApiResponse[DlqList]",
         "type": "object"
       },
+      "ApiResponse_GroupDeleteResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupDeleteResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[GroupDeleteResult]",
+        "type": "object"
+      },
       "ApiResponse_GroupDetail_": {
         "additionalProperties": false,
         "properties": {
@@ -2424,6 +2451,46 @@
           }
         },
         "title": "DlqReplayRequest",
+        "type": "object"
+      },
+      "GroupDeleteResult": {
+        "additionalProperties": false,
+        "description": "组删除结果（默认只删组与成员，位点保留）。",
+        "properties": {
+          "deleted": {
+            "description": "组与成员是否已删除（组不存在为 false）",
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "group": {
+            "description": "消费组名",
+            "title": "Group",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "命名空间",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "offsets_purged": {
+            "description": "本次清理的位点条目数（默认 0 = 位点保留）",
+            "title": "Offsets Purged",
+            "type": "integer"
+          },
+          "topic": {
+            "description": "主题名",
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "namespace",
+          "topic",
+          "deleted",
+          "offsets_purged"
+        ],
+        "title": "GroupDeleteResult",
         "type": "object"
       },
       "GroupDetail": {
@@ -7109,6 +7176,159 @@
       }
     },
     "/api/v1/msg/admin/groups/{namespace}/{topic}/{group}": {
+      "delete": {
+        "description": "删除消费组（默认**只删组与成员、保留位点**）。\n\n需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；主题不存在 350001；\n组不存在 350013；无主题授权 350027。`purge_offsets=true` 时一并清该组位点（位点为文件，\n与 DB 不同事务，失败只告警并返回 `offsets_purged=0`）。",
+        "operationId": "delete_group_api_v1_msg_admin_groups__namespace___topic___group__delete",
+        "parameters": [
+          {
+            "description": "命名空间",
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "description": "命名空间",
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "description": "主题名",
+            "in": "path",
+            "name": "topic",
+            "required": true,
+            "schema": {
+              "description": "主题名",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          {
+            "description": "消费组名",
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "description": "消费组名",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Group",
+              "type": "string"
+            }
+          },
+          {
+            "description": "显式确认（必须为 true）",
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "显式确认（必须为 true）",
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "是否一并清理该组位点（默认保留）",
+            "in": "query",
+            "name": "purge_offsets",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "是否一并清理该组位点（默认保留）",
+              "title": "Purge Offsets",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_GroupDeleteResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Delete Group",
+        "tags": [
+          "msg-admin-groups"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350010,
+          350011,
+          350012,
+          350027
+        ]
+      },
       "get": {
         "description": "消费组详情（状态 / 世代 / 成员 / 分配 / 各分区位点与积压）。\n\n需要 msg:query 权限；主题不存在 350001，组不存在 350013。",
         "operationId": "get_group_api_v1_msg_admin_groups__namespace___topic___group__get",

@@ -116,10 +116,14 @@ class GroupCoordinator:
                 tenant_id=int(tenant.tenant_id),
                 topic_id=int(topic.id),
                 group=request.group,
+                namespace=topic.namespace,
                 state=GROUP_STATE_EMPTY,
                 generation=0,
                 members=ConcurrentStableList(),
             )
+        elif not record.namespace:
+            # 01-4-1：早期内存 / 旧行可能没有命名空间快照，首次活动时补齐（落库需要）
+            record = replace(record, namespace=topic.namespace)
         record, pruned = self._prune(record)
         if record.member(request.consumer_id) is None:
             record = self._add(record=record, consumer_id=request.consumer_id)

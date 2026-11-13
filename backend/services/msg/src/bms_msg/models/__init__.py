@@ -8,6 +8,17 @@
 > 不是 `msg`——配 `package_prefix = "msg"` 会解析出 `msg.models` 而取到空清单（2026-11-04 修正）。
 """
 
+from bms_msg.models.consumer_group import (
+    DEFAULT_GROUP_NAME_MAX_LENGTH,
+    DEFAULT_GROUP_STATE,
+    DEFAULT_MEMBER_ID_MAX_LENGTH,
+    GROUP_STATE_DEAD,
+    GROUP_STATE_EMPTY,
+    GROUP_STATE_PREPARING_REBALANCE,
+    GROUP_STATE_STABLE,
+    MsgConsumerGroup,
+    MsgGroupMember,
+)
 from bms_msg.models.dead_letter import (
     DEFAULT_DISPOSITION_REASON_MAX_LENGTH,
     DEFAULT_DLQ_STATUS,
@@ -133,6 +144,9 @@ __all__ = [
     "DEFAULT_CLEANUP_POLICY",
     "DEFAULT_DISPOSITION_REASON_MAX_LENGTH",
     "DEFAULT_DLQ_STATUS",
+    "DEFAULT_GROUP_NAME_MAX_LENGTH",
+    "DEFAULT_GROUP_STATE",
+    "DEFAULT_MEMBER_ID_MAX_LENGTH",
     "DEFAULT_STATUS",
     "DLQ_ACTIVE_STATUSES",
     "DLQ_ARCHIVABLE_STATUSES",
@@ -142,6 +156,10 @@ __all__ = [
     "DLQ_STATUS_PENDING",
     "DLQ_STATUS_REPLAYING",
     "DLQ_STATUS_RESOLVED",
+    "GROUP_STATE_DEAD",
+    "GROUP_STATE_EMPTY",
+    "GROUP_STATE_PREPARING_REBALANCE",
+    "GROUP_STATE_STABLE",
     "LIFECYCLE_ACTIONS",
     "MIGRATION_ACTIONS",
     "MIGRATION_RESULTS",
@@ -175,7 +193,9 @@ __all__ = [
     "TASK_PENDING",
     "TASK_RUNNING",
     "TASK_TERMINAL_STATUSES",
+    "MsgConsumerGroup",
     "MsgDeadLetter",
+    "MsgGroupMember",
     "MsgPartition",
     "MsgPartitionMigration",
     "MsgQuota",
@@ -197,5 +217,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.topic_acl",
     "bms_msg.models.topic_cleanup",
     "bms_msg.models.dead_letter",
+    "bms_msg.models.consumer_group",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

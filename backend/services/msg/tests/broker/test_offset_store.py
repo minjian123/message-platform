@@ -35,3 +35,12 @@ async def test_offsets_are_scoped_by_group_topic_partition(offset_store: InMemor
     assert await offset_store.get(group="audit", topic_id=1, partition_no=1) == 0
     assert await offset_store.get(group="audit", topic_id=2, partition_no=0) == 0
     assert await offset_store.get(group="notify", topic_id=1, partition_no=0) == 0
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_committed_distinguishes_never_committed(offset_store: InMemoryOffsetStore) -> None:
+    """01-4-1/B1：无记录返回 None，提交后返回实际位点（新组接入的判据）。"""
+    assert await offset_store.committed(group="audit", topic_id=1, partition_no=0) is None
+    await offset_store.commit(group="audit", topic_id=1, partition_no=0, offset=4)
+    assert await offset_store.committed(group="audit", topic_id=1, partition_no=0) == 4
+    assert await offset_store.committed(group="audit", topic_id=1, partition_no=1) is None

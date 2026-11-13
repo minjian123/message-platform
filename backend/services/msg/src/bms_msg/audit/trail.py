@@ -42,6 +42,7 @@ __all__ = [
     "DLQ_ARCHIVE_ACTION",
     "DLQ_IGNORE_ACTION",
     "DLQ_REPLAY_ACTION",
+    "GROUP_DELETE_ACTION",
     "LEADER_SWITCH_ACTION",
     "MESSAGE_DELETE_ACTION",
     "MESSAGE_REF_TYPE",
@@ -101,6 +102,12 @@ DLQ_DETAIL_ACTION = "msg:dlq.detail"
 
 REPLAY_DETAIL_ACTION = "msg:replay.detail"
 """重放任务详情（敏感查询，普通审计；05-4-1）。"""
+
+GROUP_DELETE_ACTION = "msg:group.delete"
+"""删除消费组（配置变更，强审计；01-4-1）。
+
+默认只删组与成员、保留位点；`purge_offsets=true` 时一并清位点，载荷里写实际清理数。
+"""
 
 QUOTA_UPDATE_ACTION = "msg:quota.update"
 """配额调整（配置变更，强审计）。"""
@@ -167,6 +174,7 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         TOPIC_DELETE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="删主题"),
         TOPIC_DISABLE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="停用主题"),
         TOPIC_ENABLE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="启用主题"),
+        GROUP_DELETE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="删消费组"),
         QUOTA_UPDATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="配额调整"),
         ACL_GRANT_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 授予"),
         ACL_REVOKE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 收回"),

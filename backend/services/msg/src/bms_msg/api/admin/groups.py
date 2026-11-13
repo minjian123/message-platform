@@ -10,28 +10,63 @@
 from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ParamError
+from bms_core.core.logging import get_logger
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Path, Query
 
-from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
-from bms_msg.api.deps import CurrentTenantDep, GroupStoreDep, MessageStoreDep, OffsetStoreDep, TopicAclServiceDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
+from bms_msg.api.deps import (
+    AuditSinkDep,
+    CurrentTenantDep,
+    GroupStoreDep,
+    MessageStoreDep,
+    OffsetPurgerDep,
+    OffsetStoreDep,
+    TopicAclServiceDep,
+)
+from bms_msg.audit.trail import GROUP_DELETE_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.broker.group import GroupMember, GroupStore
 from bms_msg.broker.inspector import GroupInspector, GroupRow, PartitionLag
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.router import TopicRouter
-from bms_msg.errors import MsgErrorCode
+from bms_msg.errors import MsgErrorCode, MsgGroupNotFoundError
+from bms_msg.repositories.consumer_group import ConsumerGroupRepository
 from bms_msg.repositories.topic import TopicRepository
-from bms_msg.schemas.group import GroupDetail, GroupItem, GroupMemberItem, GroupPage, GroupPartitionItem
+from bms_msg.schemas.group import (
+    GroupDeleteResult,
+    GroupDetail,
+    GroupItem,
+    GroupMemberItem,
+    GroupPage,
+    GroupPartitionItem,
+)
 from bms_msg.services.topic import MAX_LIST_SIZE
 
 __all__ = ["router"]
 
+_LOGGER = get_logger("bms_msg.admin_groups")
+
 _QUERY = Depends(require_permission("msg:query"))
+"""管理面查询权限。"""
+
+_MANAGE = Depends(require_permission("msg:manage"))
+"""管理面写权限（组删除）。"""
+
+_DELETE_ERRORS = [
+    int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.GROUP_NOT_FOUND),
+    int(MsgErrorCode.NAMESPACE_INVALID),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
+]
+"""组删除端点声明的错误码（`x-error-codes`；`confirm` 缺失属契约层 10001）。"""
 
 _QUERY_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
@@ -238,5 +273,87 @@ async def get_group(
             partition_count=view.partition_count,
             members=ConcurrentStableList(_member(member) for member in view.row.record.members),
             partitions=ConcurrentStableList(_partition(lag) for lag in view.partitions),
+        )
+    )
+
+
+@router.delete(
+    "/{namespace}/{topic}/{group}",
+    dependencies=[_MANAGE],
+    openapi_extra={"x-error-codes": _DELETE_ERRORS},
+)
+async def delete_group(
+    namespace: NamespacePath,
+    topic: TopicPath,
+    group: GroupPath,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    groups: GroupStoreDep,
+    offsets: OffsetPurgerDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+    confirm: Annotated[bool, Query(description="显式确认（必须为 true）")] = False,
+    purge_offsets: Annotated[bool, Query(description="是否一并清理该组位点（默认保留）")] = False,
+) -> ApiResponse[GroupDeleteResult]:
+    """删除消费组（默认**只删组与成员、保留位点**）。
+
+    需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；主题不存在 350001；
+    组不存在 350013；无主题授权 350027。`purge_offsets=true` 时一并清该组位点（位点为文件，
+    与 DB 不同事务，失败只告警并返回 `offsets_purged=0`）。
+    """
+    if not confirm:
+        raise ParamError("高危写操作须显式确认（confirm=true）")
+    session = cast("DbSession", uow.session)
+    resolved = await TopicRouter(TopicRepository(session)).resolve(namespace=namespace, name=topic)
+    topic_id = int(resolved.id)
+    tenant_id = int(tenant.tenant_id)
+    # 释放解析产生的隐式事务：组存储在生产走独立短事务，用例里复用同一会话也能正常 begin。
+    await uow.rollback()
+    record = await groups.load(tenant_id=tenant_id, topic_id=topic_id, group=group)
+    if record is None:
+        raise MsgGroupNotFoundError(f"消费组不存在：{group}")
+    await acl.authorize(
+        tenant_id=tenant_id,
+        namespace=namespace,
+        topic=topic,
+        action=ACL_ACTION_MANAGE,
+    )
+    # 组删除走请求会话（业务行与审计同事务）；先回滚鉴权读留下的隐式事务。
+    await uow.rollback()
+    async with uow.begin():
+        deleted = await ConsumerGroupRepository(session).delete_identity(
+            tenant_id=tenant_id, topic_id=topic_id, name=group
+        )
+        await emit_sensitive(
+            cast("AuditEmitter", sink),
+            action=GROUP_DELETE_ACTION,
+            tenant_id=tenant_id,
+            params=ConcurrentStableDict(
+                {
+                    "group": group,
+                    "namespace": namespace,
+                    "topic": topic,
+                    "purge_offsets": purge_offsets,
+                }
+            ),
+            method="DELETE",
+            path=f"/api/v1/msg/admin/groups/{namespace}/{topic}/{group}",
+            module_key=namespace,
+            resource_key=topic,
+            session=uow.session,
+        )
+    purged = 0
+    if purge_offsets:
+        try:
+            purged = await offsets.purge_group(tenant_id=tenant_id, group=group)
+        except Exception as exc:
+            _LOGGER.warning("msg_group_offsets_purge_failed", group=group, error=repr(exc))
+    return ApiResponse.ok(
+        GroupDeleteResult(
+            group=group,
+            namespace=namespace,
+            topic=topic,
+            deleted=deleted,
+            offsets_purged=purged,
         )
     )

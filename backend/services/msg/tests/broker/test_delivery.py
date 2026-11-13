@@ -454,16 +454,19 @@ async def test_consume_rejects_partition_out_of_range(
 async def test_consume_reports_retention_gap(
     delivery_service: DeliveryService,
     message_store: InMemoryMessageStore,
+    offset_store: InMemoryOffsetStore,
     topic: MsgTopic,
     current_tenant: CurrentTenant,
 ) -> None:
     """位点早于保留起点（消息已被清理）：`350003`。
 
     01-6 起内存实现真正支持起点前移，故直接用 `truncate_before` 造「已清理」状态，
-    不再需要伪装 `start_offset` 的存储替身。
+    不再需要伪装 `start_offset` 的存储替身。**必须先有提交记录**——01-4-1 起「从未提交」按新组
+    从现存最早开始，不再误报 350003。
     """
     topic_id = int(topic.id)
     await _publish_many(delivery_service, current_tenant, 3)
+    await offset_store.commit(group=_consume().group, topic_id=topic_id, partition_no=0, offset=1)
     await message_store.truncate_before(topic_id=topic_id, partition_no=0, offset=3)
     with pytest.raises(MsgMessageNotFoundError) as excinfo:
         await delivery_service.consume(tenant=current_tenant, request=_consume())
@@ -695,3 +698,35 @@ def test_delivery_state_drop_topic_clears_inflight_and_acked() -> None:
     assert state.usage(key).messages == 0
     assert list(state.pending(key)) == []
     assert state.drop_topic(topic_id=1) == 0
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_new_group_starts_at_earliest_visible_offset(
+    delivery_service: DeliveryService,
+    message_store: InMemoryMessageStore,
+    offset_store: InMemoryOffsetStore,
+    topic: MsgTopic,
+    current_tenant: CurrentTenant,
+) -> None:
+    """01-4-1/B1：从未提交过的新组从现存最早开始，并把起点写实（不再 350003）。"""
+    topic_id = int(topic.id)
+    await _publish_many(delivery_service, current_tenant, 3)
+    await message_store.truncate_before(topic_id=topic_id, partition_no=0, offset=2)
+
+    delivered = await delivery_service.consume(tenant=current_tenant, request=_consume())
+    assert [item.message.offset for item in delivered] == [2]
+    assert await offset_store.get(group=_consume().group, topic_id=topic_id, partition_no=0) == 2
+
+
+@pytest.mark.kiwi_id(2496)
+def test_usage_bytes_shared_by_partition_across_groups() -> None:
+    """01-4-1/B19：同分区跨组只算一份字节；条数仍按组各算。"""
+    state = DeliveryState()
+    state.track(("g1", 1, 0), 0, InflightDelivery(attempts=1, deadline=datetime(2026, 1, 1)), size=100)
+    state.track(("g2", 1, 0), 0, InflightDelivery(attempts=1, deadline=datetime(2026, 1, 1)), size=100)
+    state.track(("g3", 1, 1), 0, InflightDelivery(attempts=1, deadline=datetime(2026, 1, 1)), size=50)
+
+    assert state.usage(("g1", 1, 0)).bytes == 100
+    assert state.usage(("g2", 1, 0)).bytes == 100
+    assert state.usage(("g3", 1, 1)).bytes == 50
+    assert state.usage(("g2", 1, 0)).messages == 1

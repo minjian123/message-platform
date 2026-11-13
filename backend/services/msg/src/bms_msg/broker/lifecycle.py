@@ -226,6 +226,7 @@ class BackgroundLoops(BaseAsyncResource):
         purge: StoppableLoop | None = None,
         sampler: StoppableLoop | None = None,
         cleanup: StoppableLoop | None = None,
+        sweeper: StoppableLoop | None = None,
     ) -> None:
         """初始化。
 
@@ -235,15 +236,19 @@ class BackgroundLoops(BaseAsyncResource):
             purge: 租户到期清扫服务（可选；不导入租户模块以免成环）。
             sampler: 指标后台采样器（可选；06-3-1）。
             cleanup: 删主题清理扫描（可选；06-2）。
+            sweeper: 空组回收扫描（可选；01-4-1）。
         """
         self._scheduler = scheduler
         self._runner = runner
         self._purge = purge
         self._sampler = sampler
         self._cleanup = cleanup
+        self._sweeper = sweeper
 
     async def aclose(self) -> None:
         """停止全部循环（各自 `stop()` 幂等，重复调用无副作用）。"""
+        if self._sweeper is not None:
+            await self._sweeper.stop()
         if self._cleanup is not None:
             await self._cleanup.stop()
         if self._sampler is not None:
@@ -287,6 +292,9 @@ async def start_background_tasks(app: FastAPI) -> None:
     cleanup = cast("StoppableLoop | None", getattr(app.state, "topic_cleanup_service", None))
     if cleanup is not None:
         cleanup.ensure_started()
+    sweeper = cast("StoppableLoop | None", getattr(app.state, "group_sweeper", None))
+    if sweeper is not None:
+        sweeper.ensure_started()
     replication = cast("ReplicationCoordinator | None", getattr(app.state, "replication", None))
     if replication is not None:
         await replication.ensure_started()
@@ -296,7 +304,14 @@ async def start_background_tasks(app: FastAPI) -> None:
         resources.register(flush_loop)
         app.state.offset_flush_loop = flush_loop
     if getattr(app.state, "background_loops", None) is None:
-        loops = BackgroundLoops(scheduler=scheduler, runner=runner, purge=purge, sampler=sampler, cleanup=cleanup)
+        loops = BackgroundLoops(
+            scheduler=scheduler,
+            runner=runner,
+            purge=purge,
+            sampler=sampler,
+            cleanup=cleanup,
+            sweeper=sweeper,
+        )
         resources.register(loops)
         app.state.background_loops = loops
     if replication is not None and getattr(app.state, "replication_closer", None) is None:
@@ -317,6 +332,7 @@ async def start_background_tasks(app: FastAPI) -> None:
         tenant_purge=purge is not None,
         metrics_sampler=sampler is not None,
         topic_cleanup=cleanup is not None,
+        group_sweeper=sweeper is not None,
         auto_election=watchdog is not None,
         offset_flush_loop=getattr(app.state, "offset_flush_loop", None) is not None,
     )

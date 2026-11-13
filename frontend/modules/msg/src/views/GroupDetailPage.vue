@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 消费组详情（状态 / 世代 / 成员与分配 / 各分区位点与积压；分区行可重置位点）。 */
 
-import { ElButton, ElDescriptions, ElDescriptionsItem, ElInputNumber, ElTable, ElTableColumn } from 'element-plus'
+import { ElButton, ElCheckbox, ElDescriptions, ElDescriptionsItem, ElInputNumber, ElTable, ElTableColumn } from 'element-plus'
 import { computed, reactive, ref } from 'vue'
 
 import ReadOnlyList from '../components/ReadOnlyList.vue'
@@ -12,7 +12,7 @@ import { useMsgReadOnlyView } from '../composables/useMsgReadOnlyView'
 import { useMsgWriteAction } from '../composables/useMsgWriteAction'
 import { message } from '../i18n/messages'
 import { hostPermissions } from '../runtime'
-import { fetchGroupDetail, resetOffset } from '../services/admin-service'
+import { fetchGroupDetail, deleteGroup, resetOffset } from '../services/admin-service'
 import type { msg } from '@msg/api-types'
 
 type Schema = msg.components['schemas']
@@ -107,11 +107,56 @@ async function confirmReset(): Promise<void> {
     await view.refresh()
   }
 }
+
+const deleteVisible = ref(false)
+const deleteOffsets = ref(false)
+
+/** 组删除确认的影响范围行。 */
+const deleteRows = computed<ImpactRow[]>(() => [
+  { label: message('msg.admin.groups.group'), value: group },
+  { label: message('msg.admin.groups.topic'), value: topic },
+  {
+    label: message('msg.admin.groups.delete.offsets'),
+    value: message(
+      deleteOffsets.value
+        ? 'msg.admin.groups.delete.offsetsPurged'
+        : 'msg.admin.groups.delete.offsetsKept',
+    ),
+  },
+])
+
+/** 组删除动作（默认保留位点；勾选后一并清位点）。 */
+const deleteAction = useMsgWriteAction({
+  requiresConfirm: true,
+  runner: () => deleteGroup(namespace, topic, group, deleteOffsets.value),
+})
+
+/** 打开组删除确认（每次重置勾选）。 */
+function openDelete(): void {
+  deleteAction.reset()
+  deleteOffsets.value = false
+  deleteVisible.value = true
+}
+
+/** 确认删除：成功后回到组列表。 */
+async function confirmDelete(): Promise<void> {
+  deleteAction.acknowledge()
+  await deleteAction.run()
+  if (deleteAction.status.value === 'done') {
+    deleteVisible.value = false
+    go('/msg/groups')
+  }
+}
 </script>
 
 <template>
   <section class="admin-page" data-test="page-group-detail">
-    <h1>{{ meta?.group ?? group }}</h1>
+    <div class="admin-page__header">
+      <h1>{{ meta?.group ?? group }}</h1>
+      <el-button v-if="canManage" type="danger" plain data-test="group-delete" @click="openDelete">
+        {{ message('msg.admin.groups.delete.action') }}
+      </el-button>
+    </div>
     <el-descriptions v-if="meta !== null" :column="3" border size="small" data-test="group-detail-meta">
       <el-descriptions-item :label="message('msg.admin.groups.namespace')">{{ meta.namespace }}</el-descriptions-item>
       <el-descriptions-item :label="message('msg.admin.groups.topic')">{{ meta.topic }}</el-descriptions-item>
@@ -168,6 +213,24 @@ async function confirmReset(): Promise<void> {
     <p v-if="resetAction.errorKey.value !== ''" class="admin-page__error" data-test="group-reset-error">
       {{ message(resetAction.errorKey.value) }}
     </p>
+    <msg-confirm-dialog
+      v-model="deleteVisible"
+      :title="message('msg.admin.groups.delete.title')"
+      :rows="deleteRows"
+      :warning="message('msg.admin.groups.delete.warning')"
+      :danger="true"
+      :loading="deleteAction.status.value === 'running'"
+      :confirm-text="message('msg.admin.groups.delete.action')"
+      data-test="group-delete-dialog"
+      @confirm="confirmDelete"
+    >
+      <el-checkbox v-model="deleteOffsets" data-test="group-delete-offsets">
+        {{ message('msg.admin.groups.delete.offsets') }}
+      </el-checkbox>
+    </msg-confirm-dialog>
+    <p v-if="deleteAction.errorKey.value !== ''" class="admin-page__error" data-test="group-delete-error">
+      {{ message(deleteAction.errorKey.value) }}
+    </p>
   </section>
 </template>
 
@@ -180,6 +243,15 @@ async function confirmReset(): Promise<void> {
 .admin-page h2 {
   margin: 0;
   font-size: 15px;
+}
+.admin-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bms-space-2);
+}
+.admin-page__header h1 {
+  margin: 0;
 }
 .admin-page__error {
   margin: 0;

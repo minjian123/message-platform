@@ -21,6 +21,7 @@ from bms_core.msgclient.frame import FrameType, decode_frames
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
+from bms_msg.acl.service import TopicAclService
 from bms_msg.api.deps import get_stream_tuning, get_waiter
 from bms_msg.api.frame.routes import stream_events, wait_timeout_ms
 from bms_msg.broker.backpressure import default_backpressure_tuning
@@ -44,6 +45,21 @@ FAST = StreamTuning(poll_interval_ms=5, max_seconds=1, keepalive_ms=20, max_wait
 """毫秒级流参数：到期 1s（契约下界），兜底轮询 5ms，保活 20ms。"""
 
 _TEST_CONNECTION_KEY = "demo|127.0.0.1:7"
+
+
+class _AllowAcl:
+    """ACL 替身：恒放行（长驻流复核用）。"""
+
+    async def authorize(self, **kwargs: object) -> None:
+        """恒放行。
+
+        Args:
+            **kwargs: 授权参数（忽略）。
+        """
+        del kwargs
+
+
+_ALLOW_ACL = cast("TopicAclService", _AllowAcl())
 
 
 async def _create_topic(client: AsyncClient) -> None:
@@ -357,6 +373,7 @@ async def test_direct_generator_resolves_ids_and_cancels_prefetch(
         backpressure=default_backpressure_tuning(),
         metrics=msg_app.state.backpressure_metrics,
         cache=msg_app.state.topic_cache,
+        acl=_ALLOW_ACL,
     )
 
     first = await anext(agen)

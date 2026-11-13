@@ -43,6 +43,7 @@ from fastapi import Depends, Query, Request, params
 from fastapi.responses import StreamingResponse
 
 from bms_msg.acl.keys import ACL_ACTION_SUBSCRIBE
+from bms_msg.acl.service import TopicAclService
 from bms_msg.api.data.messages import (
     CONSUME_ERROR_CODES,
     CONSUME_PERMISSION,
@@ -106,6 +107,7 @@ from bms_msg.broker.waiter import DeliveryWaiter, WaitOutcome
 from bms_msg.core.config import (
     ACKS_AT_LEAST_ONCE,
     MS_PER_SECOND,
+    STREAM_ACL_RECHECK_MS,
     WINDOW_STALL_THRESHOLD_MS,
 )
 from bms_msg.errors import (
@@ -348,6 +350,7 @@ async def _stream_core(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    acl: TopicAclService,
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
@@ -375,6 +378,7 @@ async def _stream_core(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（预检 / 兜底解析 / 每轮拉取共用）。
+        acl: 主题授权服务（01-4-1：长驻流 30s 重判 + 每批判，授权收回即结束流）。
         directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
@@ -405,6 +409,27 @@ async def _stream_core(
     )
     reason = "error"
     pending: asyncio.Task[ConcurrentStableList[MessageItem]] | None = None
+    last_acl_check = started
+
+    async def _check_acl() -> MsgError | None:
+        """重判一次主题 `subscribe` 授权（01-4-1/B12）。
+
+        Returns:
+            MsgError | None: 被拒绝时返回业务错误；放行返回 None。
+        """
+        nonlocal last_acl_check
+        try:
+            await acl.authorize(
+                tenant_id=int(tenant.tenant_id),
+                namespace=query.namespace,
+                topic=query.topic,
+                action=ACL_ACTION_SUBSCRIBE,
+            )
+        except MsgError as exc:
+            return exc
+        last_acl_check = time.monotonic()
+        return None
+
     try:
         yield open_event(
             StreamOpen(
@@ -426,6 +451,14 @@ async def _stream_core(
                 reason = "deadline"
                 yield close_event(reason)
                 return
+            # 01-4-1/B12：空闲时每 30s 兜底重判一次授权（授权被收回后最长 30s 内结束流）。
+            if (time.monotonic() - last_acl_check) * MS_PER_SECOND >= STREAM_ACL_RECHECK_MS:
+                denied = await _check_acl()
+                if denied is not None:
+                    reason = "acl_revoked"
+                    yield error_event(denied.code, str(denied))
+                    yield close_event(reason)
+                    return
             # 版本号必须在拉取**之前**取：拉取期间到达的消息靠版本差判定，不必睡满超时。
             version = waiter.version(wait_key)
             try:
@@ -456,6 +489,13 @@ async def _stream_core(
             usage = state.usage(budget_key)
             metrics.observe_inflight(tenant=tenant.code, topic=query.topic, usage=usage)
             if batch:
+                # 01-4-1/B12：每批投递前重判授权；收回即结束流，不再按旧授权继续投。
+                denied = await _check_acl()
+                if denied is not None:
+                    reason = "acl_revoked"
+                    yield error_event(denied.code, str(denied))
+                    yield close_event(reason)
+                    return
                 if tuning.prefetch > 0:
                     pending = asyncio.create_task(
                         _pull(
@@ -528,6 +568,7 @@ async def stream_events(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    acl: TopicAclService,
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
@@ -552,6 +593,7 @@ async def stream_events(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用）。
+        acl: 主题授权服务（01-4-1：长驻流重判授权）。
         directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
@@ -577,6 +619,7 @@ async def stream_events(
         backpressure=backpressure,
         metrics=metrics,
         cache=cache,
+        acl=acl,
         directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
@@ -631,6 +674,7 @@ async def stream_frames(
     backpressure: BackpressureTuning,
     metrics: BackpressureMetrics,
     cache: TopicCache,
+    acl: TopicAclService,
     directory: PartitionDirectory | None = None,
     topic_id: int | None = None,
     partition_no: int | None = None,
@@ -659,6 +703,7 @@ async def stream_frames(
         backpressure: inflight 双阈值。
         metrics: 背压指标收集器。
         cache: 进程内主题快照缓存（每轮成员制与拉取共用）。
+        acl: 主题授权服务（01-4-1：长驻流重判授权）。
         directory: 分区目录登记表（02-1）。
         topic_id: 主题主键（预检已解析时给值）。
         partition_no: 分区号（预检已解析时给值）。
@@ -683,6 +728,7 @@ async def stream_frames(
         backpressure=backpressure,
         metrics=metrics,
         cache=cache,
+        acl=acl,
         directory=directory,
         topic_id=topic_id,
         partition_no=partition_no,
@@ -843,6 +889,7 @@ async def subscribe(
             backpressure=backpressure,
             metrics=metrics,
             cache=cache,
+            acl=acl,
             topic_id=topic_id,
             partition_no=partition_no,
             replication=replication,
@@ -998,6 +1045,7 @@ async def subscribe_frames(
             backpressure=backpressure,
             metrics=metrics,
             cache=cache,
+            acl=acl,
             directory=directory,
             topic_id=topic_id,
             partition_no=partition_no,

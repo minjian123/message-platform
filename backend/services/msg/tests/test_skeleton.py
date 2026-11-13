@@ -21,7 +21,7 @@ from bms_msg.broker.delay_file import FileDelayStore
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.election import LeaderSwitchService
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory
-from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.group_db import DatabaseGroupStore
 from bms_msg.broker.network import HttpLeaderControlTransport, HttpReplicaTransport
 from bms_msg.broker.offset import FileOffsetStore
 from bms_msg.broker.replication import (
@@ -33,6 +33,7 @@ from bms_msg.broker.scheduler import DelayScheduler
 from bms_msg.broker.transport import StreamRegistry
 from bms_msg.broker.waiter import NotifyingMessageStore
 from bms_msg.main import ApplicationFactory
+from bms_msg.services.group_sweeper import GroupSweeper
 from services.table_registry import register as register_product_tables
 from services.table_registry import table_names
 
@@ -97,6 +98,8 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_topic_acl_scope",
         "msg_topic_cleanup",
         "msg_dead_letter",
+        "msg_consumer_group",
+        "msg_group_member",
     ]
     assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
@@ -118,6 +121,8 @@ def test_table_registry_register_is_idempotent() -> None:
         "msg_topic_acl_scope",
         "msg_topic_cleanup",
         "msg_dead_letter",
+        "msg_consumer_group",
+        "msg_group_member",
     )
 
 
@@ -162,7 +167,8 @@ def test_application_assembles_data_plane_state() -> None:
         assert isinstance(app.state.offset_store, FileOffsetStore)
         assert isinstance(app.state.dead_letter_queue, DatabaseDeadLetterQueue)
         assert isinstance(app.state.delivery_state, DeliveryState)
-        assert isinstance(app.state.group_store, InMemoryGroupStore)
+        assert isinstance(app.state.group_store, DatabaseGroupStore)
+        assert isinstance(app.state.group_sweeper, GroupSweeper)
         # 02-7 起延迟区换成文件实现（`.delay` 独立序号段），端口与注入点不变。
         assert isinstance(app.state.delay_store, FileDelayStore)
         assert isinstance(app.state.delay_metrics, DelayMetrics)

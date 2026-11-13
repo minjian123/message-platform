@@ -152,8 +152,30 @@ class DeliveryState:
         """
         return InflightUsage(
             messages=len(self._inflight.get(key, {})),
-            bytes=sum(self._sizes.get(key, {}).values()),
+            bytes=self._partition_bytes(topic_id=key[1], partition_no=key[2]),
         )
+
+    def _partition_bytes(self, *, topic_id: int, partition_no: int) -> int:
+        """取某分区的在途字节合计（01-4-1：**跨组只算一份**）。
+
+        同一分区可能被多个组同时消费，同一条消息会被各组分别登记在途；字节额度按「分区持有者」
+        语义只应算一次，故按 offset 取最大值后求和（写路径仍按组维护，聚合在读侧完成）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            int: 该分区在途字节合计。
+        """
+        sizes = ConcurrentStableDict[int, int]()
+        for (_group, group_topic, group_partition), bucket in self._sizes.items():
+            if group_topic != topic_id or group_partition != partition_no:
+                continue
+            for offset, size in bucket.items():
+                if size > sizes.get(offset, 0):
+                    sizes.set(offset, size)
+        return sum(sizes.values())
 
     def track(self, key: PartitionKey, offset: int, delivery: InflightDelivery, *, size: int = 0) -> None:
         """登记一次在途投递（覆盖同 offset 的旧记录，并同步字节账）。
@@ -398,9 +420,15 @@ class DeliveryService:
         topic_id = int(topic.id)
         key: PartitionKey = (request.group, topic_id, partition_no)
         async with self._state.lock:
-            committed = await self._offsets.get(group=request.group, topic_id=topic_id, partition_no=partition_no)
+            committed = await self._offsets.committed(group=request.group, topic_id=topic_id, partition_no=partition_no)
             start = await self._store.start_offset(topic_id=topic_id, partition_no=partition_no)
-            if committed < start:
+            if committed is None:
+                # 01-4-1：从未提交过 = 新组，从现存最早开始；把起点写实，避免起点前移后行为漂移。
+                committed = start
+                await self._offsets.commit(
+                    group=request.group, topic_id=topic_id, partition_no=partition_no, offset=committed
+                )
+            elif committed < start:
                 raise MsgMessageNotFoundError(f"位点已被保留期清理：{committed} < {start}")
             visible_limit = (
                 None

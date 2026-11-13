@@ -141,3 +141,21 @@ async def test_purge_topic_removes_only_target_topic() -> None:
 async def test_purge_topic_default_implementation_is_noop() -> None:
     """未知存储形态走基类默认实现：无组可清返回 0（清理任务据此继续后续步骤）。"""
     assert await GroupStore.purge_topic(InMemoryGroupStore(), topic_id=1) == 0
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_default_delete_and_mark_idle_dead_are_noops() -> None:
+    """01-4-1：未知存储形态走基类默认实现（删除 False、回收 0）。"""
+    store = InMemoryGroupStore()
+    assert await GroupStore.delete(store, tenant_id=1, topic_id=1, group="audit") is False
+    assert await GroupStore.mark_idle_dead(store, before=datetime(2026, 1, 1, tzinfo=UTC)) == 0
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_in_memory_delete_removes_group_and_touch() -> None:
+    """01-4-1：内存实现删除命中返回 True，重复删除 False。"""
+    store = InMemoryGroupStore()
+    await store.save(_record())
+    assert await store.delete(tenant_id=TENANT, topic_id=101, group="audit") is True
+    assert await store.load(tenant_id=TENANT, topic_id=101, group="audit") is None
+    assert await store.delete(tenant_id=TENANT, topic_id=101, group="audit") is False

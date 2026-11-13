@@ -135,6 +135,29 @@ export async function fetchGroupDetail(
   return data ?? null
 }
 
+/**
+ * 删除消费组（默认只删组与成员、保留位点）。
+ *
+ * @param namespace 命名空间。
+ * @param topic 主题名。
+ * @param group 组名。
+ * @param purgeOffsets 是否一并清理该组位点（默认 false）。
+ * @returns 删除结果。
+ */
+export async function deleteGroup(
+  namespace: string,
+  topic: string,
+  group: string,
+  purgeOffsets = false,
+): Promise<Schema['GroupDeleteResult']> {
+  const path = `/admin/groups/${encodeURIComponent(namespace)}/${encodeURIComponent(topic)}/${encodeURIComponent(group)}`
+  const data = await delData<Schema['GroupDeleteResult']>(path, {
+    confirm: true,
+    purge_offsets: purgeOffsets,
+  })
+  return requiredData(data)
+}
+
 /** 分区详情（必填命名空间与主题）。 */
 export async function fetchPartitions(params: PartitionQuery): Promise<PartitionPage | null> {
   const data = await getData<Schema['PartitionPage']>('/admin/partitions', params)

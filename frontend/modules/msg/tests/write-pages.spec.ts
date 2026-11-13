@@ -163,6 +163,7 @@ beforeEach(() => {
   api.put.mockReset()
   api.patch.mockReset()
   api.del.mockReset()
+  push.mockReset()
   api.get.mockResolvedValue({ code: 0, message: 'ok', data: { items: [], page: 1, size: 20, total: 0 } })
 })
 
@@ -409,6 +410,35 @@ describe('消费组详情：位点重置（Kiwi 2466）', () => {
     api.post.mockResolvedValue({ code: 350003, message: 'bad', data: null })
     await click('[data-test="confirm-ok"]')
     expect(q('[data-test="group-reset-error"]')?.textContent).toContain('已被清理')
+  })
+
+  it('无 msg:manage：不渲染删除组入口', async () => {
+    permissionRef.value = ['msg:query']
+    await mountPage(GroupDetailPage)
+    expect(q('[data-test="group-delete"]')).toBeNull()
+  })
+
+  it('删除组：默认保留位点（purge_offsets=false），成功后回列表', async () => {
+    await mountPage(GroupDetailPage)
+    await click('[data-test="group-delete"]')
+    api.del.mockResolvedValue({ code: 0, message: 'ok', data: { deleted: true, offsets_purged: 0 } })
+    await click('[data-test="confirm-ok"]')
+
+    const [path, params] = api.del.mock.calls[0] as [string, Record<string, unknown>]
+    expect(path).toBe('/admin/groups/msg/order.created/order-sync')
+    expect(params).toMatchObject({ confirm: true, purge_offsets: false })
+    expect(push).toHaveBeenCalledWith('/msg/groups')
+  })
+
+  it('删除组并清位点：游标勾选后 purge_offsets=true', async () => {
+    await mountPage(GroupDetailPage)
+    await click('[data-test="group-delete"]')
+    await click('[data-test="group-delete-offsets"]')
+    api.del.mockResolvedValue({ code: 0, message: 'ok', data: { deleted: true, offsets_purged: 2 } })
+    await click('[data-test="confirm-ok"]')
+
+    const [, params] = api.del.mock.calls[0] as [string, Record<string, unknown>]
+    expect(params).toMatchObject({ confirm: true, purge_offsets: true })
   })
 })
 

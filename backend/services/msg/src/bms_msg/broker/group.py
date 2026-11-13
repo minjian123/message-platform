@@ -9,13 +9,13 @@
 3. **分配器是纯函数**：`assign_range()` 只依赖「成员 id 集合 + 分区数」，同样输入同样输出；
    换 sticky / cooperative 时新增函数与策略位，不动协议与状态机（口径 3、§4.4）。
 
-**不落库、不共享**：进程内实现随进程重启清空（组与分配全丢，客户端重新 `join`），与消息 / 位点 / 死信
-的现状一致；多副本下的协调者归属归 8B_02 / 8B_05（详细设计 §12 风险 1、2）。
+**落库实现（01-4-1）**：生产装配 `DatabaseGroupStore`（`msg_consumer_group` / `msg_group_member` 两表，
+每次操作自开 UoW）；`InMemoryGroupStore` 保留为用例替身。端口签名不变，协调器不感知存储形态。
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
@@ -53,7 +53,7 @@ GROUP_STATE_STABLE = "stable"
 """组状态：分配已生效，成员按 `generation` 拉取。"""
 
 GROUP_STATE_DEAD = "dead"
-"""组状态：组已被回收（组删除归 06 域，本任务只定义常量与迁移条件，不产生该态）。"""
+"""组状态：空组空闲超过阈值后被回收（01-4-1）；行与位点保留，重新 `join` 即恢复。"""
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,9 @@ class ConsumerGroup(BaseValueObject):
 
     members: ConcurrentStableList[GroupMember]
     """成员列表（按 `consumer_id` 升序，分配结果确定）。"""
+
+    namespace: str = ""
+    """命名空间快照（01-4-1 落库用；值对象判定不依赖它）。"""
 
     def member(self, consumer_id: str) -> GroupMember | None:
         """取指定成员。
@@ -205,6 +208,37 @@ class GroupStore(BaseFrameworkObject, ABC):
         """
         return ConcurrentStableList()
 
+    async def delete(self, *, tenant_id: int, topic_id: int, group: str) -> bool:
+        """物理删除组与成员（位点保留；01-4-1）。
+
+        默认实现返回 False：未知存储形态视为「没有可删的组」，调用方按 350013 处理。
+        DB 实现覆盖为真实删除。
+
+        Args:
+            tenant_id: 租户主键。
+            topic_id: 主题主键。
+            group: 组名。
+
+        Returns:
+            bool: 是否命中并删除。
+        """
+        del tenant_id, topic_id, group
+        return False
+
+    async def mark_idle_dead(self, *, before: datetime) -> int:
+        """把空闲超过阈值的空组置 `dead`（01-4-1 扫描器）。
+
+        默认实现返回 0：未知存储形态不提供全量迁移。
+
+        Args:
+            before: 空闲判定截止时刻（UTC）。
+
+        Returns:
+            int: 本次置为 `dead` 的组数。
+        """
+        del before
+        return 0
+
     @abstractmethod
     async def purge_tenant(self, *, tenant_id: int) -> int:
         """删除某租户的全部组记录（租户删除时的易失资源清理）。
@@ -238,6 +272,7 @@ class InMemoryGroupStore(GroupStore):
     def __init__(self) -> None:
         """初始化（空表）。"""
         self._groups: dict[GroupKey, ConsumerGroup] = {}
+        self._touched: ConcurrentStableDict[GroupKey, datetime] = ConcurrentStableDict()
 
     async def load(self, *, tenant_id: int, topic_id: int, group: str) -> ConsumerGroup | None:
         """取组记录（未 `join` 过即 None）。
@@ -258,7 +293,9 @@ class InMemoryGroupStore(GroupStore):
         Args:
             record: 组记录快照。
         """
-        self._groups[(record.tenant_id, record.topic_id, record.group)] = record
+        key: GroupKey = (record.tenant_id, record.topic_id, record.group)
+        self._groups[key] = record
+        self._touched[key] = datetime.now(UTC)
 
     async def list_for_tenant(
         self, *, tenant_id: int, topic_id: int | None = None
@@ -304,6 +341,7 @@ class InMemoryGroupStore(GroupStore):
         keys = [key for key in self._groups if key[0] == int(tenant_id)]
         for key in keys:
             self._groups.pop(key, None)
+            self._touched.pop(key, None)
         return len(keys)
 
     async def purge_topic(self, *, topic_id: int) -> int:
@@ -318,4 +356,38 @@ class InMemoryGroupStore(GroupStore):
         keys = [key for key in self._groups if key[1] == int(topic_id)]
         for key in keys:
             self._groups.pop(key, None)
+            self._touched.pop(key, None)
         return len(keys)
+
+    async def delete(self, *, tenant_id: int, topic_id: int, group: str) -> bool:
+        """删除单个组记录（内存实现：位点不在本对象内，天然保留）。
+
+        Args:
+            tenant_id: 租户主键。
+            topic_id: 主题主键。
+            group: 组名。
+
+        Returns:
+            bool: 是否命中并删除。
+        """
+        key: GroupKey = (int(tenant_id), int(topic_id), group)
+        self._touched.pop(key, None)
+        return self._groups.pop(key, None) is not None
+
+    async def mark_idle_dead(self, *, before: datetime) -> int:
+        """把空闲超过阈值的空组置 `dead`（内存实现按保存时刻判定）。
+
+        Args:
+            before: 空闲判定截止时刻（UTC）。
+
+        Returns:
+            int: 本次置为 `dead` 的组数。
+        """
+        changed = 0
+        for key, record in list(self._groups.items()):
+            touched = self._touched.get(key)
+            if record.state != GROUP_STATE_EMPTY or touched is None or touched >= before:
+                continue
+            self._groups[key] = replace(record, state=GROUP_STATE_DEAD)
+            changed += 1
+        return changed

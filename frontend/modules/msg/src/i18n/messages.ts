@@ -155,6 +155,15 @@ const CATALOG: Record<string, readonly [string, string]> = {
     'Lower target replays messages, higher target skips them; assignments are unchanged',
   ],
   'msg.admin.groups.reset.action': ['重置位点', 'Reset offset'],
+  'msg.admin.groups.delete.action': ['删除组', 'Delete group'],
+  'msg.admin.groups.delete.title': ['删除消费组（不可恢复）', 'Delete consumer group (irreversible)'],
+  'msg.admin.groups.delete.warning': [
+    '删除后组成员与分配立即失效；默认保留位点，重建同名组可从原位点续消费',
+    'Members and assignments are removed immediately; offsets are kept by default so a recreated group can resume',
+  ],
+  'msg.admin.groups.delete.offsets': ['同时清理该组位点', 'Also purge offsets'],
+  'msg.admin.groups.delete.offsetsKept': ['保留位点', 'Offsets kept'],
+  'msg.admin.groups.delete.offsetsPurged': ['一并清理位点', 'Offsets purged'],
 
   // 配额管理页（06-2-2）。
   'msg.admin.quotas.title': ['配额管理', 'Quota management'],

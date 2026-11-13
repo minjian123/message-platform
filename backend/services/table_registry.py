@@ -88,6 +88,20 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="死信（定位三元组 / 转入原因 / 失败上下文 / 五态处置 / 重放任务关联）",
     ),
+    TableRecord(
+        table_name="msg_consumer_group",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="消费组（身份 / 命名空间快照 / 状态 / 世代）",
+    ),
+    TableRecord(
+        table_name="msg_group_member",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="组成员（成员标识 / 实例标识 / 加入与心跳时刻 / 持有分区）",
+    ),
 )
 """msg 元数据表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 

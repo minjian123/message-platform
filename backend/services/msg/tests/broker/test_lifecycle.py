@@ -112,6 +112,7 @@ def _app(
     *,
     purge: object | None = None,
     cleanup: object | None = None,
+    sweeper: object | None = None,
     replication: object | None = None,
 ) -> FastAPI:
     """构造只带后台任务与资源管理器的空应用。
@@ -121,6 +122,7 @@ def _app(
         runner: 重放执行器。
         purge: 租户到期清扫服务替身（05-5；None 表示不装配）。
         cleanup: 删主题清理扫描替身（06-2；None 表示不装配）。
+        sweeper: 空组回收扫描替身（01-4-1；None 表示不装配）。
         replication: 复制协调器替身（02-4；None 表示不装配）。
 
     Returns:
@@ -136,6 +138,8 @@ def _app(
         app.state.tenant_purge_service = purge
     if cleanup is not None:
         app.state.topic_cleanup_service = cleanup
+    if sweeper is not None:
+        app.state.group_sweeper = sweeper
     if replication is not None:
         app.state.replication = replication
     app.state.resources = ResourceManager()
@@ -424,3 +428,21 @@ def test_delay_store_port_signature_is_unchanged() -> None:
     assert list(inspect.signature(DelayStore.list_for_tenant).parameters) == ["self", "tenant_id"]
     assert list(inspect.signature(DelayStore.list_all).parameters) == ["self"]
     assert list(inspect.signature(DelayStore.remove).parameters) == ["self", "log_id"]
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_start_hook_starts_and_stops_group_sweeper(
+    delay_scheduler: DelayScheduler, replay_runner: ReplayRunner
+) -> None:
+    """01-4-1：启动钩子拉起空组回收扫描，停机随资源管理器停止。"""
+    sweeper = _PurgeStub()
+    app = _app(delay_scheduler, replay_runner, sweeper=sweeper)
+
+    await start_background_tasks(app)
+
+    assert sweeper.ensured is True
+    assert sweeper.stopped is False
+
+    await app.state.resources.aclose()
+
+    assert sweeper.stopped is True

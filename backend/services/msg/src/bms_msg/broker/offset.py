@@ -302,6 +302,22 @@ class OffsetStore(BaseFrameworkObject, ABC):
             offset: 目标位点（下一条待消费的 offset）。
         """
 
+    async def committed(self, *, group: str, topic_id: int, partition_no: int) -> int | None:
+        """取已提交位点；**无记录返回 None**（区分「从未提交」与「提交过 0」）。
+
+        默认实现回落 `get()`（无记录返回 0，丢失区分度）；文件 / 内存两处真实实现覆盖。
+        01-4-1 用它实现「新组从现存最早开始」，避免保留期清理过的分区上永久 350003。
+
+        Args:
+            group: 消费组。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            int | None: 已提交位点；无记录返回 None。
+        """
+        return await self.get(group=group, topic_id=topic_id, partition_no=partition_no)
+
 
 class OffsetRealigner(Protocol):
     """崩溃恢复的位点对齐端口（独立于 `OffsetStore`，不改其签名）。"""
@@ -673,6 +689,19 @@ class InMemoryOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEn
         """
         return self._offsets.get((group, topic_id, partition_no), 0)
 
+    async def committed(self, *, group: str, topic_id: int, partition_no: int) -> int | None:
+        """取已提交位点；无记录返回 None（区分「从未提交」与「提交过 0」）。
+
+        Args:
+            group: 消费组。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            int | None: 已提交位点；无记录返回 None。
+        """
+        return self._offsets.get((group, topic_id, partition_no))
+
     async def commit(self, *, group: str, topic_id: int, partition_no: int, offset: int) -> None:
         """提交位点（只前进不后退；重复提交幂等）。
 
@@ -854,6 +883,9 @@ class _Entry:
     unavailable: str | None = None
     """不可用原因（`OFFSET_REASON_*` 或 `read:<错误>`；None 表示可用）。"""
 
+    absent: bool = False
+    """位点文件原本不存在（01-4-1：`committed` 据此区分「从未提交」与「提交过 0」）。"""
+
 
 @dataclass
 class _Snapshot:
@@ -960,6 +992,26 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
         self._ensure_available(entry)
         return entry.current
 
+    async def committed(self, *, group: str, topic_id: int, partition_no: int) -> int | None:
+        """取已提交位点；无位点文件返回 None（区分「从未提交」与「提交过 0」）。
+
+        Args:
+            group: 消费组。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            int | None: 已提交位点；无记录返回 None。
+
+        Raises:
+            OffsetUnavailableError: 位点文件存在但两槽均坏 / 版本过高 / 身份不符。
+        """
+        entry = await self._resolve(group=group, topic_id=topic_id, partition_no=partition_no)
+        if entry is None or entry.absent:
+            return None
+        self._ensure_available(entry)
+        return entry.current
+
     async def commit(self, *, group: str, topic_id: int, partition_no: int, offset: int) -> None:
         """提交位点（只前进；负数或越过 LEO 即拒绝，不夹取）。
 
@@ -985,6 +1037,7 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
         if candidate <= entry.current:
             return
         entry.current = candidate
+        entry.absent = False
         entry.version += 1
         entry.updated_at_us = self._now_us()
         entry.dirty = True
@@ -1484,6 +1537,7 @@ class FileOffsetStore(OffsetStore, OffsetRealigner, OffsetResetter, OffsetEnumer
                 raw = path.read_bytes()
             except FileNotFoundError:
                 _LOGGER.info("msg_offset_absent", group=group, topic_id=int(topic_id), partition_no=int(partition_no))
+                entry.absent = True
                 self._entries[key] = entry
                 return entry
             except OSError as exc:

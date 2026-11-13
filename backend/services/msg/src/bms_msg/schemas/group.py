@@ -18,6 +18,7 @@ from pydantic import Field
 from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, TOPIC_FIELD
 
 __all__ = [
+    "GroupDeleteResult",
     "GroupDetail",
     "GroupItem",
     "GroupMemberItem",
@@ -62,6 +63,16 @@ class LeaveResult(BaseSchema):
     consumer_id: str = Field(description="成员标识")
     generation: int = Field(description="离开后的世代号")
     state: str = Field(description="离开后的组状态（无成员即 empty）")
+
+
+class GroupDeleteResult(BaseSchema):
+    """组删除结果（默认只删组与成员，位点保留）。"""
+
+    group: str = Field(description="消费组名")
+    namespace: str = Field(description="命名空间")
+    topic: str = Field(description="主题名")
+    deleted: bool = Field(description="组与成员是否已删除（组不存在为 false）")
+    offsets_purged: int = Field(description="本次清理的位点条目数（默认 0 = 位点保留）")
 
 
 class GroupItem(BaseSchema):

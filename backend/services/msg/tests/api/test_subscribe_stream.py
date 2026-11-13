@@ -26,10 +26,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bms_msg.acl.service import TopicAclService
 from bms_msg.api.deps import get_stream_tuning
 from bms_msg.api.frame.routes import stream_events
 from bms_msg.broker.backpressure import default_backpressure_tuning
 from bms_msg.broker.transport import StreamTuning, connection_meta
+from bms_msg.errors import MsgAclDeniedError
 from bms_msg.schemas.transport import SubscribeQuery
 from bms_msg.tenant.context import CurrentTenant
 from tests_support.frame_app import build_frame_app
@@ -46,6 +48,21 @@ DEMO_HEADERS = {"X-Tenant-ID": "demo"}
 BASE_URL = "http://test"
 FAST = StreamTuning(poll_interval_ms=5, max_seconds=1, keepalive_ms=10)
 """毫秒级流参数：到期用例约 1s、保活用例约 10ms，用例不 sleep 秒级。"""
+
+
+class _AllowAcl:
+    """ACL 替身：恒放行（长驻流复核用）。"""
+
+    async def authorize(self, **kwargs: object) -> None:
+        """恒放行。
+
+        Args:
+            **kwargs: 授权参数（忽略）。
+        """
+        del kwargs
+
+
+_ALLOW_ACL = cast("TopicAclService", _AllowAcl())
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +148,14 @@ _TEST_CONNECTION_KEY = "demo|127.0.0.1:123"
 """用例自造的连接键（直调生成器没有 HTTP 请求上下文，连接名额由用例手工登记）。"""
 
 
-def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: StreamTuning) -> AsyncGenerator[bytes]:
+def _events(
+    app: FastAPI,
+    tenant: CurrentTenant,
+    query: SubscribeQuery,
+    tuning: StreamTuning,
+    *,
+    acl: TopicAclService | None = None,
+) -> AsyncGenerator[bytes]:
     """构造生成器（复用应用状态里的存储与登记表）。
 
     03-4 起生成器还要归还连接名额，故先登记一条连接再开流——名额与流登记成对，才能在收尾断言里
@@ -171,6 +195,7 @@ def _events(app: FastAPI, tenant: CurrentTenant, query: SubscribeQuery, tuning: 
         backpressure=default_backpressure_tuning(),
         metrics=app.state.backpressure_metrics,
         cache=app.state.topic_cache,
+        acl=acl or _ALLOW_ACL,
     )
 
 
@@ -407,3 +432,105 @@ def test_build_frame_app_mounts_frame_router(api_app: FastAPI) -> None:
     """装配护栏：根路径聚合已挂（`/msg/subscribe` 在契约里），且路由类型为聚合路由。"""
     assert "/msg/subscribe" in api_app.openapi()["paths"]
     assert isinstance(api_app.router, APIRouter)
+
+
+class _DenyAfterFirst:
+    """ACL 替身：首次放行、之后拒绝（模拟长驻流期间授权被收回）。"""
+
+    def __init__(self) -> None:
+        """初始化调用计数。"""
+        self.calls = 0
+
+    async def authorize(self, **kwargs: object) -> None:
+        """首次放行、后续拒绝。
+
+        Args:
+            **kwargs: 授权参数（忽略）。
+
+        Raises:
+            MsgAclDeniedError: 第二次及以后调用。
+        """
+        del kwargs
+        self.calls += 1
+        if self.calls > 1:
+            raise MsgAclDeniedError("主题授权已收回")
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_stream_rechecks_acl_and_closes_when_revoked(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant
+) -> None:
+    """01-4-1/B12：授权在流内被收回 → 下一批前 `error(350027)` + `close(acl_revoked)`。"""
+    await _prepare(client, publish=True)
+    second = await client.post(
+        "/api/v1/msg/publish",
+        json={"namespace": NAMESPACE, "topic": TOPIC_NAME, "key": "k2", "payload": "cGF5bG9hZA=="},
+        headers=DEMO_HEADERS,
+    )
+    assert second.status_code == 200
+
+    acl = cast("TopicAclService", _DenyAfterFirst())
+    agen = _events(api_app, current_tenant, _query(max_messages=1), FAST, acl=acl)
+
+    name, _opened = await _next(agen)
+    assert name == "open"
+    name, message = await _next(agen)
+    assert name == "message"
+    assert message is not None
+
+    acked = await client.post(
+        "/api/v1/msg/ack",
+        json={
+            "namespace": NAMESPACE,
+            "topic": TOPIC_NAME,
+            "group": GROUP,
+            "consumer_id": CONSUMER,
+            "partition": 0,
+            "offset": 0,
+        },
+        headers=DEMO_HEADERS,
+    )
+    assert acked.status_code == 200, acked.text
+
+    name, error = await _next(agen)
+    assert name == "error"
+    assert error is not None
+    assert error["code"] == 350027
+    name, closed = await _next(agen)
+    assert name == "close"
+    assert closed is not None
+    assert closed["reason"] == "acl_revoked"
+    with pytest.raises(StopAsyncIteration):
+        await anext(agen)
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_stream_rechecks_acl_periodically_when_idle(
+    client: AsyncClient, api_app: FastAPI, current_tenant: CurrentTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """01-4-1/B12：空闲时 30s 兜底重判（用例把阈值调到 1ms）同样以 `acl_revoked` 收尾。"""
+    from bms_msg.api.frame import routes as frame_routes
+
+    await _prepare(client)
+    monkeypatch.setattr(frame_routes, "STREAM_ACL_RECHECK_MS", 1)
+    acl = cast("TopicAclService", _DenyAfterFirst())
+    agen = _events(api_app, current_tenant, _query(), FAST, acl=acl)
+
+    name, _opened = await _next(agen)
+    assert name == "open"
+    # 先经历若干保活注释行，等空闲兜底阈值（1ms）到点后才会重判。
+    name = ""
+    error: dict[str, object] | None = None
+    for _ in range(50):
+        name, error = await _next(agen)
+        if name == "error":
+            break
+    assert name == "error"
+    assert error is not None
+    assert error["code"] == 350027
+    name, closed = await _next(agen)
+    assert name == "close"
+    assert closed is not None
+    assert closed["reason"] == "acl_revoked"
+    with pytest.raises(StopAsyncIteration):
+        await anext(agen)

@@ -388,6 +388,7 @@ async def test_stream_frames_encodes_error_event(monkeypatch: pytest.MonkeyPatch
             backpressure=cast("Any", None),
             metrics=cast("Any", None),
             cache=cast("Any", None),
+            acl=cast("Any", None),
         )
     ]
     assert decode_frames(frames[0]).frames[0].header["code"] == 350013

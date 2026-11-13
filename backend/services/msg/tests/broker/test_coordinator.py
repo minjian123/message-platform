@@ -12,13 +12,14 @@ from datetime import datetime
 from typing import Protocol, cast
 
 import pytest
+from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.db.session import DbSession
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.coordinator import GroupCoordinator, MemberState
 from bms_msg.broker.deadletter import InMemoryDeadLetterQueue
 from bms_msg.broker.delivery import DeliveryService, DeliveryState
-from bms_msg.broker.group import GROUP_STATE_EMPTY, GROUP_STATE_STABLE
+from bms_msg.broker.group import GROUP_STATE_EMPTY, GROUP_STATE_STABLE, ConsumerGroup, InMemoryGroupStore
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.router import TopicRouter
@@ -441,3 +442,33 @@ async def test_rebalance_drops_inflight_of_moved_partition(
     assert [item.message.offset for item in second] == [0]
     assert [item.delivery_count for item in second] == [1]
     assert await offset_store.get(group=GROUP, topic_id=int(subject.id), partition_no=0) == 0
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_join_backfills_legacy_group_namespace(
+    coordinator: GroupCoordinator,
+    current_tenant: CurrentTenant,
+    make_member: MakeMember,
+    topic: MsgTopic,
+    group_store: InMemoryGroupStore,
+) -> None:
+    """01-4-1：旧行 / 早期内存记录缺命名空间时，首次活动补齐（落库需要）。"""
+    request = make_member(consumer_id="c1")
+    await group_store.save(
+        ConsumerGroup(
+            tenant_id=int(current_tenant.tenant_id),
+            topic_id=int(topic.id),
+            group=request.group,
+            state=GROUP_STATE_EMPTY,
+            generation=0,
+            members=ConcurrentStableList(),
+        )
+    )
+
+    state = await coordinator.join(tenant=current_tenant, request=request)
+    stored = await group_store.load(
+        tenant_id=int(current_tenant.tenant_id), topic_id=int(topic.id), group=request.group
+    )
+    assert stored is not None
+    assert stored.namespace == request.namespace
+    assert state.group.namespace == request.namespace

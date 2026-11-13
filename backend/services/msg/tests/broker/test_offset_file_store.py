@@ -1092,3 +1092,12 @@ async def test_purge_tenant_skips_foreign_files(tmp_path: Path) -> None:
 
     assert await store.purge_tenant(tenant_id=TENANT_ID) == 1
     assert foreign.exists()
+
+
+@pytest.mark.kiwi_id(2496)
+async def test_file_store_committed_reports_missing_as_none(tmp_path: Path) -> None:
+    """01-4-1/B1：无位点文件返回 None，提交后返回实际值（与 `get` 的 0 区分）。"""
+    store = _store(tmp_path)
+    assert await store.committed(group=GROUP, topic_id=TOPIC_ID, partition_no=0) is None
+    await store.commit(group=GROUP, topic_id=TOPIC_ID, partition_no=0, offset=7)
+    assert await store.committed(group=GROUP, topic_id=TOPIC_ID, partition_no=0) == 7

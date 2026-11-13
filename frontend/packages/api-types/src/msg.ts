@@ -355,7 +355,15 @@ export interface paths {
         get: operations["get_group_api_v1_msg_admin_groups__namespace___topic___group__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Group
+         * @description 删除消费组（默认**只删组与成员、保留位点**）。
+         *
+         *     需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；主题不存在 350001；
+         *     组不存在 350013；无主题授权 350027。`purge_offsets=true` 时一并清该组位点（位点为文件，
+         *     与 DB 不同事务，失败只告警并返回 `offsets_purged=0`）。
+         */
+        delete: operations["delete_group_api_v1_msg_admin_groups__namespace___topic___group__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1893,6 +1901,20 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[GroupDeleteResult] */
+        ApiResponse_GroupDeleteResult_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["GroupDeleteResult"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[GroupDetail] */
         ApiResponse_GroupDetail_: {
             /**
@@ -2971,6 +2993,37 @@ export interface components {
              * @default 100
              */
             rate_per_second: number;
+        };
+        /**
+         * GroupDeleteResult
+         * @description 组删除结果（默认只删组与成员，位点保留）。
+         */
+        GroupDeleteResult: {
+            /**
+             * Deleted
+             * @description 组与成员是否已删除（组不存在为 false）
+             */
+            deleted: boolean;
+            /**
+             * Group
+             * @description 消费组名
+             */
+            group: string;
+            /**
+             * Namespace
+             * @description 命名空间
+             */
+            namespace: string;
+            /**
+             * Offsets Purged
+             * @description 本次清理的位点条目数（默认 0 = 位点保留）
+             */
+            offsets_purged: number;
+            /**
+             * Topic
+             * @description 主题名
+             */
+            topic: string;
         };
         /**
          * GroupDetail
@@ -5841,6 +5894,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_GroupDetail_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    delete_group_api_v1_msg_admin_groups__namespace___topic___group__delete: {
+        parameters: {
+            query?: {
+                /** @description 显式确认（必须为 true） */
+                confirm?: boolean;
+                /** @description 是否一并清理该组位点（默认保留） */
+                purge_offsets?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description 命名空间 */
+                namespace: string;
+                /** @description 主题名 */
+                topic: string;
+                /** @description 消费组名 */
+                group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_GroupDeleteResult_"];
                 };
             };
             /** @description 未认证 */

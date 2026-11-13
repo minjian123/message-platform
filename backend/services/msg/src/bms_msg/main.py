@@ -80,7 +80,7 @@ from bms_msg.broker.election import (
     LeaderSwitchService,
 )
 from bms_msg.broker.file_store import FileMessageStore, PartitionDirectory, data_root
-from bms_msg.broker.group import InMemoryGroupStore
+from bms_msg.broker.group_db import DatabaseGroupStore
 from bms_msg.broker.internal_server import (
     InternalReplicationServer,
     InternalServerCloser,
@@ -120,6 +120,7 @@ from bms_msg.permission import register_msg_permission
 from bms_msg.quota.cache import QuotaCache
 from bms_msg.rpc.builtin import default_rpc_registry
 from bms_msg.rpc.idempotency import InProcessIdempotencyStore
+from bms_msg.services.group_sweeper import GroupSweeper
 from bms_msg.services.leader_switch import DbLeaderSwitchStore
 from bms_msg.services.migration_ledger import DbMigrationLedger
 from bms_msg.services.partition_assignment import PartitionAssigner, PartitionAssignmentConfig
@@ -441,7 +442,9 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         app.state.migration_ledger = DbMigrationLedger(uow_factory=app.state.uow_factory)
         app.state.dead_letter_queue = DatabaseDeadLetterQueue(uow_factory=app.state.uow_factory)
         app.state.delivery_state = DeliveryState()
-        app.state.group_store = InMemoryGroupStore()
+        app.state.group_store = DatabaseGroupStore(
+            uow_factory=app.state.uow_factory, instance_id=replica_config.node_id
+        )
         app.state.stream_registry = StreamRegistry()
         app.state.connection_registry = ConnectionRegistry()
         # 01-7：主题元数据快照缓存与保留清理节流窗口（进程级；跨实例一致性归 8B_05）。
@@ -528,6 +531,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             watermark=app.state.storage_watermark,
             uow_factory=app.state.uow_factory,
         )
+        # 01-4-1：空组回收扫描（`empty` 超 7 天置 `dead`；保留行与位点）。
+        app.state.group_sweeper = GroupSweeper(groups=app.state.group_store)
         register_frame_handlers(app)
         # 06-3-1：指标出口——自定义 Collector 直读既有采集器快照与事件点采集器。
         # 注册进基座注册表（根路径 /metrics 由基座提供）；基座不支持时降级并留 warning。

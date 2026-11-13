@@ -312,6 +312,15 @@ TOPIC_CLEANUP_SCAN_INTERVAL_SECONDS = 30.0
 TOPIC_CLEANUP_FAILURE_ALERT_ATTEMPTS = 3
 """清理连续失败告警阈值（轮次）：达到即每轮输出 warning 级日志，供 06-3 告警规则消费（06-2）。"""
 
+GROUP_IDLE_DAYS = 7
+"""空组回收阈值（天）：`empty` 状态超过该时长即置 `dead`（01-4-1；行与位点保留）。"""
+
+GROUP_SWEEP_INTERVAL_SECONDS = 3600.0
+"""空组回收扫描间隔（秒；01-4-1）。"""
+
+STREAM_ACL_RECHECK_MS = 30_000
+"""长驻订阅流 ACL 复核间隔（毫秒；01-4-1）：授权收回后最长该时长内结束流。"""
+
 WINDOW_STALL_THRESHOLD_MS = 50
 """窗口暂停判定阈值（毫秒）：流两次推进间隔超过该值即记一次 `msg_window_stall_total`。
 

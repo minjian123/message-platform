@@ -503,7 +503,7 @@ async def test_permission_denied_blocks_data_plane(
 
 @pytest.mark.kiwi_id(2418)
 async def test_entrypoints_trigger_retention_cleanup(client: AsyncClient, api_app: FastAPI) -> None:
-    """01-6：数据面入口触发保留清理——旧段被删、位点早于起点报 350003。
+    """01-6：数据面入口触发保留清理——旧段被删，新组从现存最早开始（01-4-1/B1）。
 
     造法：直接向存储写入两条「1 小时前」的记录（端口级入队，不走发布链路以控制 `published_at`），
     段替身为每 2 条一段，故这两条自成一段；随后发布一条新消息触发清理，旧段整段被删、起点前移到 2。
@@ -535,7 +535,10 @@ async def test_entrypoints_trigger_retention_cleanup(client: AsyncClient, api_ap
 
     await _join(client)
     consumed = await _consume(client)
-    assert _body(consumed)["code"] == int(MsgErrorCode.MESSAGE_NOT_FOUND)
+    # 01-4-1/B1：新组（从未提交）从现存最早开始，不再把「保留期清理过」误报为 350003。
+    assert consumed.status_code == 200
+    messages = cast("list[dict[str, object]]", _data(consumed)["messages"])
+    assert [item["offset"] for item in messages] == [2]
 
 
 async def test_consume_unacked_quota_returns_paused_empty_batch(api_app: FastAPI, client: AsyncClient) -> None:
