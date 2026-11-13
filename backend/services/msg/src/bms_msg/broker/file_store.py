@@ -16,8 +16,10 @@
 """
 
 import asyncio
+import hashlib
 import os
 import shutil
+import struct
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -97,6 +99,82 @@ _LOGGER = get_logger("bms_msg.store")
 
 _FSYNC_MODES: Final = frozenset({FSYNC_MODE_BATCH, FSYNC_MODE_TIME, FSYNC_MODE_EACH, FSYNC_MODE_OS})
 """合法的 fsync 档位（非法值即启动失败，不静默降级成某个档）。"""
+
+LOG_INDEX_NAME = "log_id.idx"
+"""每分区 `log_id` 持久化索引文件名（02-8-4；与 `.log` / `.index` / `.timeindex` 并列）。"""
+
+LOG_ID_INDEX_SCAN_LIMIT = 4_096
+"""单次全局查找最多扫描的分区索引文件数（02-8-4；防冷路径拖垮进程）。"""
+
+_LOG_INDEX_ENTRY = struct.Struct(">QQ")
+"""索引条目：`hash64(log_id)` + `offset`（16 字节定长；哈希只筛候选，命中后必须回读比对）。"""
+
+_LOG_INDEX_OPEN_MODE = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0)
+"""索引追加写的打开标志（必须带 `O_BINARY`，理由同段文件：Windows 文本模式会翻译字节）。"""
+
+
+def log_id_hash(log_id: str) -> int:
+    """算 `log_id` 的 64 位哈希（索引筛选用，不承担唯一性）。
+
+    Args:
+        log_id: 记录标识。
+
+    Returns:
+        int: 64 位无符号哈希。
+    """
+    return int.from_bytes(hashlib.blake2b(log_id.encode("utf-8"), digest_size=8).digest(), "big")
+
+
+def append_log_index(path: Path, *, log_id: str, offset: int) -> None:
+    """向分区索引文件追加一条 `log_id → offset`（fail-open：失败只告警）。
+
+    Args:
+        path: 索引文件路径。
+        log_id: 记录标识。
+        offset: 分区内序号。
+    """
+    payload = _LOG_INDEX_ENTRY.pack(log_id_hash(log_id), int(offset))
+    try:
+        fd = os.open(path, _LOG_INDEX_OPEN_MODE, 0o644)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        _LOGGER.warning("msg_log_index_append_failed", path=str(path), error=str(exc))
+
+
+def iter_log_index(path: Path) -> ConcurrentStableList[tuple[int, int]]:
+    """读一个分区索引文件（尾部残条忽略）。
+
+    Args:
+        path: 索引文件路径。
+
+    Returns:
+        ConcurrentStableList[tuple[int, int]]: `(hash64, offset)` 列表；文件不存在返回空。
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ConcurrentStableList()
+    usable = len(raw) - (len(raw) % _LOG_INDEX_ENTRY.size)
+    return ConcurrentStableList(
+        _LOG_INDEX_ENTRY.unpack_from(raw, position) for position in range(0, usable, _LOG_INDEX_ENTRY.size)
+    )
+
+
+def lookup_log_index_file(path: Path, *, log_id: str) -> ConcurrentStableList[int]:
+    """在索引文件里按哈希筛候选 offset（不做完整 `log_id` 校验）。
+
+    Args:
+        path: 索引文件路径。
+        log_id: 记录标识。
+
+    Returns:
+        ConcurrentStableList[int]: 候选 offset（哈希碰撞时可能多于一个，调用方回读比对）。
+    """
+    target = log_id_hash(log_id)
+    return ConcurrentStableList(offset for hashed, offset in iter_log_index(path) if hashed == target)
 
 
 def _monotonic_ms() -> float:
@@ -204,6 +282,14 @@ class PartitionDirectory:
             TopicLocation | None: 已登记返回身份；未登记返回 None。
         """
         return self._locations.get(int(topic_id))
+
+    def all_locations(self) -> ConcurrentStableList[TopicLocation]:
+        """列出本进程已登记的全部主题目录身份（02-8-4：`log_id` 磁盘索引扫描用）。
+
+        Returns:
+            ConcurrentStableList[TopicLocation]: 目录身份（插入序）。
+        """
+        return ConcurrentStableList(self._locations.values())
 
     def forget(self, topic_id: int) -> None:
         """移除一个主题的目录登记（主题删除清理完成后调用）。
@@ -367,6 +453,8 @@ class _PartitionLog:
         self._corrupted: dict[int, str] = {}
         self._stamps: dict[int, SegmentStamp] = {}
         self._deleted: ConcurrentStableSet[str] = ConcurrentStableSet()
+        self._log_index_path = directory / LOG_INDEX_NAME
+        self._log_index: ConcurrentStableDict[int, int] | None = None
         self.lock = asyncio.Lock()
         self._load()
         self._rebuild_deleted()
@@ -448,6 +536,79 @@ class _PartitionLog:
                 ends.append(self._leo)
         return ends
 
+    def log_index_lookup(self, *, log_id: str) -> int | None:
+        """在持久化 `log_id` 索引里查一个候选 offset（02-8-4）。
+
+        索引缺失时按段头重建一次；返回的是**哈希候选**，调用方必须回读比对完整 `log_id`。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            int | None: 候选 offset；无候选返回 None。
+        """
+        index = self._ensure_log_index()
+        return index.get(log_id_hash(log_id))
+
+    def log_index_path(self) -> Path:
+        """本分区 `log_id` 索引文件路径。
+
+        Returns:
+            Path: 索引文件路径。
+        """
+        return self._log_index_path
+
+    def _ensure_log_index(self) -> ConcurrentStableDict[int, int]:
+        """载入索引（首次访问；文件缺失时按段头重建）。
+
+        Returns:
+            ConcurrentStableDict[int, int]: `hash64 → offset`。
+        """
+        if self._log_index is not None:
+            return self._log_index
+        if not self._log_index_path.exists():
+            return self._rebuild_log_index()
+        index: ConcurrentStableDict[int, int] = ConcurrentStableDict()
+        for hashed, offset in iter_log_index(self._log_index_path):
+            index[hashed] = offset
+        self._log_index = index
+        return index
+
+    def _rebuild_log_index(self) -> ConcurrentStableDict[int, int]:
+        """按段头重建索引文件（索引缺失 / 损坏时一次）。
+
+        Returns:
+            ConcurrentStableDict[int, int]: 重建后的 `hash64 → offset`。
+        """
+        index: ConcurrentStableDict[int, int] = ConcurrentStableDict()
+        rows: ConcurrentStableList[bytes] = ConcurrentStableList()
+        for offset, _position, header in self.iterate_headers():
+            if not header.log_id:  # pragma: no cover - 记录恒有 log_id（防御分支）
+                continue
+            hashed = log_id_hash(header.log_id)
+            index[hashed] = offset
+            rows.append(_LOG_INDEX_ENTRY.pack(hashed, offset))
+        try:
+            self._ensure_directory()
+            self._log_index_path.write_bytes(b"".join(rows))
+        except OSError as exc:
+            _LOGGER.warning("msg_log_index_rebuild_failed", path=str(self._log_index_path), error=str(exc))
+        self._log_index = index
+        if rows:
+            _LOGGER.info("msg_log_index_rebuilt", partition_path=str(self._directory), entries=len(rows))
+        return index
+
+    def _append_log_index(self, *, log_id: str, offset: int) -> None:
+        """写一条索引并同步内存视图（fail-open）。
+
+        Args:
+            log_id: 记录标识。
+            offset: 分区内序号。
+        """
+        if self._log_index is not None:
+            self._log_index[log_id_hash(log_id)] = offset
+        append_log_index(self._log_index_path, log_id=log_id, offset=offset)
+
     def append(
         self,
         *,
@@ -518,6 +679,7 @@ class _PartitionLog:
         self._leo = offset + 1
         self._unflushed += 1
         self._maybe_fsync()
+        self._append_log_index(log_id=log_id, offset=offset)
         if delete_target is not None:
             self._deleted.add(delete_target)
         return StoredMessage(
@@ -1565,8 +1727,11 @@ class FileMessageStore(MessageStore):
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_bytes(offset=offset)
 
-    def _resolve_log_id(self, *, log_id: str) -> tuple[int, int, int] | None:
-        """把记录身份解析成 `(topic_id, partition_no, offset)`（LRU 优先，其次扫已加载分区的段头）。
+    async def _resolve_log_id(self, *, log_id: str) -> tuple[int, int, int] | None:
+        """把记录身份解析成 `(topic_id, partition_no, offset)`（02-8-4：LRU → 分区索引 → 磁盘索引）。
+
+        查找顺序：进程内 LRU → 已加载分区的持久化索引 → 已绑定主题在磁盘上的分区索引文件。
+        哈希只筛候选，命中后**回读原记录比对完整 `log_id`**，防哈希碰撞返回错误记录。
 
         `locate_by_log_id()`（磁盘坐标）与 `find_by_log_id()`（只读头视图）共用同一份解析结果，
         避免两处索引口径漂移。
@@ -1582,9 +1747,91 @@ class FileMessageStore(MessageStore):
             self._log_ids.move_to_end(log_id)
             return cached
         for (topic_id, partition_no), partition in self._partitions.items():
-            for offset, _position, header in partition.iterate_headers():
-                if header.log_id == log_id:
-                    return (topic_id, partition_no, offset)
+            resolved = self._verify_index_candidate(partition=partition, log_id=log_id)
+            if resolved is not None:
+                self._remember_log_id(log_id=log_id, topic_id=topic_id, partition_no=partition_no, offset=resolved)
+                return (topic_id, partition_no, resolved)
+        found = await self._resolve_from_disk_index(log_id=log_id)
+        if found is None:
+            return None
+        topic_id, partition_no, offset = found
+        self._remember_log_id(log_id=log_id, topic_id=topic_id, partition_no=partition_no, offset=offset)
+        return found
+
+    def _verify_index_candidate(self, *, partition: _PartitionLog, log_id: str) -> int | None:
+        """用分区索引的候选 offset 回读记录，确认 `log_id` 一致。
+
+        Args:
+            partition: 分区日志。
+            log_id: 记录标识。
+
+        Returns:
+            int | None: 校验通过的 offset；否则 None。
+        """
+        candidate = partition.log_index_lookup(log_id=log_id)
+        candidates: ConcurrentStableList[int] = (
+            ConcurrentStableList() if candidate is None else ConcurrentStableList([candidate])
+        )
+        for offset in candidates:
+            if self._record_matches(partition=partition, offset=offset, log_id=log_id):
+                return offset
+        if candidate is None:
+            return None
+        # 哈希碰撞：按文件里的全部同哈希候选再验一遍
+        for offset in lookup_log_index_file(partition.log_index_path(), log_id=log_id):
+            if offset not in candidates and self._record_matches(partition=partition, offset=offset, log_id=log_id):
+                return offset
+        return None
+
+    @staticmethod
+    def _record_matches(*, partition: _PartitionLog, offset: int, log_id: str) -> bool:
+        """回读一条记录并比对 `log_id`。
+
+        Args:
+            partition: 分区日志。
+            offset: 分区内序号。
+            log_id: 记录标识。
+
+        Returns:
+            bool: 一致返回 True。
+        """
+        try:
+            messages = partition.read(from_offset=offset, max_messages=1)
+        except Exception:  # pragma: no cover - 损坏记录按未命中处理
+            return False
+        return bool(messages) and messages[0].offset == offset and messages[0].log_id == log_id
+
+    async def _resolve_from_disk_index(self, *, log_id: str) -> tuple[int, int, int] | None:
+        """扫描已绑定主题在磁盘上的分区索引文件（未加载分区也能定位）。
+
+        Args:
+            log_id: 记录标识。
+
+        Returns:
+            tuple[int, int, int] | None: 坐标；未命中返回 None。
+        """
+        scanned = 0
+        for location in self._directory.all_locations():
+            topic_dir = self._directory.path_of(location, 0).parent
+            if not topic_dir.is_dir():
+                continue
+            for entry in sorted(topic_dir.iterdir()):
+                if not entry.is_dir() or not entry.name.isdigit():
+                    continue
+                partition_no = int(entry.name)
+                if (location.topic_id, partition_no) in self._partitions:
+                    continue
+                index_path = entry / LOG_INDEX_NAME
+                if not index_path.exists():
+                    continue
+                scanned += 1
+                if scanned > LOG_ID_INDEX_SCAN_LIMIT:
+                    _LOGGER.warning("msg_log_index_scan_limit", limit=LOG_ID_INDEX_SCAN_LIMIT)
+                    return None
+                for offset in lookup_log_index_file(index_path, log_id=log_id):
+                    partition = await self._open(topic_id=location.topic_id, partition_no=partition_no)
+                    if self._record_matches(partition=partition, offset=offset, log_id=log_id):
+                        return (location.topic_id, partition_no, offset)
         return None
 
     async def locate_by_log_id(self, *, log_id: str) -> FileSlice | None:
@@ -1599,7 +1846,7 @@ class FileMessageStore(MessageStore):
         Returns:
             FileSlice | None: 坐标；不存在返回 None。
         """
-        resolved = self._resolve_log_id(log_id=log_id)
+        resolved = await self._resolve_log_id(log_id=log_id)
         if resolved is None:
             return None
         topic_id, partition_no, offset = resolved
@@ -1620,7 +1867,7 @@ class FileMessageStore(MessageStore):
         location = self._locate(topic_id)
         if location is None:
             return False
-        resolved = self._resolve_log_id(log_id=log_id)
+        resolved = await self._resolve_log_id(log_id=log_id)
         if resolved is None:
             return False
         resolved_topic, resolved_partition, offset = resolved
@@ -1658,7 +1905,7 @@ class FileMessageStore(MessageStore):
         Returns:
             MessageHeaderView | None: 头视图；不存在或分区已卸载返回 None。
         """
-        resolved = self._resolve_log_id(log_id=log_id)
+        resolved = await self._resolve_log_id(log_id=log_id)
         if resolved is None:
             return None
         topic_id, partition_no, offset = resolved

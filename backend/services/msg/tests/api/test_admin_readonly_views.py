@@ -56,6 +56,7 @@ from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgErrorCode, MsgStorageWatermarkExceededError
 from bms_msg.metrics.lag import MetricsSnapshotStore
 from bms_msg.models.topic import MsgTopic
+from bms_msg.repositories.overview import OverviewSnapshotRepository
 from tests_support.frame_app import NoopAuditSink, install_backpressure_state
 
 pytestmark = pytest.mark.kiwi_id(2462)
@@ -516,6 +517,26 @@ async def test_overview_values_and_cold_start(client: AsyncClient, api_app: Fast
     assert data["snapshot_available"] is True
     assert (data["messages_in_per_second"], data["consumer_lag"], data["dlq_total"]) == (2.0, 7, 3)
     assert data["disk_used_ratio"] == 0.42
+
+
+@pytest.mark.kiwi_id(2497)
+async def test_overview_prefers_persisted_snapshot(client: AsyncClient, db_session: AsyncSession) -> None:
+    """02-8-4：库里有未过期的每租户快照时优先读库（跨实例统一口径）。"""
+    await OverviewSnapshotRepository(cast("DbSession", db_session)).upsert(
+        tenant_id=7001,
+        messages_in_per_second=9.0,
+        consumer_lag=11,
+        dlq_total=4,
+        disk_used_ratio=0.66,
+        sampled_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/v1/msg/admin/overview", headers=DEMO_HEADERS)
+    data = _data(response)
+    assert data["snapshot_available"] is True
+    assert (data["messages_in_per_second"], data["consumer_lag"], data["dlq_total"]) == (9.0, 11, 4)
+    assert data["disk_used_ratio"] == 0.66
 
 
 async def test_delay_summary_matches_list_and_stale_hint(client: AsyncClient, api_app: FastAPI) -> None:

@@ -1,21 +1,24 @@
-"""主题元数据缓存（01-7 详细设计 §3）：不可变快照 + 进程内键值表 + 写时精确失效。
+"""主题元数据缓存（01-7 详细设计 §3；02-8-4 增 TTL）：不可变快照 + 进程内键值表 + 写时精确失效。
 
 三条结构性口径：
 
 1. **存值快照，不存 ORM 实例**：请求结束、会话关闭后读 ORM 属性会触发懒加载（`MissingGreenlet`），
    同一实例被并发请求的多个会话共享也会打架；快照是判定的唯一输入（详细设计 §3.1）。
 2. **键带租户**：平台库是「同库多租户」，键不含 `tenant_id` 就会跨租户取到别人的主题（越权）。
-3. **不加 TTL、不缓存负结果**：配置变更必须「下一次请求即生效」（任务 §3）；负结果缓存与 TTL
-   都会引入同等的滞后窗口，等于把「改了配置仍按旧值投递」制度化（详细设计 §3.2）。
+3. **TTL 5 秒 + 写时精确失效**（02-8-4）：本实例写操作仍立即失效（下一次请求即生效）；其他实例没有
+   失效广播，靠 TTL 在最长 5 秒内收敛——避免「已停用 / 已删除的主题在别的实例永久可写」。
+   负结果仍不缓存（刚建的主题不能有 5 秒空窗）。
 
-缓存是**进程级**的（`app.state.topic_cache`）：多 worker 各持一份，跨实例失效归 8B_05。
+缓存是**进程级**的（`app.state.topic_cache`）：多 worker 各持一份，跨实例收敛靠 TTL。
 """
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from bms_core.core.objects import BaseValueObject
 
+from bms_msg.core.config import TOPIC_CACHE_TTL_MS
 from bms_msg.models.topic import MsgTopic
 
 __all__ = ["TopicCache", "TopicKey", "TopicSnapshot"]
@@ -99,12 +102,19 @@ class TopicSnapshot(BaseValueObject):
 class TopicCache:
     """进程内主题快照缓存（无锁：`get` / `put` / `invalidate` 全程无 `await`，单事件循环内原子）。"""
 
-    def __init__(self) -> None:
-        """初始化（空表；条目随首次解析回填）。"""
+    def __init__(self, *, ttl_ms: int = TOPIC_CACHE_TTL_MS, clock: Callable[[], int] = _epoch_ms) -> None:
+        """初始化（空表；条目随首次解析回填）。
+
+        Args:
+            ttl_ms: 条目存活时长（毫秒）；到期视为未命中并删除。
+            clock: epoch 毫秒时钟（用例注入以确定性驱动过期）。
+        """
         self._entries: dict[TopicKey, TopicSnapshot] = {}
+        self._ttl_ms = ttl_ms
+        self._clock = clock
 
     def get(self, *, tenant_id: int, namespace: str, name: str) -> TopicSnapshot | None:
-        """按键取快照。
+        """按键取快照（过期条目视为未命中）。
 
         Args:
             tenant_id: 租户主键。
@@ -112,9 +122,16 @@ class TopicCache:
             name: 主题名。
 
         Returns:
-            TopicSnapshot | None: 命中返回快照；未命中返回 None（调用方负责查库并回填）。
+            TopicSnapshot | None: 命中返回快照；未命中 / 已过期返回 None（调用方负责查库并回填）。
         """
-        return self._entries.get((tenant_id, namespace, name))
+        key: TopicKey = (tenant_id, namespace, name)
+        snapshot = self._entries.get(key)
+        if snapshot is None:
+            return None
+        if self._clock() - snapshot.loaded_at_ms >= self._ttl_ms:
+            self._entries.pop(key, None)
+            return None
+        return snapshot
 
     def put(self, snapshot: TopicSnapshot) -> None:
         """回填快照（键取自快照自身：租户 / 命名空间 / 名称三元组唯一确定主题）。

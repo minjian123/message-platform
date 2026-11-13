@@ -11,6 +11,8 @@
 - **影响两列分工**（06-6-1）：`impact_groups` 是创建时的影响起点（写一次不改），`impact_snapshot` 是
   终态后保留的最后快照（首次查询已终结任务时写一次）；基线不被快照覆盖，两者都可追溯。
 - **不软删除**：终态用 `status` 表达，`deleted_at` 恒为 NULL（与 `msg_topic` 同口径）。
+- **执行器租约**（02-8-4）：`lease_owner` / `lease_expires_at` 由执行器 CAS 抢占与续约，多实例下同一任务
+  只被一个实例推进；租约过期可被接管，实例重启后未完成任务自动续跑。
 """
 
 from datetime import datetime
@@ -66,6 +68,7 @@ class MsgReplayTask(BaseModel):
     __table_args__ = (
         Index("idx_msg_replay_task_status", "status"),
         Index("idx_msg_replay_task_tenant", "tenant_id", "created_at"),
+        Index("idx_msg_replay_task_lease", "status", "lease_expires_at"),
     )
 
     tenant_id: Mapped[int] = mapped_column(SnowflakeId, comment="租户内部身份（雪花主键，不可变）")
@@ -97,6 +100,12 @@ class MsgReplayTask(BaseModel):
     log_id_last: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="末条成功写入的记录标识")
     error_msg: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="失败原因（截断 512）")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="终态时刻（UTC）")
+    lease_owner: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="持有执行器的实例标识（空 = 无人持有；02-8-4）"
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, comment="租约到期（UTC；空或过期即可被任何实例抢占；02-8-4）"
+    )
     impact_groups: Mapped[ConcurrentStableDict[str, object]] = mapped_column(
         StableJson,
         default=dict,

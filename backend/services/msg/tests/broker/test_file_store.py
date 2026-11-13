@@ -476,13 +476,17 @@ async def test_truncate_floors_to_segment_boundary(tmp_path: Path) -> None:
 
 
 async def test_close_tenant_closes_handles_and_forgets_log_ids(tmp_path: Path) -> None:
-    """租户删除前关闭该租户分区句柄并清 `log_id` 缓存；其它租户不受影响。"""
+    """租户删除前关闭该租户分区句柄并清 `log_id` 缓存；数据仍在磁盘上可定位。"""
     store = _store(tmp_path)
     await _append(store, index=0)
     assert await store.close_tenant(tenant_id=TENANT_ID) == 1
     assert store._partitions == {}
     assert store._log_ids == {}
-    assert await store.locate_by_log_id(log_id="l-0") is None
+    # 02-8-4：分区卸载后仍可通过磁盘索引定位（冷记录不再依赖进程内 LRU）
+    located = await store.locate_by_log_id(log_id="l-0")
+    assert located is not None
+    # 冷查会重新挂载该分区，再关一次即归零
+    assert await store.close_tenant(tenant_id=TENANT_ID) == 1
     assert await store.close_tenant(tenant_id=TENANT_ID) == 0
     assert await store.close_tenant(tenant_id=TENANT_ID + 1) == 0
 

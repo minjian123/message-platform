@@ -13,9 +13,9 @@
 
 from datetime import datetime
 
-from bms_core.core.concurrent import ConcurrentStableList, ConcurrentStableSet
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.repositories.base_db_repository import BaseDbRepository
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 
 from bms_msg.models.replay import TASK_PENDING, TASK_RUNNING, MsgReplayTask
 
@@ -30,14 +30,21 @@ class ReplayTaskRepository(BaseDbRepository[MsgReplayTask]):
     soft_delete_enabled = False
     sortable_fields = ConcurrentStableSet({"id", "created_at"})
 
-    async def list_active(self, *, limit: int) -> ConcurrentStableList[MsgReplayTask]:
+    async def list_active(
+        self, *, limit: int, owner: str | None = None, now: datetime | None = None
+    ) -> ConcurrentStableList[MsgReplayTask]:
         """取待推进任务（`pending` / `running`，按主键升序）。
 
         执行器**无租户上下文**调用，故本条查询不带租户条件（跨租户推进）；`pending` 也纳入，
         否则「已建未跑」的任务永远等不到第一个执行器拾取。
 
+        `owner` / `now` 给出时追加**租约条件**（02-8-4）：只返回「无租约 / 租约已过期 / 本实例持有」
+        的任务——其他实例正在推进的任务不被本实例拾取。
+
         Args:
             limit: 单轮上限（条）。
+            owner: 本实例标识（None 表示不过滤租约，兼容既有调用）。
+            now: 当前时刻（UTC；与 `owner` 同时给出才生效）。
 
         Returns:
             ConcurrentStableList[MsgReplayTask]: 待推进任务。
@@ -48,7 +55,84 @@ class ReplayTaskRepository(BaseDbRepository[MsgReplayTask]):
             .order_by(self._column("id"))
             .limit(limit)
         )
+        if owner is not None and now is not None:
+            statement = statement.where(
+                or_(
+                    self._column("lease_owner").is_(None),
+                    self._column("lease_owner") == owner,
+                    self._column("lease_expires_at").is_(None),
+                    self._column("lease_expires_at") < now,
+                )
+            )
         return ConcurrentStableList((await self._session.execute(statement)).scalars().all())
+
+    async def claim(self, *, task_id: int, owner: str, expires_at: datetime, now: datetime) -> bool:
+        """CAS 抢占 / 续租一个任务（无租约、已过期或本实例持有时成功）。
+
+        Args:
+            task_id: 任务主键。
+            owner: 本实例标识。
+            expires_at: 新租约到期（UTC）。
+            now: 当前时刻（UTC）。
+
+        Returns:
+            bool: 抢占成功 True；被其他实例持有且未过期返回 False。
+        """
+        statement = (
+            update(MsgReplayTask)
+            .where(
+                self._column("id") == int(task_id),
+                self._column("status").in_((TASK_PENDING, TASK_RUNNING)),
+                or_(
+                    self._column("lease_owner").is_(None),
+                    self._column("lease_expires_at").is_(None),
+                    self._column("lease_expires_at") < now,
+                    self._column("lease_owner") == owner,
+                ),
+            )
+            .values(lease_owner=owner, lease_expires_at=expires_at)
+        )
+        result = await self._session.execute(statement.execution_options(synchronize_session="fetch"))
+        await self._session.flush()
+        return int(getattr(result, "rowcount", 0) or 0) > 0
+
+    async def update_owned(
+        self,
+        *,
+        task_id: int,
+        owner: str,
+        expires_at: datetime,
+        values: ConcurrentStableDict[str, object],
+    ) -> MsgReplayTask | None:
+        """在租约保护下更新任务（进度 / 终态），同时续约。
+
+        仅当本实例仍是租约持有者时写入；否则返回 None（调用方让出，不覆盖他人进度）。
+        终态写入时把租约一并清空（`values` 里带 `status` 为终态时）。
+
+        Args:
+            task_id: 任务主键。
+            owner: 本实例标识。
+            expires_at: 续约到期（UTC）。
+            values: 待更新字段（ORM 属性名）。
+
+        Returns:
+            MsgReplayTask | None: 更新后的行；租约已易主返回 None。
+        """
+        payload: ConcurrentStableDict[str, object] = ConcurrentStableDict(values)
+        if values.get("status") in ("completed", "failed", "cancelled"):
+            payload["lease_owner"] = None
+            payload["lease_expires_at"] = None
+        statement = (
+            update(MsgReplayTask)
+            .where(self._column("id") == int(task_id), self._column("lease_owner") == owner)
+            .values(**payload)
+        )
+        result = await self._session.execute(statement.execution_options(synchronize_session="fetch"))
+        if int(getattr(result, "rowcount", 0) or 0) == 0:
+            await self._session.flush()
+            return None
+        await self._session.flush()
+        return await self.get(task_id)
 
     async def page_for_tenant(
         self,

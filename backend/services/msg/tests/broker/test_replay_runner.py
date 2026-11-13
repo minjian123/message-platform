@@ -597,7 +597,7 @@ async def test_runner_ignores_vanished_task(
     """
     runner = _runner(store=message_store, db_session=db_session, auditor=replay_auditor, now=clock)
 
-    async def _ghost_ids() -> ConcurrentStableList[int]:
+    async def _ghost_ids(**_kwargs: object) -> ConcurrentStableList[int]:
         """返回一个不存在的任务主键。
 
         Returns:
@@ -626,7 +626,7 @@ async def test_runner_ignores_task_cancelled_before_advance(
     await replay_service.cancel(tenant=current_tenant, task_id=int(task.id))
     runner = _runner(store=message_store, db_session=db_session, auditor=replay_auditor, now=clock)
 
-    async def _cancelled_ids() -> ConcurrentStableList[int]:
+    async def _cancelled_ids(**_kwargs: object) -> ConcurrentStableList[int]:
         """把已取消的任务主键塞回待推进清单（模拟取消发生在拣任务之后）。
 
         Returns:

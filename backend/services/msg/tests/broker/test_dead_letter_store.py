@@ -78,17 +78,17 @@ async def test_add_persists_and_lists(
 
 
 @pytest.mark.kiwi_id(2467)
-async def test_contains_uses_memory_index_and_survives_reload(
+async def test_contains_is_db_authoritative_and_survives_restart(
     queue: DatabaseDeadLetterQueue,
     replay_uow: Callable[[], AbstractAsyncContextManager[UnitOfWork]],
 ) -> None:
-    """`contains` 走内存索引；新队列启动加载后仍命中（重启不丢）。"""
+    """`contains` 以 DB 为准；新队列实例（模拟重启 / 其它实例）无需预热即可命中。"""
     await queue.add(_letter(offset=10))
     assert await queue.contains(topic_id=9001, partition_no=0, offset=10) is True
     assert await queue.contains(topic_id=9001, partition_no=0, offset=11) is False
 
     restarted = DatabaseDeadLetterQueue(uow_factory=replay_uow)
-    assert await restarted.contains(topic_id=9001, partition_no=0, offset=10) is False
+    assert await restarted.contains(topic_id=9001, partition_no=0, offset=10) is True
     await restarted.load()
     assert await restarted.contains(topic_id=9001, partition_no=0, offset=10) is True
 

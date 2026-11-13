@@ -102,6 +102,20 @@ MSG_TABLE_RECORDS: tuple[TableRecord, ...] = (
         datasource=Datasource.PLATFORM,
         note="组成员（成员标识 / 实例标识 / 加入与心跳时刻 / 持有分区）",
     ),
+    TableRecord(
+        table_name="msg_overview_snapshot",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="概览快照（每租户一行：入口速率 / 积压 / 死信 / 磁盘）",
+    ),
+    TableRecord(
+        table_name="msg_ingress_counter",
+        owner="msg",
+        domain=MSG_DOMAIN,
+        datasource=Datasource.PLATFORM,
+        note="入口计数（租户 × 时间窗累加，跨实例求和）",
+    ),
 )
 """msg 元数据表归属记录（业务域 `msg`，平台库，迁移清单 `msg:platform`）。"""
 

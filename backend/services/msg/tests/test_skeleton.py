@@ -100,6 +100,8 @@ def test_factory_surface_lists_are_declared() -> None:
         "msg_dead_letter",
         "msg_consumer_group",
         "msg_group_member",
+        "msg_overview_snapshot",
+        "msg_ingress_counter",
     ]
     assert len(factory.service_routers()) == 2, "`/api/v1` 聚合 + 根路径 `/msg/*` 帧入口聚合"
 
@@ -123,6 +125,8 @@ def test_table_registry_register_is_idempotent() -> None:
         "msg_dead_letter",
         "msg_consumer_group",
         "msg_group_member",
+        "msg_overview_snapshot",
+        "msg_ingress_counter",
     )
 
 

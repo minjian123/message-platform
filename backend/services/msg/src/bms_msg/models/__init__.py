@@ -32,6 +32,12 @@ from bms_msg.models.dead_letter import (
     DLQ_STATUSES,
     MsgDeadLetter,
 )
+from bms_msg.models.overview import (
+    INGRESS_COUNTER_TABLE,
+    OVERVIEW_SNAPSHOT_TABLE,
+    MsgIngressCounter,
+    MsgOverviewSnapshot,
+)
 from bms_msg.models.partition import MsgPartition
 from bms_msg.models.partition_migration import (
     ACTION_EXPAND,
@@ -160,10 +166,12 @@ __all__ = [
     "GROUP_STATE_EMPTY",
     "GROUP_STATE_PREPARING_REBALANCE",
     "GROUP_STATE_STABLE",
+    "INGRESS_COUNTER_TABLE",
     "LIFECYCLE_ACTIONS",
     "MIGRATION_ACTIONS",
     "MIGRATION_RESULTS",
     "MODEL_MODULES",
+    "OVERVIEW_SNAPSHOT_TABLE",
     "PLAN_STATUSES",
     "PLAN_STATUS_CANCELLED",
     "PLAN_STATUS_CATCHING_UP",
@@ -196,6 +204,8 @@ __all__ = [
     "MsgConsumerGroup",
     "MsgDeadLetter",
     "MsgGroupMember",
+    "MsgIngressCounter",
+    "MsgOverviewSnapshot",
     "MsgPartition",
     "MsgPartitionMigration",
     "MsgQuota",
@@ -218,5 +228,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "bms_msg.models.topic_cleanup",
     "bms_msg.models.dead_letter",
     "bms_msg.models.consumer_group",
+    "bms_msg.models.overview",
 )
 """本服务私有模型模块清单（导入即把表登记进 `Base.metadata`）。"""

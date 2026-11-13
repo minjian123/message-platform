@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import UTC, datetime
 
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.logging import get_logger
@@ -24,11 +25,15 @@ from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
 from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.watermark import StorageWatermark
-from bms_msg.core.config import METRICS_SAMPLE_INTERVAL_SECONDS
+from bms_msg.core.config import (
+    INGRESS_COUNTER_RETAIN_SECONDS,
+    METRICS_SAMPLE_INTERVAL_SECONDS,
+)
 from bms_msg.metrics.lag import MetricsSnapshotStore, topic_key
-from bms_msg.metrics.traffic import get_traffic_metrics
+from bms_msg.metrics.traffic import decode_labels, get_traffic_metrics
 from bms_msg.models.dead_letter import DLQ_ACTIVE_STATUSES
 from bms_msg.models.replay import MsgReplayTask
+from bms_msg.repositories.overview import IngressCounterRepository, OverviewSnapshotRepository
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.services.migration_ledger import MigrationLedger
 
@@ -80,8 +85,11 @@ class MetricsSampler(BaseFrameworkObject):
         self._interval = interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._tenant_codes: ConcurrentStableDict[str, str] = ConcurrentStableDict()
+        self._tenant_ids: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         self._last_messages_in: int | None = None
         self._last_sample_at: float | None = None
+        self._last_messages_by_tenant: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+        self._ingress_deltas: ConcurrentStableDict[str, int] = ConcurrentStableDict()
 
     @property
     def running(self) -> bool:
@@ -145,6 +153,10 @@ class MetricsSampler(BaseFrameworkObject):
             await self._sample_migration()
         except Exception as exc:
             _LOGGER.warning("msg_metrics_sample_failed", dimension="migration", error=type(exc).__name__)
+        try:
+            await self._write_observability()
+        except Exception as exc:
+            _LOGGER.warning("msg_metrics_sample_failed", dimension="overview", error=type(exc).__name__)
 
     async def _sample_migration(self) -> None:
         """按状态汇总迁移台账并写快照（02-8；未装配台账时跳过）。"""
@@ -155,25 +167,140 @@ class MetricsSampler(BaseFrameworkObject):
         self._snapshots.replace(migration=status, migration_remaining=remaining)
 
     def _sample_ingress(self) -> None:
-        """差分累计入口消息数，写入本周期速率快照（06-1-1 概览「入口吞吐」）。
+        """差分累计入口消息数，写入本周期速率快照与**每租户增量**（06-1-1 / 02-8-4）。
 
         只读 `TrafficMetrics` 进程级单例的累计 Counter，不新增采集点、不请求内扫描；
         首轮没有上一轮读数时写 0 / 0.0，端点据此判 `snapshot_available=false`。
+        每租户增量留给 `_write_observability` 写入 DB 时间窗（多实例求和即集群总量）。
         """
         counters = get_traffic_metrics().counter_snapshot().get("msg_messages_in_total")
         total = 0
+        per_tenant: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         if counters is not None:
-            for _key, value in counters.items():
+            for key, value in counters.items():
                 total += value
+                code = decode_labels(key).get("tenant")
+                if code is not None:
+                    per_tenant.set(code, per_tenant.get(code, 0) + value)
         now = time.monotonic()
+        deltas: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         if self._last_messages_in is None or self._last_sample_at is None:
             self._snapshots.replace(messages_in_window=0, window_seconds=0.0)
         else:
             elapsed = max(now - self._last_sample_at, 1e-6)
             delta = max(total - self._last_messages_in, 0)
             self._snapshots.replace(messages_in_window=delta, window_seconds=elapsed)
+            for code, value in per_tenant.items():
+                deltas.set(code, max(value - self._last_messages_by_tenant.get(code, 0), 0))
+        self._ingress_deltas = deltas
+        self._last_messages_by_tenant = per_tenant
         self._last_messages_in = total
         self._last_sample_at = now
+
+    async def _write_observability(self) -> None:
+        """把本轮采样写成跨实例可读的 DB 观测数据（02-8-4）。
+
+        - 每租户一行概览快照（速率 / 积压 / 死信 / 磁盘）；
+        - 每租户本拍入口增量累加进当前时间窗；
+        - 清理过旧的时间窗。
+
+        失败由 `sample_once` 统一告警：**保留上一份快照**，不把采样失败表现成 0。
+        """
+        snapshot = self._snapshots.snapshot
+        lag_by_tenant: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+        dlq_by_tenant: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+        for key, value in snapshot.lag.items():
+            code, _, _topic = key.partition("\x1f")
+            lag_by_tenant.set(code, lag_by_tenant.get(code, 0) + value)
+        for key, value in snapshot.dlq.items():
+            code, _, _topic = key.partition("\x1f")
+            dlq_by_tenant.set(code, dlq_by_tenant.get(code, 0) + value)
+        disk_ratio = float(self._watermark.reading().used_ratio or 0.0)
+        codes: ConcurrentStableDict[str, bool] = ConcurrentStableDict()
+        for code in lag_by_tenant:
+            codes.set(code, True)
+        for code in dlq_by_tenant:
+            codes.set(code, True)
+        for code in self._ingress_deltas:
+            codes.set(code, True)
+        if not codes:
+            return
+        now = time.time()
+        interval = max(int(self._interval), 1)
+        window_start = int(now) // interval * interval
+        async with self._uow_factory() as uow:
+            # 前面的读维度可能留下隐式事务；先释放再显式开短事务（写快照 + 计数）。
+            await uow.rollback()
+            async with uow.begin():
+                session = uow.session
+                if session is None:  # pragma: no cover - DbUnitOfWork 恒有会话
+                    return
+                counters = IngressCounterRepository(session)
+                overview = OverviewSnapshotRepository(session)
+                for code in codes:
+                    tenant_id = await self._tenant_id(code)
+                    if tenant_id is None:
+                        continue
+                    await counters.add(
+                        tenant_id=tenant_id,
+                        window_start=window_start,
+                        delta=self._ingress_deltas.get(code, 0),
+                    )
+                    rate = await self._ingress_rate(counters, tenant_id=tenant_id, now=now, window=window_start)
+                    await overview.upsert(
+                        tenant_id=tenant_id,
+                        messages_in_per_second=rate,
+                        consumer_lag=lag_by_tenant.get(code, 0),
+                        dlq_total=dlq_by_tenant.get(code, 0),
+                        disk_used_ratio=disk_ratio,
+                        sampled_at=datetime.now(UTC).replace(tzinfo=None),
+                    )
+                await counters.purge_before(cutoff=int(now) - INGRESS_COUNTER_RETAIN_SECONDS)
+        self._ingress_deltas = ConcurrentStableDict()
+
+    async def _ingress_rate(
+        self, counters: IngressCounterRepository, *, tenant_id: int, now: float, window: int
+    ) -> float:
+        """按最近 4 个时间窗换算每秒入口速率。
+
+        Args:
+            counters: 入口计数仓储。
+            tenant_id: 租户主键。
+            now: 当前 epoch 秒。
+            window: 当前窗口起点。
+
+        Returns:
+            float: 每秒条数（无数据为 0）。
+        """
+        interval = max(int(self._interval), 1)
+        since = max(int(now) - 3 * interval, window - 3 * interval)
+        total, earliest, latest = await counters.sum_since(tenant_id=tenant_id, since=since)
+        if total <= 0 or latest <= 0:
+            return 0.0
+        span = max(latest - earliest + interval, interval)
+        return total / span
+
+    async def _tenant_id(self, code: str) -> int | None:
+        """把租户编码翻成主键（缓存；查不到返回 None）。
+
+        Args:
+            code: 租户编码。
+
+        Returns:
+            int | None: 租户主键。
+        """
+        cached = self._tenant_ids.get(code)
+        if cached is not None:
+            return cached
+        try:
+            context = await self._tenant_lookup.by_code(code)
+        except Exception:
+            return None
+        if context.tenant_id is None:  # pragma: no cover - 启用租户恒有主键
+            return None
+        tenant_id = int(context.tenant_id)
+        self._tenant_ids.set(code, tenant_id)
+        return tenant_id
 
     async def _loop(self) -> None:
         """循环：采样后等待周期（首轮立即执行）。"""

@@ -23,7 +23,7 @@ import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
 from bms_core.audit.base import RecordRef
@@ -43,6 +43,7 @@ from bms_msg.core.config import (
     MS_PER_SECOND,
     REPLAY_BURST_SECONDS,
     REPLAY_ERROR_MSG_MAX_LENGTH,
+    REPLAY_LEASE_SECONDS,
     REPLAY_SCAN_BATCH,
     REPLAY_TASK_BATCH,
     REPLAY_TICK_MS,
@@ -646,6 +647,8 @@ class ReplayRunner:
         now: Callable[[], datetime] = _utcnow,
         interval_ms: int = REPLAY_TICK_MS,
         batch_limit: int = REPLAY_TASK_BATCH,
+        owner: str = "local",
+        lease_seconds: int = REPLAY_LEASE_SECONDS,
     ) -> None:
         """初始化（不启动任务：由 `ensure_started()` 决定）。
 
@@ -656,6 +659,8 @@ class ReplayRunner:
             now: 时钟（缺省 UTC 当前时间；用例注入可推进时钟）。
             interval_ms: 推进周期（毫秒）。
             batch_limit: 单轮最多推进的任务数。
+            owner: 本实例标识（租约持有者；多实例下同一任务只被一个实例推进）。
+            lease_seconds: 租约时长（秒；每拍续约，过期可被接管）。
         """
         self._messages = messages
         self._uow_factory = uow_factory
@@ -663,6 +668,8 @@ class ReplayRunner:
         self._now = now
         self._interval_ms = interval_ms
         self._batch_limit = batch_limit
+        self._owner = owner
+        self._lease_seconds = lease_seconds
         self._tokens: dict[int, float] = {}
         self._last: dict[int, datetime] = {}
         self._task: asyncio.Task[None] | None = None
@@ -701,7 +708,9 @@ class ReplayRunner:
         now = self._now()
         finished: ConcurrentStableList[MsgReplayTask] = ConcurrentStableList()
         written = 0
-        for task_id in await self._active_ids():
+        for task_id in await self._active_ids(now=now):
+            if not await self._claim(task_id=task_id, now=now):
+                continue
             count, task = await self._advance(task_id=task_id, now=now)
             written += count
             if task is not None:
@@ -710,15 +719,38 @@ class ReplayRunner:
             await self._auditor.record_finished(task=task)
         return written
 
-    async def _active_ids(self) -> ConcurrentStableList[int]:
-        """取待推进任务主键（`pending` / `running`）。
+    async def _active_ids(self, *, now: datetime) -> ConcurrentStableList[int]:
+        """取待推进任务主键（`pending` / `running`，且租约空闲 / 过期 / 本实例持有）。
+
+        Args:
+            now: 当前时刻（UTC；租约过期判据）。
 
         Returns:
             ConcurrentStableList[int]: 任务主键（升序）。
         """
         async with self._uow_factory() as uow, uow.begin():
             repository = ReplayTaskRepository(cast("DbSession", uow.session))
-            return ConcurrentStableList(int(task.id) for task in await repository.list_active(limit=self._batch_limit))
+            return ConcurrentStableList(
+                int(task.id)
+                for task in await repository.list_active(limit=self._batch_limit, owner=self._owner, now=now)
+            )
+
+    async def _claim(self, *, task_id: int, now: datetime) -> bool:
+        """CAS 抢占 / 续租一个任务（02-8-4：多实例下同一任务只被一个实例推进）。
+
+        Args:
+            task_id: 任务主键。
+            now: 当前时刻（UTC）。
+
+        Returns:
+            bool: 抢占成功 True；被其他实例持有且未过期返回 False。
+        """
+        expires_at = _utc_naive(now) + timedelta(seconds=self._lease_seconds)
+        async with self._uow_factory() as uow, uow.begin():
+            repository = ReplayTaskRepository(cast("DbSession", uow.session))
+            return await repository.claim(
+                task_id=task_id, owner=self._owner, expires_at=expires_at, now=_utc_naive(now)
+            )
 
     async def _advance(self, *, task_id: int, now: datetime) -> tuple[int, MsgReplayTask | None]:
         """推进一步（重新读状态 → 按令牌额度写入 → 落库）。
@@ -746,8 +778,17 @@ class ReplayRunner:
                     if state.error is not None or state.budget <= 0:
                         break
             values = self._progress_values(task=task, cursors=cursors, state=state, now=now)
-            updated = await repository.update(task_id, **dict(values.items()))
-            finished = updated if updated is not None and updated.status in (TASK_COMPLETED, TASK_FAILED) else None
+            updated = await repository.update_owned(
+                task_id=task_id,
+                owner=self._owner,
+                expires_at=_utc_naive(now) + timedelta(seconds=self._lease_seconds),
+                values=values,
+            )
+            if updated is None:
+                # 租约已被其他实例接管：本轮写入不生效，丢弃令牌状态，下一拍重新判断。
+                self._forget(task_id)
+                return 0, None
+            finished = updated if updated.status in (TASK_COMPLETED, TASK_FAILED) else None
             if finished is not None:
                 self._forget(task_id)
             return state.written, finished

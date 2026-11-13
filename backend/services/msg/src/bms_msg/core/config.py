@@ -321,6 +321,24 @@ GROUP_SWEEP_INTERVAL_SECONDS = 3600.0
 STREAM_ACL_RECHECK_MS = 30_000
 """长驻订阅流 ACL 复核间隔（毫秒；01-4-1）：授权收回后最长该时长内结束流。"""
 
+REPLAY_LEASE_SECONDS = 30
+"""重放任务租约时长（秒；02-8-4）：持有者每拍续约，过期可被其他实例接管。"""
+
+DEAD_LETTER_CACHE_SECONDS = 5.0
+"""死信判定本地缓存 TTL（秒；02-8-4）：DB 权威，缓存只缩短重复查询，跨实例最长该时长收敛。"""
+
+DEAD_LETTER_CACHE_LIMIT = 20_000
+"""死信判定本地缓存条数上限（02-8-4）：超限先剔过期项，再按插入序淘汰。"""
+
+TOPIC_CACHE_TTL_MS = 5_000
+"""主题快照缓存 TTL（毫秒；02-8-4）：本实例写操作仍立即失效，其他实例最长该时长收敛。"""
+
+OVERVIEW_SNAPSHOT_STALE_SECONDS = 45.0
+"""概览快照过期阈值（秒；02-8-4）：超过 3 个采样周期视为过期，接口回退进程内快照。"""
+
+INGRESS_COUNTER_RETAIN_SECONDS = 3_600
+"""入口计数保留时长（秒；02-8-4）：更早的时间窗由采样器清理。"""
+
 WINDOW_STALL_THRESHOLD_MS = 50
 """窗口暂停判定阈值（毫秒）：流两次推进间隔超过该值即记一次 `msg_window_stall_total`。
 

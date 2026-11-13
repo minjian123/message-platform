@@ -514,6 +514,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             messages=app.state.message_store,
             uow_factory=app.state.uow_factory,
             auditor=ReplayAuditor(sink=sink),
+            owner=replica_config.node_id,
         )
         # 06-2：删主题清理编排（受理时 kick + 周期扫描兜底；停机随 `BackgroundLoops` 回收）。
         app.state.topic_cleanup_service = TopicCleanupService(

@@ -14,6 +14,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from time import monotonic
 from typing import cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
@@ -22,6 +23,7 @@ from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.db.session import DbSession
 from bms_core.db.unit_of_work import UnitOfWork
 
+from bms_msg.core.config import DEAD_LETTER_CACHE_LIMIT, DEAD_LETTER_CACHE_SECONDS
 from bms_msg.models.dead_letter import DEFAULT_DLQ_STATUS, MsgDeadLetter
 from bms_msg.repositories.dead_letter import DeadLetterRepository
 
@@ -217,34 +219,51 @@ UowFactory = Callable[[], AbstractAsyncContextManager[UnitOfWork]]
 class DatabaseDeadLetterQueue(DeadLetterQueue):
     """持久化死信队列（`msg_dead_letter`）：端口签名不变，重启不丢。
 
-    口径（详细设计 06-5-1 §5）：
+    口径（06-5-1 §5；02-8-4 修订）：
 
-    - `add` / `purge_topics` 自持平台库短事务，写库成功后才更新内存索引；
-    - `contains` 只查内存索引（启动加载 + 写时同步），投递路径不打库；
-    - `list_all` 查库全量并把三元组回填索引，供指标 / 管理面使用；
-    - 同一三元组重复转入由唯一约束 + 内存索引双重幂等。
+    - **DB 权威**：`contains` 以 `msg_dead_letter` 的唯一三元组为准——其他实例转入的死信本节点也能看到；
+    - **本地 5 秒缓存**：正负结果都缓存（投递主链路每条消息都会问一次），有界、按插入序淘汰；
+    - `add` / `purge_topics` 自持平台库短事务，写库成功后才更新缓存；
+    - `list_all` 查库全量，供指标 / 管理面使用；
+    - 同一三元组重复转入由唯一约束 + 存在性判定双重幂等。
     """
 
-    def __init__(self, *, uow_factory: UowFactory) -> None:
-        """初始化（空索引；启动后由 `load()` 恢复）。
+    def __init__(
+        self,
+        *,
+        uow_factory: UowFactory,
+        cache_seconds: float = DEAD_LETTER_CACHE_SECONDS,
+        cache_limit: int = DEAD_LETTER_CACHE_LIMIT,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        """初始化（空缓存；`load()` 可显式预热）。
 
         Args:
             uow_factory: 平台库工作单元工厂。
+            cache_seconds: 本地缓存 TTL（秒）。
+            cache_limit: 缓存条数上限。
+            clock: 单调时钟（用例注入）。
         """
         self._uow_factory = uow_factory
-        self._keys: ConcurrentStableSet[DeadLetterKey] = ConcurrentStableSet()
+        self._cache_seconds = cache_seconds
+        self._cache_limit = cache_limit
+        self._clock = clock
+        self._cache: ConcurrentStableDict[DeadLetterKey, tuple[bool, float]] = ConcurrentStableDict()
 
     async def load(self) -> None:
-        """从表恢复全部定位三元组（含 `archived`）。
+        """预热缓存（可选；正确性不依赖它——`contains` 会回源查库）。
 
         Raises:
-            Exception: 表不可读 / 库不可达时上抛（死信判定属投递正确性，空索引会重复投递）。
+            Exception: 表不可读 / 库不可达时上抛（启动期发现问题优于运行期）。
         """
-        async with self._uow_factory() as uow:
+        async with self._uow_factory() as uow, uow.begin():
             repository = DeadLetterRepository(cast("DbSession", uow.session))
             keys = await repository.list_keys()
-        self._keys = ConcurrentStableSet(keys)
-        _LOGGER.info("msg_dead_letter_index_loaded", count=len(self._keys))
+        expires_at = self._clock() + self._cache_seconds
+        for key in keys:
+            self._cache[key] = (True, expires_at)
+        self._trim()
+        _LOGGER.info("msg_dead_letter_cache_warmed", count=len(self._cache))
 
     async def add(self, letter: DeadLetter) -> None:
         """转入一条死信（同三元组幂等）。
@@ -256,8 +275,6 @@ class DatabaseDeadLetterQueue(DeadLetterQueue):
             ValueError: 缺少租户主键（持久化必填）。
         """
         key: DeadLetterKey = (letter.topic_id, letter.partition_no, letter.offset)
-        if key in self._keys:
-            return
         if letter.tenant_id is None:
             raise ValueError("死信持久化缺少 tenant_id")
         row = MsgDeadLetter(
@@ -285,7 +302,7 @@ class DatabaseDeadLetterQueue(DeadLetterQueue):
             if exists:
                 return
             session.add(row)
-        self._keys.add(key)
+        self._remember(key=key, exists=True)
 
     async def list_all(self) -> ConcurrentStableList[DeadLetter]:
         """列出全部死信（按 `failed_at`、`id` 升序）。
@@ -293,15 +310,17 @@ class DatabaseDeadLetterQueue(DeadLetterQueue):
         Returns:
             ConcurrentStableList[DeadLetter]: 死信列表（含状态与处置字段）。
         """
-        async with self._uow_factory() as uow:
+        async with self._uow_factory() as uow, uow.begin():
             repository = DeadLetterRepository(cast("DbSession", uow.session))
             rows = await repository.list_all()
+        expires_at = self._clock() + self._cache_seconds
         for row in rows:
-            self._keys.add((int(row.topic_id), int(row.partition_no), int(row.msg_offset)))
+            self._cache[(int(row.topic_id), int(row.partition_no), int(row.msg_offset))] = (True, expires_at)
+        self._trim()
         return ConcurrentStableList(_to_letter(row) for row in rows)
 
     async def contains(self, *, topic_id: int, partition_no: int, offset: int) -> bool:
-        """判定某条消息是否已死信（内存索引）。
+        """判定某条消息是否已死信（DB 权威 + 本地短缓存）。
 
         Args:
             topic_id: 主题主键。
@@ -311,7 +330,18 @@ class DatabaseDeadLetterQueue(DeadLetterQueue):
         Returns:
             bool: 已死信返回 True。
         """
-        return (topic_id, partition_no, offset) in self._keys
+        key: DeadLetterKey = (int(topic_id), int(partition_no), int(offset))
+        now = self._clock()
+        cached = self._cache.get(key)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+        async with self._uow_factory() as uow, uow.begin():
+            repository = DeadLetterRepository(cast("DbSession", uow.session))
+            exists = await repository.exists_key(
+                topic_id=int(topic_id), partition_no=int(partition_no), offset=int(offset)
+            )
+        self._remember(key=key, exists=exists)
+        return exists
 
     async def purge_topics(self, *, topic_ids: Iterable[int]) -> int:
         """按主题物理删除死信（幂等）。
@@ -329,8 +359,44 @@ class DatabaseDeadLetterQueue(DeadLetterQueue):
             repository = DeadLetterRepository(cast("DbSession", uow.session))
             removed = await repository.purge_topics(topic_ids=targets)
         if removed:
-            self._keys = ConcurrentStableSet(key for key in self._keys if key[0] not in targets)
+            for key in list(self._cache.keys()):
+                if key[0] in targets:
+                    self._cache.pop(key, None)
         return removed
+
+    @property
+    def cache_size(self) -> int:
+        """本地缓存当前条目数（排障与用例断言用）。
+
+        Returns:
+            int: 条目数。
+        """
+        return len(self._cache)
+
+    def _remember(self, *, key: DeadLetterKey, exists: bool) -> None:
+        """写入一条缓存并做有界裁剪。
+
+        Args:
+            key: 死信定位三元组。
+            exists: 是否已死信。
+        """
+        self._cache[key] = (exists, self._clock() + self._cache_seconds)
+        if len(self._cache) > self._cache_limit:
+            self._trim()
+
+    def _trim(self) -> None:
+        """把缓存裁到上限内（先剔过期项，再按插入序淘汰最老）。"""
+        if len(self._cache) <= self._cache_limit:
+            return
+        now = self._clock()
+        for key in list(self._cache.keys()):
+            entry = self._cache.get(key)
+            if entry is None or entry[1] <= now:
+                self._cache.pop(key, None)
+        for key in list(self._cache.keys()):
+            if len(self._cache) <= self._cache_limit:
+                break
+            self._cache.pop(key, None)
 
 
 def _to_letter(row: MsgDeadLetter) -> DeadLetter:

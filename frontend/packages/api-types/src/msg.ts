@@ -472,6 +472,7 @@ export interface paths {
          * Get Overview
          * @description 四张数字卡（入口吞吐 / 当前积压 / 死信数 / 磁盘使用率）。
          *
+         *     优先读每租户落库快照（02-8-4，跨实例一致）；无行或超过 3 个采样周期则回退进程内快照。
          *     快照尚未产出时四值返回 0 且 `snapshot_available=false`，不回源扫描。
          */
         get: operations["get_overview_api_v1_msg_admin_overview_get"];
