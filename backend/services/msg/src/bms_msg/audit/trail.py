@@ -28,6 +28,7 @@ from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.context import get_current_client_ip, get_current_trace_id, get_current_user_id
 from bms_core.core.exceptions import InternalError
 from bms_core.core.logging import get_logger
+from bms_core.db.sync import DbSession
 from bms_core.events.base import EventEnvelope
 
 __all__ = [
@@ -54,6 +55,8 @@ __all__ = [
     "REPLAY_REF_TYPE",
     "TOPIC_CREATE_ACTION",
     "TOPIC_DELETE_ACTION",
+    "TOPIC_DISABLE_ACTION",
+    "TOPIC_ENABLE_ACTION",
     "TOPIC_EXPAND_ACTION",
     "TOPIC_UPDATE_ACTION",
     "AuditEmitter",
@@ -83,6 +86,21 @@ TOPIC_DELETE_ACTION = "msg:topic.delete"
 **只在请求侧写一条**：执行结果随时间变化且可能重试多轮，写进审计会产出同动作多条记录，
 破坏「动作 ↔ 留痕」单一映射；执行结果由清理台账（`msg_topic_cleanup`）与结构化日志承担。
 """
+
+TOPIC_DISABLE_ACTION = "msg:topic.disable"
+"""停用主题（配置变更，强审计；05-4-1）。"""
+
+TOPIC_ENABLE_ACTION = "msg:topic.enable"
+"""启用主题（配置变更，强审计；05-4-1）。"""
+
+MESSAGE_SEARCH_ACTION = "msg:message.search"
+"""消息检索（敏感查询，普通审计；05-4-1）。"""
+
+DLQ_DETAIL_ACTION = "msg:dlq.detail"
+"""死信详情（敏感查询，普通审计；05-4-1）。"""
+
+REPLAY_DETAIL_ACTION = "msg:replay.detail"
+"""重放任务详情（敏感查询，普通审计；05-4-1）。"""
 
 QUOTA_UPDATE_ACTION = "msg:quota.update"
 """配额调整（配置变更，强审计）。"""
@@ -147,6 +165,8 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         TOPIC_UPDATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="改保留期"),
         TOPIC_EXPAND_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="扩分区"),
         TOPIC_DELETE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="删主题"),
+        TOPIC_DISABLE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="停用主题"),
+        TOPIC_ENABLE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="启用主题"),
         QUOTA_UPDATE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="配额调整"),
         ACL_GRANT_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 授予"),
         ACL_REVOKE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="ACL 收回"),
@@ -164,6 +184,9 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         LEADER_SWITCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区切主"),
         REBALANCE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区重平衡"),
         ACCESS_DENIED_ACTION: AuditClass(ACCESS_AUDIT_CLASS, strong=False, label="访问异常"),
+        MESSAGE_SEARCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="消息检索"),
+        DLQ_DETAIL_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="死信详情"),
+        REPLAY_DETAIL_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="重放详情"),
     }
 )
 """动作 → 留痕类别（唯一映射；`audit_classes()` 与 helper 同源）。"""
@@ -175,7 +198,11 @@ _ACCESS_REASONS: ConcurrentStableDict[int, str] = ConcurrentStableDict(
 
 
 class AuditEmitter(Protocol):
-    """审计出口最小协议（生产为基座 `AuditEventEmitter`，用例注入替身）。"""
+    """审计出口最小协议（生产为基座 `AuditEventEmitter`，用例注入替身）。
+
+    **同事务写入是可选的**：实现若有 `emit_in_session`，helper 会优先用它（业务与审计同事务）；
+    没有则回落 `emit`（自开短事务），因此替身不必实现该方法。
+    """
 
     async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
         """写一条审计事件。
@@ -276,13 +303,63 @@ def _build_event(
     )
 
 
-async def _emit_required(sink: AuditEmitter, event: EventEnvelope, *, action: str) -> bool:
+async def _emit_event(
+    sink: AuditEmitter,
+    event: EventEnvelope,
+    *,
+    action: str,
+    required: bool,
+    session: DbSession | None,
+) -> bool:
+    """写一条审计：有 `session` 且出口支持时走同一事务，否则回落短事务。
+
+    Args:
+        sink: 审计出口。
+        event: 审计事件。
+        action: 动作（日志与错误信息用）。
+        required: 是否强审计。
+        session: 业务会话（None = 自开短事务）。
+
+    Returns:
+        bool: 写入成功 True。
+
+    Raises:
+        InternalError: 强审计写入失败或被拒绝（10000 / 500）。
+    """
+    try:
+        in_session = getattr(sink, "emit_in_session", None)
+        if session is not None and in_session is not None:
+            accepted = await in_session(session, event, required=required)
+        else:
+            accepted = await sink.emit(event, required=required)
+    except Exception as exc:
+        if required:
+            _LOGGER.warning("msg_audit_required_failed", action=action, error=repr(exc))
+            raise InternalError(f"审计写入失败：{action}") from exc
+        _LOGGER.warning("msg_audit_normal_failed", action=action, error=repr(exc))
+        return False
+    if not accepted:
+        if required:
+            _LOGGER.warning("msg_audit_required_rejected", action=action)
+            raise InternalError(f"审计写入被拒绝：{action}")
+        _LOGGER.warning("msg_audit_normal_rejected", action=action)
+    return accepted
+
+
+async def _emit_required(
+    sink: AuditEmitter,
+    event: EventEnvelope,
+    *,
+    action: str,
+    session: DbSession | None = None,
+) -> bool:
     """写强审计：失败一律抛 `InternalError`（没留痕就不该生效）。
 
     Args:
         sink: 审计出口。
         event: 审计事件。
         action: 动作（错误信息与日志用）。
+        session: 业务会话（给出则与业务同事务）。
 
     Returns:
         bool: 恒 True。
@@ -290,36 +367,28 @@ async def _emit_required(sink: AuditEmitter, event: EventEnvelope, *, action: st
     Raises:
         InternalError: 写入失败或被出口拒绝（10000 / 500）。
     """
-    try:
-        accepted = await sink.emit(event, required=True)
-    except Exception as exc:
-        _LOGGER.warning("msg_audit_required_failed", action=action, error=repr(exc))
-        raise InternalError(f"审计写入失败：{action}") from exc
-    if not accepted:
-        _LOGGER.warning("msg_audit_required_rejected", action=action)
-        raise InternalError(f"审计写入被拒绝：{action}")
-    return True
+    return await _emit_event(sink, event, action=action, required=True, session=session)
 
 
-async def _emit_normal(sink: AuditEmitter, event: EventEnvelope, *, action: str) -> bool:
+async def _emit_normal(
+    sink: AuditEmitter,
+    event: EventEnvelope,
+    *,
+    action: str,
+    session: DbSession | None = None,
+) -> bool:
     """写普通审计：失败只记日志，不影响业务。
 
     Args:
         sink: 审计出口。
         event: 审计事件。
         action: 动作（日志用）。
+        session: 业务会话（给出则与业务同事务）。
 
     Returns:
         bool: 写入成功 True；失败 False。
     """
-    try:
-        accepted = await sink.emit(event, required=False)
-    except Exception as exc:
-        _LOGGER.warning("msg_audit_normal_failed", action=action, error=repr(exc))
-        return False
-    if not accepted:
-        _LOGGER.warning("msg_audit_normal_rejected", action=action)
-    return accepted
+    return await _emit_event(sink, event, action=action, required=False, session=session)
 
 
 async def emit_sensitive(
@@ -335,6 +404,7 @@ async def emit_sensitive(
     user_id: int | None = None,
     ip: str | None = None,
     trace_id: str | None = None,
+    session: DbSession | None = None,
 ) -> bool:
     """写一条配置 / 权限变更审计（类别决定是否强审计）。
 
@@ -350,6 +420,7 @@ async def emit_sensitive(
         user_id: 操作人主键。
         ip: 来源 IP。
         trace_id: 链路标识。
+        session: 业务会话（给出则审计与业务同事务）。
 
     Returns:
         bool: 写入成功 True。
@@ -371,8 +442,8 @@ async def emit_sensitive(
         resource_key=resource_key,
     )
     if audit_class_for(action, ACTION_CLASSES).strong:
-        return await _emit_required(sink, event, action=action)
-    return await _emit_normal(sink, event, action=action)
+        return await _emit_required(sink, event, action=action, session=session)
+    return await _emit_normal(sink, event, action=action, session=session)
 
 
 async def emit_acl_change(
@@ -390,6 +461,7 @@ async def emit_acl_change(
     user_id: int | None = None,
     ip: str | None = None,
     trace_id: str | None = None,
+    session: DbSession | None = None,
 ) -> bool:
     """写一条 ACL 权限变更审计（05-3 实现时调用；强审计）。
 
@@ -407,6 +479,7 @@ async def emit_acl_change(
         user_id: 操作人主键。
         ip: 来源 IP。
         trace_id: 链路标识。
+        session: 业务会话（给出则审计与业务同事务）。
 
     Returns:
         bool: 写入成功 True。
@@ -434,6 +507,7 @@ async def emit_acl_change(
         user_id=user_id,
         ip=ip,
         trace_id=trace_id,
+        session=session,
     )
 
 
@@ -451,6 +525,7 @@ async def emit_record_operation(
     user_id: int | None = None,
     ip: str | None = None,
     trace_id: str | None = None,
+    session: DbSession | None = None,
 ) -> bool:
     """写一条记录级操作审计（`record_ref = msg.message/log_id`，强审计）。
 
@@ -467,6 +542,7 @@ async def emit_record_operation(
         user_id: 操作人主键。
         ip: 来源 IP。
         trace_id: 链路标识。
+        session: 业务会话（给出则审计与业务同事务）。
 
     Returns:
         bool: 写入成功 True。
@@ -488,7 +564,7 @@ async def emit_record_operation(
         resource_key=resource_key,
         record_ref=RecordRef(type=MESSAGE_REF_TYPE, id=log_id),
     )
-    return await _emit_required(sink, event, action=action)
+    return await _emit_required(sink, event, action=action, session=session)
 
 
 async def emit_access_denied(

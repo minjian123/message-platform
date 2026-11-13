@@ -175,6 +175,19 @@ class _FailingMessageStore(MessageStore):
             epoch=epoch,
         )
 
+    async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
+        """转调真实实现（删消息不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            log_id: 记录标识。
+
+        Returns:
+            bool: 是否删除成功。
+        """
+        return await self._inner.delete(topic_id=topic_id, partition_no=partition_no, log_id=log_id)
+
     async def fetch(
         self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
     ) -> ConcurrentStableList[StoredMessage]:

@@ -15,6 +15,7 @@ from __future__ import annotations
 from bms_core.core.concurrent import ConcurrentStableDict
 from bms_core.core.exceptions import ParamError
 from bms_core.core.logging import get_logger
+from bms_core.db.sync import DbSession
 
 from bms_msg.audit.trail import DELAY_DISCARD_ACTION, AuditEmitter, emit_record_operation
 from bms_msg.broker.delay import DelayRecord, DelayStore
@@ -53,6 +54,7 @@ class DelayDisposalService:
         actor_id: int | None = None,
         ip: str | None = None,
         trace_id: str | None = None,
+        session: DbSession | None = None,
     ) -> bool:
         """丢弃一条延迟记录（强审计失败即恢复记录并让操作失败）。
 
@@ -63,6 +65,7 @@ class DelayDisposalService:
             actor_id: 操作人主键。
             ip: 来源 IP。
             trace_id: 链路标识。
+            session: 业务会话（给出则审计与业务同事务）。
 
         Returns:
             bool: 成功 True。
@@ -94,6 +97,7 @@ class DelayDisposalService:
                 user_id=actor_id,
                 ip=ip,
                 trace_id=trace_id,
+                session=session,
             )
         except Exception:
             await self._restore(record)

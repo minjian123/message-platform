@@ -721,3 +721,24 @@ async def test_loop_survives_round_failure(db_session: AsyncSession, tmp_path: P
     await asyncio.sleep(0.03)
     await service.stop()
     assert service.running is False
+
+
+@pytest.mark.kiwi_id(2495)
+async def test_complete_keeps_running_when_topic_row_present(db_session: AsyncSession, tmp_path: Path) -> None:
+    """元数据行仍在：台账不置 completed，保留 last_error 供下一轮重试（B10）。"""
+    service, _offsets, _delay, _dead, _throttle = _build(db_session, tmp_path)
+    topic_id = await _seed_topic(db_session)
+
+    await service._complete(
+        topic_id,
+        namespace="msg",
+        topic_name="audit.cleanup",
+        tenant_id=TENANT_ID,
+        counts=ConcurrentStableDict(),
+    )
+
+    session = cast("DbSession", db_session)
+    ledger = await TopicCleanupRepository(session).get_by_topic(topic_id)
+    assert ledger is not None
+    assert ledger.status != CLEANUP_COMPLETED
+    assert ledger.last_error == "topic_row_still_present"

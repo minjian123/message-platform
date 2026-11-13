@@ -100,6 +100,18 @@ const CATALOG: Record<string, readonly [string, string]> = {
     'Takes effect immediately: no retroactive deletion',
   ],
   'msg.admin.topics.delete.title': ['删除主题（不可恢复）', 'Delete topic (irreversible)'],
+  'msg.admin.topics.disable': ['停用主题', 'Disable topic'],
+  'msg.admin.topics.enable': ['启用主题', 'Enable topic'],
+  'msg.admin.topics.disableConfirm': [
+    '停用后数据面发布 / 消费将被拒绝（350028），管理面查询与写操作不受影响；确认停用？',
+    'After disabling, publish/consume are rejected (350028); management queries and writes still work. Continue?',
+  ],
+  'msg.admin.topics.enableConfirm': ['启用后数据面恢复；确认启用？', 'Enabling restores data-plane access. Continue?'],
+  'msg.admin.messages.delete': ['删除消息', 'Delete message'],
+  'msg.admin.messages.deleteConfirm': [
+    '删除后该消息在检索与消费中不可见（墓碑标记），原始记录到保留期回收；确认删除？',
+    'The message becomes invisible to search and consumption (tombstone) until retention cleanup. Continue?',
+  ],
   'msg.admin.topics.delete.warning': [
     '删除后不可恢复：分区日志、延迟待投、位点、消费组、死信与配额计数将被异步清理',
     'Irreversible: segments, delayed messages, offsets, groups, dead letters and quota counts are cleaned asynchronously',

@@ -11,7 +11,7 @@ from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.schemas.base import CONTRACT_COLLECTION, BaseSchema
 from pydantic import Field
 
-__all__ = ["DelayedItem", "DelayedPage"]
+__all__ = ["DelayDiscardRequest", "DelayDiscardResult", "DelayedItem", "DelayedPage"]
 
 
 class DelayedItem(BaseSchema):
@@ -25,6 +25,19 @@ class DelayedItem(BaseSchema):
     level: str = Field(description="延迟档位（1s / 5s / 10s / 30s / 1m / 5m / 10m / 30m / 60m）")
     deliver_at: datetime = Field(description="到期时刻（UTC）")
     remaining_ms: int = Field(description="剩余时间（毫秒；已到期未转投为 0）")
+
+
+class DelayDiscardRequest(BaseSchema):
+    """丢弃延迟记录请求。"""
+
+    reason: str = Field(min_length=1, max_length=256, description="处置原因（必填）")
+
+
+class DelayDiscardResult(BaseSchema):
+    """丢弃延迟记录结果。"""
+
+    log_id: str = Field(description="记录 ID")
+    discarded: bool = Field(description="是否丢弃成功")
 
 
 class DelayedPage(BaseSchema):

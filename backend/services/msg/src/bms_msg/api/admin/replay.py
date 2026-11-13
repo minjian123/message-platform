@@ -34,6 +34,7 @@ from bms_msg.api.deps import (
     ReplayRunnerDep,
     TopicAclServiceDep,
 )
+from bms_msg.audit.trail import REPLAY_DETAIL_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.offset import OffsetStore
@@ -341,6 +342,7 @@ async def get_replay(
     groups: GroupStoreDep,
     offsets: OffsetStoreDep,
     acl: TopicAclServiceDep,
+    sink: AuditSinkDep,
 ) -> ApiResponse[ReplayTaskItem]:
     """查重放任务进度（已投递 / 总量 + 状态 + 首末记录标识 + 受影响组影响视图）。
 
@@ -353,6 +355,17 @@ async def get_replay(
         namespace=view.task.namespace,
         topic=view.task.topic,
         action=ACL_ACTION_DESCRIBE,
+    )
+    await emit_sensitive(
+        cast("AuditEmitter", sink),
+        action=REPLAY_DETAIL_ACTION,
+        tenant_id=int(tenant.tenant_id),
+        params=ConcurrentStableDict({"task_id": str(view.task.id)}),
+        method="GET",
+        path=f"/api/v1/msg/admin/replay/{task_id}",
+        module_key=view.task.namespace,
+        resource_key=view.task.topic,
+        session=uow.session,
     )
     return ApiResponse.ok(_item(view.task, affected=view.affected, truncated=view.truncated))
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.core.exceptions import ParamError
 from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
@@ -339,6 +339,19 @@ class MessageStore(BaseFrameworkObject, ABC):
         """
 
     @abstractmethod
+    async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
+        """追加墓碑标记（05-4-1；逻辑删除，位点与 LEO 不变）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            log_id: 目标记录标识。
+
+        Returns:
+            bool: 本次标记成功 True；目标不存在或已删除 False（幂等）。
+        """
+
+    @abstractmethod
     async def scan_headers(
         self, *, topic_id: int, partition_no: int, from_offset: int, max_messages: int
     ) -> ConcurrentStableList[MessageHeaderView]:
@@ -392,6 +405,7 @@ class InMemoryMessageStore(MessageStore):
         self._segment_records = segment_records
         self._logs: dict[PartitionKey, list[StoredMessage]] = {}
         self._starts: dict[PartitionKey, int] = {}
+        self._deleted: ConcurrentStableDict[PartitionKey, ConcurrentStableSet[str]] = ConcurrentStableDict()
 
     async def append(
         self,
@@ -468,7 +482,34 @@ class InMemoryMessageStore(MessageStore):
         bucket: PartitionKey = (topic_id, partition_no)
         log = self._logs.get(bucket, [])
         index = max(from_offset - self._starts.get(bucket, 0), 0)
-        return ConcurrentStableList(log[index : index + max_messages])
+        deleted = self._deleted.get(bucket)
+        window = log[index : index + max_messages]
+        if deleted is None:
+            return ConcurrentStableList(window)
+        return ConcurrentStableList(message for message in window if message.log_id not in deleted)
+
+    async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
+        """逻辑删除（内存替身：记入删除集合，位点与 LEO 不变）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            log_id: 目标记录标识。
+
+        Returns:
+            bool: 首次标记 True；不存在或已删除 False。
+        """
+        bucket: PartitionKey = (topic_id, partition_no)
+        if not any(message.log_id == log_id for message in self._logs.get(bucket, [])):
+            return False
+        deleted = self._deleted.get(bucket)
+        if deleted is None:
+            deleted = ConcurrentStableSet[str]()
+            self._deleted.set(bucket, deleted)
+        if log_id in deleted:
+            return False
+        deleted.add(log_id)
+        return True
 
     async def leo(self, *, topic_id: int, partition_no: int) -> int:
         """取分区日志末端位点（下一条将被分配的 offset；起点前移不影响它）。
@@ -583,9 +624,12 @@ class InMemoryMessageStore(MessageStore):
         Returns:
             MessageHeaderView | None: 命中的头视图；未命中返回 None。
         """
-        for messages in self._logs.values():
+        for bucket, messages in self._logs.items():
+            deleted = self._deleted.get(bucket)
             for message in messages:
                 if message.log_id == log_id:
+                    if deleted is not None and log_id in deleted:
+                        return None
                     return message_header_view(message)
         return None
 
@@ -625,6 +669,7 @@ class InMemoryMessageStore(MessageStore):
         for key in keys:
             self._logs.pop(key, None)
             self._starts.pop(key, None)
+            self._deleted.pop(key, None)
         return len(keys)
 
 

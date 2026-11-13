@@ -8,7 +8,7 @@
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.schemas.base import CONTRACT_COLLECTION, CONTRACT_STABLE_LIST, BaseSchema, SnowflakeIdStr
@@ -31,7 +31,9 @@ class TopicCreateRequest(BaseSchema):
     retention_bytes: int = Field(
         default=0, ge=0, description="容量上限（字节；0 = 不限，缺省不限）。超限从最老段整段删除"
     )
-    cleanup_policy: str = Field(default=CLEANUP_DELETE, max_length=16, description="清理策略（首期只支持 delete）")
+    cleanup_policy: Literal["delete"] = Field(
+        default=CLEANUP_DELETE, description="清理策略（首期只支持 delete；其它值按参数非法拒绝）"
+    )
 
 
 class PartitionItem(BaseSchema):

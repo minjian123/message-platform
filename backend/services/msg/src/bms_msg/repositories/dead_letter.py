@@ -13,7 +13,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 
-from bms_core.core.concurrent import ConcurrentStableList, ConcurrentStableSet
+from bms_core.core.concurrent import (
+    ConcurrentStableFrozenList,
+    ConcurrentStableList,
+    ConcurrentStableSet,
+)
 from bms_core.repositories.base_db_repository import BaseDbRepository
 from sqlalchemy import delete, func, or_, select, update
 
@@ -172,6 +176,49 @@ class DeadLetterRepository(BaseDbRepository[MsgDeadLetter]):
         result = await self._session.execute(statement)
         await self._session.flush()
         return int(getattr(result, "rowcount", 0) or 0)
+
+    async def update_status(
+        self,
+        *,
+        item_id: int,
+        tenant_id: int,
+        from_statuses: ConcurrentStableFrozenList[str],
+        to_status: str,
+        reason: str | None,
+        actor_id: int | None,
+        disposed_at: datetime,
+    ) -> bool:
+        """条件更新死信状态（CAS：只允许从给定状态迁移，防并发互相覆盖）。
+
+        Args:
+            item_id: 死信主键。
+            tenant_id: 租户主键。
+            from_statuses: 允许的来源状态集合。
+            to_status: 目标状态。
+            reason: 处置原因。
+            actor_id: 操作人主键。
+            disposed_at: 处置时刻。
+
+        Returns:
+            bool: 是否命中并更新。
+        """
+        statement = (
+            update(MsgDeadLetter)
+            .where(
+                self._column("id") == item_id,
+                self._column("tenant_id") == tenant_id,
+                self._column("status").in_(from_statuses),
+            )
+            .values(
+                status=to_status,
+                disposition_reason=reason,
+                disposed_by=actor_id,
+                disposed_at=disposed_at,
+            )
+        )
+        result = await self._session.execute(statement)
+        await self._session.flush()
+        return bool(getattr(result, "rowcount", 0) or 0)
 
     async def mark_replaying(self, *, item_id: int, tenant_id: int, replay_task_id: int) -> bool:
         """把死信从 `pending` 置为 `replaying` 并写重放任务（条件更新，防并发重复处置）。

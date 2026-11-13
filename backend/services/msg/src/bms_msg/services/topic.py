@@ -18,6 +18,7 @@ from bms_core.core.config import get_settings
 from bms_core.core.exceptions import ConfigError, ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
+from sqlalchemy.exc import IntegrityError
 
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.core.config import (
@@ -37,7 +38,7 @@ from bms_msg.errors import (
     MsgTopicStateInvalidError,
 )
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import CLEANUP_DELETE, STATUS_ACTIVE, STATUS_DELETING, MsgTopic
+from bms_msg.models.topic import CLEANUP_DELETE, STATUS_DELETING, MsgTopic
 from bms_msg.models.topic_cleanup import MsgTopicCleanup
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
@@ -131,15 +132,19 @@ class TopicService:
             if await self._topics.get_by_identity(namespace=request.namespace, name=request.name) is not None:
                 raise MsgTopicExistsError(f"主题已存在：{request.namespace}/{request.name}")
             await self._ensure_quota(tenant=tenant, namespace=request.namespace)
-            topic = await self._topics.create(
-                tenant_id=int(tenant.tenant_id),
-                namespace=request.namespace,
-                name=request.name,
-                partition_count=request.partition_count,
-                retention_ms=request.retention_ms,
-                retention_bytes=request.retention_bytes,
-                cleanup_policy=request.cleanup_policy or CLEANUP_DELETE,
-            )
+            try:
+                topic = await self._topics.create(
+                    tenant_id=int(tenant.tenant_id),
+                    namespace=request.namespace,
+                    name=request.name,
+                    partition_count=request.partition_count,
+                    retention_ms=request.retention_ms,
+                    retention_bytes=request.retention_bytes,
+                    cleanup_policy=CLEANUP_DELETE,
+                )
+            except IntegrityError as exc:
+                # 并发同名：唯一约束兜底为业务码（350008），不把 DB 异常透成 500
+                raise MsgTopicExistsError(f"主题已存在：{request.namespace}/{request.name}") from exc
             columns = self._assignment_columns(topic_id=int(topic.id), start_no=0, count=request.partition_count)
             await self._partitions.add_partitions(
                 topic_id=int(topic.id),
@@ -308,6 +313,38 @@ class TopicService:
         self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
         return updated or topic, before
 
+    async def set_status(self, *, tenant: CurrentTenant, topic_id: int, status: str) -> tuple[MsgTopic, str]:
+        """切换主题状态（停用 / 启用；**幂等**，同态直接返回）。
+
+        停用只影响数据面（发布 / 消费 350028），管理面查询与写操作不受影响。
+
+        Args:
+            tenant: 当前租户。
+            topic_id: 主题 ID。
+            status: 目标状态（`active` / `disabled`）。
+
+        Returns:
+            tuple[MsgTopic, str]: 更新后的主题 + 变更前状态（审计对账用）。
+
+        Raises:
+            MsgTopicNotFoundError: 主题不存在（350001）。
+            MsgTopicStateInvalidError: 主题处于 `deleting`（350028）。
+        """
+        await self._uow.rollback()
+        async with self._uow.begin():
+            topic = await self._topics.get(topic_id)
+            if topic is None:
+                raise MsgTopicNotFoundError(f"主题不存在：{topic_id}")
+            identity = (topic.namespace, topic.name)
+            before = topic.status
+            if before == STATUS_DELETING:
+                raise MsgTopicStateInvalidError(f"主题正在删除，不接受状态切换：{identity[0]}/{identity[1]}")
+            if before == status:
+                return topic, before
+            updated = await self._topics.update(topic_id, status=status) or topic
+        self._invalidate(tenant_id=int(tenant.tenant_id), namespace=identity[0], name=identity[1])
+        return updated, before
+
     async def begin_delete(self, *, tenant: CurrentTenant, topic_id: int) -> tuple[MsgTopic, MsgTopicCleanup]:
         """受理删主题（**幂等**：重复受理复用台账，不重复建行、不重复触发首轮）。
 
@@ -391,15 +428,15 @@ class TopicService:
         )
 
     def _ensure_writable_state(self, topic: MsgTopic) -> None:
-        """校验主题处于可写状态（`active` 才允许写；`disabled` / `deleting` 一律拒绝）。
+        """校验主题不处于删除中（`disabled` 仍允许管理面写操作；数据面另判 350028）。
 
         Args:
             topic: 主题记录。
 
         Raises:
-            MsgTopicStateInvalidError: 状态为 `disabled` / `deleting`（350028）。
+            MsgTopicStateInvalidError: 状态为 `deleting`（350028）。
         """
-        if topic.status == STATUS_ACTIVE:
+        if topic.status != STATUS_DELETING:
             return
         raise MsgTopicStateInvalidError(f"主题状态不允许该操作：{topic.namespace}/{topic.name} 当前为 {topic.status}")
 

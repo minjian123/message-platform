@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList, ConcurrentStableSet
 from bms_core.core.exceptions import ParamError
@@ -365,8 +366,10 @@ class _PartitionLog:
         self._report = RecoveryReport()
         self._corrupted: dict[int, str] = {}
         self._stamps: dict[int, SegmentStamp] = {}
+        self._deleted: ConcurrentStableSet[str] = ConcurrentStableSet()
         self.lock = asyncio.Lock()
         self._load()
+        self._rebuild_deleted()
 
     @property
     def leo(self) -> int:
@@ -412,6 +415,25 @@ class _PartitionLog:
         """
         return tuple(sorted(self._corrupted))
 
+    def _rebuild_deleted(self) -> None:
+        """扫描已加载段，重建删除标记集合（05-4-1；启动 / 首次打开一次，幂等）。
+
+        损坏段在恢复阶段已隔离 / 取证，这里按段容错跳过，不因重建失败阻断启动。
+        """
+        for segment in self._segments:
+            try:
+                for frame_position, _total, _header_len in segment.iter_frames(from_position=0):
+                    parsed = segment.read_record(position=frame_position)
+                    target = parsed.header.delete_target
+                    if target is not None:
+                        self._deleted.add(target)
+            except Exception as exc:  # pragma: no cover - 损坏段由恢复流程处理
+                _LOGGER.warning(
+                    "msg_deleted_rebuild_skip_segment",
+                    base_offset=segment.base_offset,
+                    error=repr(exc),
+                )
+
     def segment_ends(self) -> list[int]:
         """每段的尾部 offset（末段为 LEO）。
 
@@ -443,6 +465,7 @@ class _PartitionLog:
         compression: str,
         uncompressed_len: int | None,
         epoch: int = 0,
+        delete_target: str | None = None,
     ) -> StoredMessage:
         """追加一条消息并分配 offset（调用方须持锁）。
 
@@ -481,6 +504,7 @@ class _PartitionLog:
             compression=compression,
             uncompressed_len=uncompressed_len,
             epoch=epoch,
+            delete_target=delete_target,
         )
         blob = encode_record(header=header, payload=payload)
         self._ensure_directory()
@@ -494,6 +518,8 @@ class _PartitionLog:
         self._leo = offset + 1
         self._unflushed += 1
         self._maybe_fsync()
+        if delete_target is not None:
+            self._deleted.add(delete_target)
         return StoredMessage(
             message_id=message_id,
             log_id=log_id,
@@ -544,6 +570,9 @@ class _PartitionLog:
                 if current >= end or len(messages) >= max_messages:
                     break
                 parsed = segment.read_record(position=frame_position)
+                if parsed.header.delete_target is not None or parsed.header.log_id in self._deleted:
+                    current += 1
+                    continue
                 messages.add(_to_message(parsed, offset=current))
                 current += 1
             cursor = max(cursor, current)
@@ -754,6 +783,8 @@ class _PartitionLog:
         if segment is None:  # pragma: no cover - 同一临界区内段不会消失
             return None
         parsed = segment.read_record(position=located.position)
+        if parsed.header.delete_target is not None or parsed.header.log_id in self._deleted:
+            return None
         return _to_message(parsed, offset=offset)
 
     def iterate_headers(self) -> ConcurrentStableList[tuple[int, int, RecordHeader]]:
@@ -1574,6 +1605,49 @@ class FileMessageStore(MessageStore):
         topic_id, partition_no, offset = resolved
         partition = self._partitions.get((topic_id, partition_no))
         return None if partition is None else partition.locate(offset=offset)
+
+    async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
+        """追加墓碑标记（05-4-1；逻辑删除，位点与 LEO 不变）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            log_id: 目标记录标识。
+
+        Returns:
+            bool: 首次标记 True；目标不存在 / 已删除 / 跨分区 False。
+        """
+        location = self._locate(topic_id)
+        if location is None:
+            return False
+        resolved = self._resolve_log_id(log_id=log_id)
+        if resolved is None:
+            return False
+        resolved_topic, resolved_partition, offset = resolved
+        if resolved_topic != int(topic_id) or resolved_partition != int(partition_no):
+            return False
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        async with partition.lock:
+            target = partition.read_bytes(offset=offset)
+            if target is None or target.log_id != log_id:
+                return False
+            partition.append(
+                topic_id=int(topic_id),
+                partition_no=int(partition_no),
+                tenant_id=location.tenant_id,
+                message_id=f"tombstone-{log_id}",
+                log_id=f"tombstone-{uuid4().hex}",
+                key=None,
+                payload=b"",
+                headers=ConcurrentStableDict(),
+                trace=TraceContext(),
+                published_at=datetime.now(UTC),
+                content_type="none",
+                compression=COMPRESSION_NONE,
+                uncompressed_len=None,
+                delete_target=log_id,
+            )
+        return True
 
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取只读头视图（端口方法；命中即解码该条，不回退全量扫描）。

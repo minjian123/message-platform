@@ -12,16 +12,20 @@ import {
   ElDescriptions,
   ElDescriptionsItem,
   ElInput,
+  ElMessage,
+  ElMessageBox,
   ElTable,
   ElTableColumn,
 } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import ReadOnlyList from '../components/ReadOnlyList.vue'
+import { errorCodeOf, errorKeyOf } from '../base/BaseMsgReadOnlyView'
 import { useAdminRoute } from '../composables/useAdminRoute'
 import { useMsgReadOnlyView } from '../composables/useMsgReadOnlyView'
 import { message } from '../i18n/messages'
-import { loadMessages, type MessageItem } from '../services/admin-service'
+import { hostPermissions, MSG_MANAGE_PERMISSION } from '../runtime'
+import { deleteMessage, loadMessages, type MessageItem } from '../services/admin-service'
 import { isValidLocal, toLocalText, toUtcParam } from '../services/time-format'
 
 const { params, query } = useAdminRoute()
@@ -40,6 +44,36 @@ const selected = ref<MessageItem | null>(null)
 const timeError = ref('')
 
 const view = useMsgReadOnlyView<MessageItem>({ loader: loadMessages, active: false, autoLoad: false })
+
+/** 是否具备写权限（无 `msg:manage` 时不渲染删除入口）。 */
+const canManage = computed(
+  () => hostPermissions() === undefined || hostPermissions()?.includes(MSG_MANAGE_PERMISSION) === true,
+)
+
+/**
+ * 删除一条消息（墓碑标记；二次确认）。
+ *
+ * @param row 消息头行。
+ */
+async function remove(row: unknown): Promise<void> {
+  const item = row as MessageItem
+  try {
+    await ElMessageBox.confirm(
+      message('msg.admin.messages.deleteConfirm'),
+      message('msg.admin.common.confirm'),
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteMessage(item.log_id)
+    ElMessage.success(message('msg.admin.common.done'))
+    await view.refresh()
+  } catch (error) {
+    ElMessage.error(message(errorKeyOf(errorCodeOf(error))))
+  }
+}
 
 /**
  * 当前条件快照（空值不落参，避免上送空串）。
@@ -181,6 +215,13 @@ onMounted(() => {
           <template #default="{ row }">
             <el-button link type="primary" data-test="messages-detail" @click="openDetail(row)">
               {{ message('msg.admin.common.detail') }}
+            </el-button>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canManage" :label="message('msg.admin.common.actions')" min-width="100">
+          <template #default="{ row }">
+            <el-button link type="danger" data-test="messages-delete" @click="remove(row)">
+              {{ message('msg.admin.messages.delete') }}
             </el-button>
           </template>
         </el-table-column>

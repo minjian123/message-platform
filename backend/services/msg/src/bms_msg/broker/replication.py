@@ -2555,6 +2555,19 @@ class ReplicatedMessageStore(MessageStore):
         """
         return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
+    async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
+        """追加墓碑标记（原样委托；副本通过拉取同一条墓碑同步删除集合）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            log_id: 目标记录标识。
+
+        Returns:
+            bool: 首次标记 True。
+        """
+        return await self._inner.delete(topic_id=topic_id, partition_no=partition_no, log_id=log_id)
+
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取头视图（原样委托）。
 

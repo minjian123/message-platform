@@ -201,13 +201,13 @@ async def test_update_retention_rejected_when_deleting(
     assert excinfo.value.code == int(MsgErrorCode.TOPIC_STATE_INVALID)
 
 
-async def test_expand_rejected_when_disabled(
+async def test_expand_allowed_when_disabled(
     write_service: TopicService,
     current_tenant: CurrentTenant,
     make_request: MakeRequest,
     db_session: AsyncSession,
 ) -> None:
-    """`disabled` 状态下扩分区：`350028`（停用主题不接受扩容）。"""
+    """`disabled` 状态下扩分区仍可用（停用只停数据面，管理面写不受影响）。"""
     topic = await write_service.create_topic(tenant=current_tenant, request=make_request(partition_count=2))
     session = cast("DbSession", db_session)
     # 必须提交：服务方法在 `begin()` 前会 `rollback()`（清掉端点鉴权读留下的隐式事务），
@@ -215,8 +215,11 @@ async def test_expand_rejected_when_disabled(
     stored = await TopicRepository(session).update(int(topic.id), status=STATUS_DISABLED)
     assert stored is not None
     await session.commit()
-    with pytest.raises(MsgTopicStateInvalidError):
-        await write_service.expand_partitions(tenant=current_tenant, topic_id=int(topic.id), partition_count=4)
+    updated, _partitions = await write_service.expand_partitions(
+        tenant=current_tenant, topic_id=int(topic.id), partition_count=4
+    )
+    assert int(updated.partition_count) == 4
+    assert updated.status == STATUS_DISABLED
 
 
 async def test_active_topic_still_writable(
@@ -230,3 +233,40 @@ async def test_active_topic_still_writable(
         tenant=current_tenant, topic_id=int(topic.id), partition_count=3
     )
     assert (updated.partition_count, len(partitions)) == (3, 3)
+
+
+@pytest.mark.kiwi_id(2495)
+async def test_set_status_is_idempotent_and_rejects_deleting(
+    write_service: TopicService,
+    current_tenant: CurrentTenant,
+    make_request: MakeRequest,
+    db_session: AsyncSession,
+) -> None:
+    """停用 / 启用幂等；删除中拒绝状态切换（350028）。"""
+    from bms_msg.models.topic import STATUS_DELETING, STATUS_DISABLED
+
+    topic = await write_service.create_topic(tenant=current_tenant, request=make_request())
+    session = cast("DbSession", db_session)
+    first, before = await write_service.set_status(
+        tenant=current_tenant, topic_id=int(topic.id), status=STATUS_DISABLED
+    )
+    assert (first.status, before) == (STATUS_DISABLED, "active")
+    again, before_again = await write_service.set_status(
+        tenant=current_tenant, topic_id=int(topic.id), status=STATUS_DISABLED
+    )
+    assert (again.status, before_again) == (STATUS_DISABLED, STATUS_DISABLED)
+
+    updated = await TopicRepository(session).update(int(topic.id), status=STATUS_DELETING)
+    assert updated is not None
+    await session.commit()
+    with pytest.raises(MsgTopicStateInvalidError):
+        await write_service.set_status(tenant=current_tenant, topic_id=int(topic.id), status="active")
+
+
+@pytest.mark.kiwi_id(2495)
+async def test_set_status_missing_topic(current_tenant: CurrentTenant, write_service: TopicService) -> None:
+    """状态切换遇主题不存在：350001。"""
+    from bms_msg.errors import MsgTopicNotFoundError
+
+    with pytest.raises(MsgTopicNotFoundError):
+        await write_service.set_status(tenant=current_tenant, topic_id=987654321, status="active")

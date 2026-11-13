@@ -231,6 +231,9 @@ class RecordHeader(BaseValueObject):
     delay: DelayStamp | None = None
     """延迟区元数据（02-7；`.log` 记录为 None，因此不写 `delay` 键、零体积开销）。"""
 
+    delete_target: str | None = None
+    """删除标记的目标 `log_id`（05-4-1；None = 普通记录，不写该键，旧记录字节不变）。"""
+
     @property
     def trace_id(self) -> str | None:
         """链路标识（读兼容属性：既有读取点只关心这一个字段，不必展开 `trace`）。
@@ -360,6 +363,9 @@ def _pack_header(header: RecordHeader) -> bytes:
     if header.delay is not None:
         # 只在延迟记录上写该键：`.log` 记录的字节与 02-1 完全一致（`delay` 子结构约 90 字节）
         raw["delay"] = _pack_delay(header.delay)
+    if header.delete_target is not None:
+        # 05-4-1：只有墓碑记录写该键；普通记录零体积开销
+        raw["delete_target"] = header.delete_target
     packed = _PACK(raw, use_bin_type=True)
     if len(packed) > MAX_RECORD_HEADER_BYTES:
         raise ValueError(f"记录头超过上限 {MAX_RECORD_HEADER_BYTES} 字节（实际 {len(packed)} 字节）")
@@ -412,6 +418,7 @@ def _unpack_header(blob: bytes) -> RecordHeader:
         hw=int(data.get("hw", 0)),
         replicas=tuple(int(item) for item in replicas_list),
         delay=_decode_delay(data.get("delay")),
+        delete_target=_optional_str(data.get("delete_target")),
     )
 
 

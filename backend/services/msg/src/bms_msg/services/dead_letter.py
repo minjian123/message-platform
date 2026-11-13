@@ -191,13 +191,18 @@ class DeadLetterService(BaseFrameworkObject):
         """
         await self._uow.rollback()
         async with self._uow.begin():
-            row = await self._require_row(item_id=item_id, tenant_id=tenant_id)
-            self._require_status(row, allowed=ConcurrentStableFrozenList((DLQ_STATUS_PENDING,)), action="忽略")
-            row.status = DLQ_STATUS_IGNORED
-            row.disposition_reason = reason
-            row.disposed_by = actor_id
-            row.disposed_at = _utcnow()
-            await self._flush()
+            await self._require_row(item_id=item_id, tenant_id=tenant_id)
+            updated = await self._dead_letters.update_status(
+                item_id=item_id,
+                tenant_id=tenant_id,
+                from_statuses=ConcurrentStableFrozenList((DLQ_STATUS_PENDING,)),
+                to_status=DLQ_STATUS_IGNORED,
+                reason=reason,
+                actor_id=actor_id,
+                disposed_at=_utcnow(),
+            )
+            if not updated:
+                raise MsgDeadLetterInvalidStateError("死信已被其他请求处置，请刷新后重试")
         return DLQ_STATUS_IGNORED
 
     async def archive(self, *, item_id: int, tenant_id: int, reason: str | None, actor_id: int | None) -> str:
@@ -218,13 +223,18 @@ class DeadLetterService(BaseFrameworkObject):
         """
         await self._uow.rollback()
         async with self._uow.begin():
-            row = await self._require_row(item_id=item_id, tenant_id=tenant_id)
-            self._require_status(row, allowed=DLQ_ARCHIVABLE_STATUSES, action="归档")
-            row.status = DLQ_STATUS_ARCHIVED
-            row.disposition_reason = reason
-            row.disposed_by = actor_id
-            row.disposed_at = _utcnow()
-            await self._flush()
+            await self._require_row(item_id=item_id, tenant_id=tenant_id)
+            updated = await self._dead_letters.update_status(
+                item_id=item_id,
+                tenant_id=tenant_id,
+                from_statuses=DLQ_ARCHIVABLE_STATUSES,
+                to_status=DLQ_STATUS_ARCHIVED,
+                reason=reason,
+                actor_id=actor_id,
+                disposed_at=_utcnow(),
+            )
+            if not updated:
+                raise MsgDeadLetterInvalidStateError("死信已被其他请求处置，请刷新后重试")
         return DLQ_STATUS_ARCHIVED
 
     async def mark_replaying(self, *, item_id: int, tenant_id: int, replay_task_id: int) -> str:

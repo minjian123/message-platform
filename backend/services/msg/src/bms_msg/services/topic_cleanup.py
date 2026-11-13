@@ -387,6 +387,17 @@ class TopicCleanupService(BaseFrameworkObject):
             row = await repository.get_by_topic(topic_id)
             if row is None:
                 return
+            topics = TopicRepository(cast("DbSession", uow.session))
+            if await topics.get(int(topic_id)) is not None:
+                # 元数据行仍在：不虚报完成，保持 running 让下一轮继续（B10）
+                await repository.update(int(row.id), status=CLEANUP_RUNNING, last_error="topic_row_still_present")
+                _LOGGER.error(
+                    "msg_topic_cleanup_topic_row_present",
+                    topic_id=int(topic_id),
+                    namespace=namespace,
+                    topic=topic_name,
+                )
+                return
             await repository.update(int(row.id), status=CLEANUP_COMPLETED, finished_at=_now())
         self._cache.invalidate(tenant_id=tenant_id, namespace=namespace, name=topic_name)
         try:

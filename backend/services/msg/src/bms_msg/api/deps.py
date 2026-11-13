@@ -26,6 +26,7 @@ from bms_msg.broker.backpressure import BackpressureTuning, RateLimiter, default
 from bms_msg.broker.connection import ConnectionRegistry, ConnectionTuning, connection_tuning_from_settings
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayStore
+from bms_msg.broker.delay_disposal import DelayDisposalService
 from bms_msg.broker.delivery import DeliveryState
 from bms_msg.broker.election import LeaderSwitchService
 from bms_msg.broker.file_store import PartitionDirectory
@@ -66,6 +67,7 @@ __all__ = [
     "CurrentTenantDep",
     "DataPlaneTenantDep",
     "DeadLetterQueueDep",
+    "DelayDisposalDep",
     "DelaySchedulerDep",
     "DelayStoreDep",
     "DeliveryCounterDep",
@@ -364,6 +366,22 @@ ReplayRunnerDep = Annotated[ReplayRunner, Depends(get_replay_runner)]
 
 AuditSinkDep = Annotated[AuditSink, Depends(get_audit_sink)]
 """路由参数写法：`sink: AuditSinkDep`（审计出口）。"""
+
+
+def get_delay_disposal(request: Request) -> DelayDisposalService:
+    """取延迟丢弃服务（进程级单例）。
+
+    Args:
+        request: 当前请求。
+
+    Returns:
+        DelayDisposalService: 延迟处置服务。
+    """
+    return cast("DelayDisposalService", request.app.state.delay_disposal)
+
+
+DelayDisposalDep = Annotated[DelayDisposalService, Depends(get_delay_disposal)]
+"""路由参数写法：`disposal: DelayDisposalDep`（延迟丢弃）。"""
 
 
 def get_stream_registry(request: Request) -> StreamRegistry:

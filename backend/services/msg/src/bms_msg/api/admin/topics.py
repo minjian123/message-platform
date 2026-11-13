@@ -32,15 +32,18 @@ from bms_msg.api.deps import (
 from bms_msg.audit.trail import (
     TOPIC_CREATE_ACTION,
     TOPIC_DELETE_ACTION,
+    TOPIC_DISABLE_ACTION,
+    TOPIC_ENABLE_ACTION,
     TOPIC_EXPAND_ACTION,
     TOPIC_UPDATE_ACTION,
     AuditEmitter,
     emit_sensitive,
 )
+from bms_msg.broker.replay import AuditSink
 from bms_msg.broker.topic_cache import TopicCache
 from bms_msg.errors import MsgErrorCode
 from bms_msg.models.partition import MsgPartition
-from bms_msg.models.topic import STATUS_DELETING, MsgTopic
+from bms_msg.models.topic import STATUS_ACTIVE, STATUS_DELETING, STATUS_DISABLED, MsgTopic
 from bms_msg.models.topic_cleanup import MsgTopicCleanup
 from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import PartitionRepository, TopicRepository
@@ -303,12 +306,13 @@ async def _filter_topics(
 
 
 async def _audit_create(
-    sink: AuditEmitter,
+    sink: AuditSink,
     *,
     tenant_id: int,
     namespace: str,
     topic_name: str,
     topic: MsgTopic,
+    session: DbSession | None = None,
 ) -> None:
     """写一条建主题审计（配置变更，强审计；失败即接口失败）。
 
@@ -318,6 +322,7 @@ async def _audit_create(
         namespace: 命名空间。
         topic_name: 主题名。
         topic: 新建主题。
+        session: 业务会话（给出则审计与业务同事务）。
     """
     params = ConcurrentStableDict(
         {
@@ -332,7 +337,7 @@ async def _audit_create(
         }
     )
     await emit_sensitive(
-        sink,
+        cast("AuditEmitter", sink),
         action=TOPIC_CREATE_ACTION,
         tenant_id=tenant_id,
         params=params,
@@ -340,6 +345,7 @@ async def _audit_create(
         path="/api/v1/msg/admin/topics",
         module_key=namespace,
         resource_key=topic_name,
+        session=session,
     )
 
 
@@ -373,6 +379,7 @@ async def create_topic(
         namespace=req.namespace,
         topic_name=req.name,
         topic=topic,
+        session=uow.session,
     )
     return ApiResponse.ok(_item(topic))
 
@@ -480,28 +487,32 @@ async def delete_topic(
     )
     service = _service(uow, cache=cache, cleanups=TopicCleanupRepository(cast("DbSession", uow.session)))
     updated, ledger = await service.begin_delete(tenant=tenant, topic_id=topic_id)
-    await _audit_write(
-        sink,
-        action=TOPIC_DELETE_ACTION,
-        method="DELETE",
-        tenant_id=int(tenant.tenant_id),
-        namespace=updated.namespace,
-        topic_name=updated.name,
-        params=ConcurrentStableDict(
-            {
-                "topic_id": str(updated.id),
-                "namespace": updated.namespace,
-                "topic": updated.name,
-                "partition_count": int(impact.partition_count),
-                "message_total": int(impact.message_total),
-                "group_count": int(impact.group_count),
-                "delayed_total": int(impact.delayed_total),
-                "dlq_total": int(impact.dlq_total),
-                "status": updated.status,
-            }
-        ),
-    )
-    cleanup.kick(int(updated.id))
+    try:
+        await _audit_write(
+            sink,
+            action=TOPIC_DELETE_ACTION,
+            method="DELETE",
+            tenant_id=int(tenant.tenant_id),
+            namespace=updated.namespace,
+            topic_name=updated.name,
+            params=ConcurrentStableDict(
+                {
+                    "topic_id": str(updated.id),
+                    "namespace": updated.namespace,
+                    "topic": updated.name,
+                    "partition_count": int(impact.partition_count),
+                    "message_total": int(impact.message_total),
+                    "group_count": int(impact.group_count),
+                    "delayed_total": int(impact.delayed_total),
+                    "dlq_total": int(impact.dlq_total),
+                    "status": updated.status,
+                }
+            ),
+            session=uow.session,
+        )
+    finally:
+        # 审计失败也要把台账推进（否则主题停在 deleting 且无人清理）
+        cleanup.kick(int(updated.id))
     return ApiResponse.ok(_cleanup_view(updated, ledger))
 
 
@@ -549,6 +560,7 @@ async def expand_topic_partitions(
             }
         ),
         path=f"/api/v1/msg/admin/topics/{topic_id}/partitions",
+        session=uow.session,
     )
     return ApiResponse.ok(_detail(updated, partitions))
 
@@ -600,12 +612,106 @@ async def update_topic(
             }
         ),
         path=f"/api/v1/msg/admin/topics/{topic_id}",
+        session=uow.session,
+    )
+    return ApiResponse.ok(_item(updated))
+
+
+@router.post("/{topic_id}/disable", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _WRITE_ERRORS})
+async def disable_topic(
+    topic_id: TopicIdPath,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cache: TopicCacheDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+    confirm: Annotated[bool, Query(description="显式确认（必须为 true）")] = False,
+) -> ApiResponse[TopicItem]:
+    """停用主题（**只停数据面**：发布 / 消费 350028；管理面查询与写操作照常）。
+
+    需要 msg:manage 权限；`confirm` 缺失 10001；主题不存在 350001；`deleting` 状态 350028；
+    重复停用幂等返回 200。
+    """
+    _require_confirm(confirm, action=TOPIC_DISABLE_ACTION, topic=str(topic_id))
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    updated, before = await _service(uow, cache=cache).set_status(
+        tenant=tenant, topic_id=topic_id, status=STATUS_DISABLED
+    )
+    await _audit_write(
+        sink,
+        action=TOPIC_DISABLE_ACTION,
+        method="POST",
+        tenant_id=int(tenant.tenant_id),
+        namespace=updated.namespace,
+        topic_name=updated.name,
+        params=ConcurrentStableDict(
+            {
+                "topic_id": str(updated.id),
+                "namespace": updated.namespace,
+                "topic": updated.name,
+                "status_before": before,
+                "status_after": updated.status,
+            }
+        ),
+        path=f"/api/v1/msg/admin/topics/{topic_id}/disable",
+        session=uow.session,
+    )
+    return ApiResponse.ok(_item(updated))
+
+
+@router.post("/{topic_id}/enable", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _WRITE_ERRORS})
+async def enable_topic(
+    topic_id: TopicIdPath,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    cache: TopicCacheDep,
+    sink: AuditSinkDep,
+    acl: TopicAclServiceDep,
+) -> ApiResponse[TopicItem]:
+    """启用主题（数据面恢复；重复启用幂等返回 200）。
+
+    需要 msg:manage 权限；主题不存在 350001；`deleting` 状态 350028。
+    """
+    topic, _partitions = await _service(uow).get_topic(tenant=tenant, topic_id=topic_id)
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic.namespace,
+        topic=topic.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    updated, before = await _service(uow, cache=cache).set_status(
+        tenant=tenant, topic_id=topic_id, status=STATUS_ACTIVE
+    )
+    await _audit_write(
+        sink,
+        action=TOPIC_ENABLE_ACTION,
+        method="POST",
+        tenant_id=int(tenant.tenant_id),
+        namespace=updated.namespace,
+        topic_name=updated.name,
+        params=ConcurrentStableDict(
+            {
+                "topic_id": str(updated.id),
+                "namespace": updated.namespace,
+                "topic": updated.name,
+                "status_before": before,
+                "status_after": updated.status,
+            }
+        ),
+        path=f"/api/v1/msg/admin/topics/{topic_id}/enable",
+        session=uow.session,
     )
     return ApiResponse.ok(_item(updated))
 
 
 async def _audit_write(
-    sink: AuditEmitter,
+    sink: AuditSink,
     *,
     action: str,
     method: str,
@@ -614,6 +720,7 @@ async def _audit_write(
     topic_name: str,
     params: ConcurrentStableDict[str, object],
     path: str = "/api/v1/msg/admin/topics",
+    session: DbSession | None = None,
 ) -> None:
     """写一条主题写操作审计（配置变更，强审计；失败即接口失败）。
 
@@ -626,9 +733,10 @@ async def _audit_write(
         topic_name: 主题名。
         params: 载荷（含变更前后值与影响范围）。
         path: 实际请求路径。
+        session: 业务会话（给出则审计与业务同事务）。
     """
     await emit_sensitive(
-        sink,
+        cast("AuditEmitter", sink),
         action=action,
         tenant_id=tenant_id,
         params=params,
@@ -636,4 +744,5 @@ async def _audit_write(
         path=path,
         module_key=namespace,
         resource_key=topic_name,
+        session=session,
     )

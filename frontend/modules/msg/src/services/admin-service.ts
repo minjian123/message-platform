@@ -250,6 +250,42 @@ export async function deleteTopic(topicId: string): Promise<TopicCleanupView> {
 }
 
 /**
+ * 停用主题（只停数据面）。
+ *
+ * @param topicId 主题主键。
+ * @returns 更新后的主题。
+ */
+export async function disableTopic(topicId: string): Promise<TopicItem> {
+  const data = await postData<Schema['TopicItem']>(`/admin/topics/${topicId}/disable`, {})
+  return requiredData(data)
+}
+
+/**
+ * 启用主题。
+ *
+ * @param topicId 主题主键。
+ * @returns 更新后的主题。
+ */
+export async function enableTopic(topicId: string): Promise<TopicItem> {
+  const data = await postData<Schema['TopicItem']>(`/admin/topics/${topicId}/enable`, {})
+  return requiredData(data)
+}
+
+/**
+ * 删除一条消息（墓碑标记）。
+ *
+ * @param logId 记录 ID。
+ * @returns 删除结果。
+ */
+export async function deleteMessage(logId: string): Promise<Schema['MessageDeleteResult']> {
+  const data = await postData<Schema['MessageDeleteResult']>(
+    `/admin/messages/${encodeURIComponent(logId)}/delete`,
+    {},
+  )
+  return requiredData(data)
+}
+
+/**
  * 扩分区（只增不减；后端复核 `350009`）。
  *
  * @param topicId 主题主键。

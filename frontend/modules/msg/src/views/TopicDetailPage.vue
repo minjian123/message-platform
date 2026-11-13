@@ -11,6 +11,7 @@ import {
   ElFormItem,
   ElInputNumber,
   ElMessage,
+  ElMessageBox,
   ElTable,
   ElTableColumn,
 } from 'element-plus'
@@ -28,6 +29,8 @@ import { message } from '../i18n/messages'
 import { hostPermissions } from '../runtime'
 import {
   deleteTopic,
+  disableTopic,
+  enableTopic,
   expandPartitions,
   fetchDeleteImpact,
   fetchTopicDetail,
@@ -293,6 +296,35 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
+/** 停用 / 启用（按当前状态二选一；确认后直接提交）。 */
+async function toggleStatus(): Promise<void> {
+  const current = detail.value
+  if (current === null) {
+    return
+  }
+  const disabling = current.status !== 'disabled'
+  try {
+    await ElMessageBox.confirm(
+      message(disabling ? 'msg.admin.topics.disableConfirm' : 'msg.admin.topics.enableConfirm'),
+      message('msg.admin.common.confirm'),
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    if (disabling) {
+      await disableTopic(params.topicId ?? '')
+    } else {
+      await enableTopic(params.topicId ?? '')
+    }
+    ElMessage.success(message('msg.admin.common.done'))
+    await load()
+  } catch (error) {
+    detailError.value = message(errorKeyOf(errorCodeOf(error)))
+  }
+}
+
 // 详情到手即回填两个表单的初值：不在 `open*` 里重复判空，避免出现「永远走不到」的兜底分支。
 watch(
   detail,
@@ -319,6 +351,9 @@ onUnmounted(stopPolling)
         <el-button data-test="topic-expand" @click="openExpand">{{ message('msg.admin.topics.expand.title') }}</el-button>
         <el-button data-test="topic-retention" @click="openRetention">
           {{ message('msg.admin.topics.retention.title') }}
+        </el-button>
+        <el-button data-test="topic-toggle-status" @click="toggleStatus">
+          {{ message(detail.status === 'disabled' ? 'msg.admin.topics.enable' : 'msg.admin.topics.disable') }}
         </el-button>
         <el-button type="danger" plain data-test="topic-delete" @click="openDelete">
           {{ message('msg.admin.topics.delete.title') }}

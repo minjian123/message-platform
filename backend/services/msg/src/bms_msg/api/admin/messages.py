@@ -9,26 +9,42 @@ from datetime import datetime
 from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
-from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
+from bms_core.core.exceptions import ParamError
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Query
 
-from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
-from bms_msg.api.deps import CurrentTenantDep, MessageStoreDep, TopicAclServiceDep
+from bms_msg.acl.keys import ACL_ACTION_DESCRIBE, ACL_ACTION_MANAGE
+from bms_msg.api.deps import AuditSinkDep, CurrentTenantDep, MessageStoreDep, TopicAclServiceDep
+from bms_msg.audit.trail import (
+    MESSAGE_DELETE_ACTION,
+    MESSAGE_SEARCH_ACTION,
+    AuditEmitter,
+    emit_record_operation,
+    emit_sensitive,
+)
 from bms_msg.broker.admin_view import MessageInspector
-from bms_msg.broker.log import MessageHeaderView
+from bms_msg.broker.log import MessageHeaderView, MessageStore
+from bms_msg.broker.replay import AuditSink
 from bms_msg.broker.router import TopicRouter
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import TopicRepository
-from bms_msg.schemas.admin_view import MessageItem, MessagePage
+from bms_msg.schemas.admin_view import (
+    MessageDeleteBatchRequest,
+    MessageDeleteItem,
+    MessageDeleteResult,
+    MessageItem,
+    MessagePage,
+)
 from bms_msg.services.topic import MAX_LIST_SIZE
 
 __all__ = ["router"]
 
 _QUERY = Depends(require_permission("msg:query"))
+_MANAGE = Depends(require_permission("msg:manage"))
 
 _QUERY_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
@@ -39,6 +55,17 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.ACL_DENIED),
 ]
 """只读端点声明的产品错误码（`10001` 属契约层，不进本表）。"""
+
+_MANAGE_ERRORS = [
+    int(MsgErrorCode.TOPIC_NOT_FOUND),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
+]
+"""删消息端点声明的产品错误码（`10001` 属契约层）。"""
+
+MAX_DELETE_BATCH = 100
+"""批量删消息的单次上限。"""
 
 router = BaseRouter(
     key="msg_admin_messages",
@@ -98,6 +125,7 @@ async def search_messages(
     uow: PlatformUowDep,
     messages: MessageStoreDep,
     acl: TopicAclServiceDep,
+    sink: AuditSinkDep,
     namespace: Annotated[str, Query(max_length=64, description="命名空间")],
     topic: Annotated[str, Query(max_length=200, description="主题名")],
     partition: Annotated[int | None, Query(description="分区号过滤（缺省全部）")] = None,
@@ -131,13 +159,146 @@ async def search_messages(
         size=size,
     )
     items: ConcurrentStableList[MessageItem] = ConcurrentStableList(_admin_item(view) for view in views)
+    page_result = MessagePage(
+        namespace=namespace,
+        topic=topic,
+        total=total,
+        page=page,
+        size=size,
+        items=items,
+    )
+    await emit_sensitive(
+        cast("AuditEmitter", sink),
+        action=MESSAGE_SEARCH_ACTION,
+        tenant_id=int(tenant.tenant_id),
+        params=ConcurrentStableDict(
+            {
+                "namespace": namespace,
+                "topic": topic,
+                "partition": partition,
+                "log_id": log_id,
+                "page": page,
+                "size": size,
+                "matched": total,
+            }
+        ),
+        method="GET",
+        path="/api/v1/msg/admin/messages",
+        module_key=namespace,
+        resource_key=topic,
+        session=uow.session,
+    )
+    return ApiResponse.ok(page_result)
+
+
+async def _delete_one(
+    *,
+    messages: MessageStore,
+    uow: UnitOfWork,
+    tenant: CurrentTenantDep,
+    acl: TopicAclServiceDep,
+    sink: AuditSink,
+    log_id: str,
+) -> str:
+    """删除一条消息（墓碑标记）并写审计。
+
+    Args:
+        messages: 消息存储。
+        uow: 平台库工作单元（主题元数据与审计同事务）。
+        tenant: 当前租户。
+        acl: 主题授权服务。
+        sink: 审计出口。
+        log_id: 记录 ID。
+
+    Returns:
+        str: `deleted` / `not_found` / `already_deleted`。
+
+    Raises:
+        InternalError: 强审计写入失败（业务回滚）。
+    """
+    view = await messages.find_by_log_id(log_id=log_id)
+    if view is None:
+        return "not_found"
+    topic_row = await TopicRepository(cast("DbSession", uow.session)).get(int(view.topic_id))
+    if topic_row is None:
+        return "not_found"
+    await acl.authorize(
+        tenant_id=int(tenant.tenant_id),
+        namespace=topic_row.namespace,
+        topic=topic_row.name,
+        action=ACL_ACTION_MANAGE,
+    )
+    deleted = await messages.delete(topic_id=int(view.topic_id), partition_no=int(view.partition_no), log_id=log_id)
+    result = "deleted" if deleted else "not_found"
+    if deleted:
+        await emit_record_operation(
+            cast("AuditEmitter", sink),
+            action=MESSAGE_DELETE_ACTION,
+            tenant_id=int(tenant.tenant_id),
+            log_id=log_id,
+            params=ConcurrentStableDict({"partition": int(view.partition_no), "offset": int(view.offset)}),
+            method="POST",
+            path=f"/api/v1/msg/admin/messages/{log_id}/delete",
+            module_key=topic_row.namespace,
+            resource_key=topic_row.name,
+            session=uow.session,
+        )
+    return result
+
+
+@router.post("/{log_id}/delete", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _MANAGE_ERRORS})
+async def delete_message(
+    log_id: str,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    messages: MessageStoreDep,
+    acl: TopicAclServiceDep,
+    sink: AuditSinkDep,
+    confirm: Annotated[bool, Query(description="显式确认（必须为 true）")] = False,
+) -> ApiResponse[MessageDeleteResult]:
+    """删除一条消息（墓碑标记；位点与 LEO 不变）。
+
+    需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；
+    记录不存在或已删除返回 `not_found`（不报 500）。
+    """
+    if not confirm:
+        raise ParamError("高危写操作须显式确认（confirm=true）")
+    result = await _delete_one(messages=messages, uow=uow, tenant=tenant, acl=acl, sink=sink, log_id=log_id)
+    item = MessageDeleteItem(log_id=log_id, result=result)
     return ApiResponse.ok(
-        MessagePage(
-            namespace=namespace,
-            topic=topic,
-            total=total,
-            page=page,
-            size=size,
-            items=items,
+        MessageDeleteResult(
+            items=ConcurrentStableList([item]),
+            deleted=1 if result == "deleted" else 0,
+            not_found=0 if result == "deleted" else 1,
         )
     )
+
+
+@router.post("/delete", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _MANAGE_ERRORS})
+async def delete_messages(
+    req: MessageDeleteBatchRequest,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    messages: MessageStoreDep,
+    acl: TopicAclServiceDep,
+    sink: AuditSinkDep,
+) -> ApiResponse[MessageDeleteResult]:
+    """批量删除消息（逐条墓碑标记；一次最多 100 条）。
+
+    需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失或批量超限 10001。
+    """
+    if not req.confirm:
+        raise ParamError("高危写操作须显式确认（confirm=true）")
+    if len(req.log_ids) > MAX_DELETE_BATCH:
+        raise ParamError(f"批量删除上限 {MAX_DELETE_BATCH} 条：{len(req.log_ids)}")
+    items: ConcurrentStableList[MessageDeleteItem] = ConcurrentStableList()
+    deleted = 0
+    not_found = 0
+    for log_id in req.log_ids:
+        result = await _delete_one(messages=messages, uow=uow, tenant=tenant, acl=acl, sink=sink, log_id=log_id)
+        items.add(MessageDeleteItem(log_id=log_id, result=result))
+        if result == "deleted":
+            deleted += 1
+        else:
+            not_found += 1
+    return ApiResponse.ok(MessageDeleteResult(items=items, deleted=deleted, not_found=not_found))

@@ -32,14 +32,17 @@ from bms_msg.api.deps import (
 )
 from bms_msg.audit.trail import (
     DLQ_ARCHIVE_ACTION,
+    DLQ_DETAIL_ACTION,
     DLQ_IGNORE_ACTION,
     DLQ_REPLAY_ACTION,
+    AuditEmitter,
     emit_record_operation,
+    emit_sensitive,
 )
 from bms_msg.broker.log import MessageStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayService
 from bms_msg.broker.router import TopicRouter
-from bms_msg.errors import MsgDeadLetterNotReplayableError, MsgErrorCode
+from bms_msg.errors import MsgDeadLetterInvalidStateError, MsgDeadLetterNotReplayableError, MsgErrorCode
 from bms_msg.models.dead_letter import MsgDeadLetter
 from bms_msg.repositories.dead_letter import DeadLetterRepository
 from bms_msg.repositories.replay import ReplayTaskRepository
@@ -282,6 +285,7 @@ async def get_dead_letter(
     tenant: CurrentTenantDep,
     uow: PlatformUowDep,
     acl: TopicAclServiceDep,
+    sink: AuditSinkDep,
 ) -> ApiResponse[DlqDetail]:
     """死信详情（含失败上下文）。
 
@@ -290,6 +294,17 @@ async def get_dead_letter(
     row = await _service(uow).detail(item_id=dlq_id, tenant_id=int(tenant.tenant_id))
     await acl.authorize(
         tenant_id=int(tenant.tenant_id), namespace=row.namespace, topic=row.topic, action=ACL_ACTION_DESCRIBE
+    )
+    await emit_sensitive(
+        cast("AuditEmitter", sink),
+        action=DLQ_DETAIL_ACTION,
+        tenant_id=int(tenant.tenant_id),
+        params=ConcurrentStableDict({"dlq_id": str(row.id), "log_id": row.log_id}),
+        method="GET",
+        path=f"{_BASE_PATH}/{dlq_id}",
+        module_key=row.namespace,
+        resource_key=row.topic,
+        session=uow.session,
     )
     return ApiResponse.ok(_detail(row))
 
@@ -343,19 +358,29 @@ async def replay_dead_letter(
         ),
     )
     actor_id = get_current_user_id()
+    replay_task_id = int(task.id)
     await ReplayAuditor(sink=sink).record_created(
         task=task, actor_id=actor_id, ip=get_current_client_ip(), trace_id=get_current_trace_id()
     )
-    status = await _service(uow).mark_replaying(
-        item_id=item_id, tenant_id=int(tenant.tenant_id), replay_task_id=int(task.id)
-    )
+    service = _replay_service(uow, store, build_impact_inspector(groups=groups, offsets=offsets, messages=store))
+    try:
+        status = await _service(uow).mark_replaying(
+            item_id=item_id, tenant_id=int(tenant.tenant_id), replay_task_id=replay_task_id
+        )
+    except MsgDeadLetterInvalidStateError:
+        # 并发已被他人处置：取消刚建的任务，避免留下孤儿（best-effort，失败只记日志）
+        try:
+            await service.cancel(tenant=tenant, task_id=replay_task_id)
+        except Exception as exc:  # pragma: no cover - 补偿失败不掩盖原始错误
+            _LOGGER.error("msg_dlq_replay_orphan_task", task_id=str(replay_task_id), error=repr(exc))
+        raise
     await emit_record_operation(
         sink,
         action=DLQ_REPLAY_ACTION,
         tenant_id=tenant.tenant_id,
         log_id=log_id,
         params=ConcurrentStableDict(
-            {"reason": "manual_replay", "rate_per_second": req.rate_per_second, "replay_task_id": str(task.id)}
+            {"reason": "manual_replay", "rate_per_second": req.rate_per_second, "replay_task_id": str(replay_task_id)}
         ),
         method="POST",
         path=f"{_BASE_PATH}/{dlq_id}/replay",
@@ -364,7 +389,7 @@ async def replay_dead_letter(
         user_id=actor_id,
     )
     runner.ensure_started()
-    return ApiResponse.ok(DlqDisposeResult(id=item_id, status=status, replay_task_id=int(task.id)))
+    return ApiResponse.ok(DlqDisposeResult(id=item_id, status=status, replay_task_id=replay_task_id))
 
 
 @router.post("/{dlq_id}/ignore", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _MANAGE_ERRORS})

@@ -14,6 +14,9 @@ from pydantic import Field
 __all__ = [
     "DelaySummary",
     "LevelBucket",
+    "MessageDeleteBatchRequest",
+    "MessageDeleteItem",
+    "MessageDeleteResult",
     "MessageItem",
     "MessagePage",
     "Overview",
@@ -80,6 +83,28 @@ class MessagePage(BaseSchema):
     items: Annotated[ConcurrentStableList[MessageItem], CONTRACT_COLLECTION] = Field(
         description="当页消息头（按分区号、offset 升序）"
     )
+
+
+class MessageDeleteItem(BaseSchema):
+    """单条删消息结果。"""
+
+    log_id: str = Field(description="记录 ID")
+    result: str = Field(description="结果：deleted / not_found / already_deleted")
+
+
+class MessageDeleteResult(BaseSchema):
+    """删消息结果（单条与批量共用）。"""
+
+    items: Annotated[ConcurrentStableList[MessageDeleteItem], CONTRACT_COLLECTION]
+    deleted: int = Field(description="本次删除条数")
+    not_found: int = Field(description="不存在或已删除条数")
+
+
+class MessageDeleteBatchRequest(BaseSchema):
+    """批量删消息请求。"""
+
+    log_ids: Annotated[ConcurrentStableList[str], CONTRACT_COLLECTION] = Field(description="记录 ID 列表（≤ 100）")
+    confirm: bool = Field(default=False, description="显式确认（必须为 true）")
 
 
 class Overview(BaseSchema):

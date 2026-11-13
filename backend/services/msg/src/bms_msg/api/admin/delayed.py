@@ -11,6 +11,8 @@ from typing import Annotated, cast
 
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
+from bms_core.core.context import get_current_client_ip, get_current_trace_id, get_current_user_id
+from bms_core.core.exceptions import ParamError
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
 from bms_core.permission.base import require_permission
@@ -18,17 +20,23 @@ from bms_core.schemas.common import ApiResponse
 from fastapi import Depends, Query
 
 from bms_msg.acl.keys import ACL_ACTION_DESCRIBE
-from bms_msg.api.deps import CurrentTenantDep, DelayStoreDep, TopicAclServiceDep
+from bms_msg.api.deps import (
+    CurrentTenantDep,
+    DelayDisposalDep,
+    DelayStoreDep,
+    TopicAclServiceDep,
+)
 from bms_msg.broker.delay import DelayedRow, DelayInspector, DelayStore
 from bms_msg.broker.router import TopicRouter
 from bms_msg.errors import MsgErrorCode
 from bms_msg.repositories.topic import TopicRepository
-from bms_msg.schemas.delay import DelayedItem, DelayedPage
+from bms_msg.schemas.delay import DelayDiscardRequest, DelayDiscardResult, DelayedItem, DelayedPage
 from bms_msg.services.topic import MAX_LIST_SIZE
 
 __all__ = ["router"]
 
 _QUERY = Depends(require_permission("msg:query"))
+_MANAGE = Depends(require_permission("msg:manage"))
 
 _QUERY_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
@@ -38,6 +46,14 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.TENANT_NOT_FOUND),
 ]
 """查询端点声明的错误码（`x-error-codes`）。"""
+
+_MANAGE_ERRORS = [
+    int(MsgErrorCode.MESSAGE_NOT_FOUND),
+    int(MsgErrorCode.TENANT_SUSPENDED),
+    int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
+]
+"""延迟丢弃端点声明的错误码（`x-error-codes`）。"""
 
 router = BaseRouter(
     key="msg_admin_delayed",
@@ -148,3 +164,30 @@ async def list_delayed(
             size=size,
         )
     )
+
+
+@router.post("/{log_id}/discard", dependencies=[_MANAGE], openapi_extra={"x-error-codes": _MANAGE_ERRORS})
+async def discard_delayed(
+    log_id: str,
+    req: DelayDiscardRequest,
+    tenant: CurrentTenantDep,
+    uow: PlatformUowDep,
+    disposal: DelayDisposalDep,
+    confirm: Annotated[bool, Query(description="显式确认（必须为 true）")] = False,
+) -> ApiResponse[DelayDiscardResult]:
+    """丢弃一条延迟记录（未到期也丢弃；强审计失败即恢复）。
+
+    需要 msg:manage 权限；`confirm` 缺失 / 原因为空 10001；记录不存在或已转投 350003。
+    """
+    if not confirm:
+        raise ParamError("高危写操作须显式确认（confirm=true）")
+    discarded = await disposal.discard(
+        tenant_id=int(tenant.tenant_id),
+        log_id=log_id,
+        reason=req.reason,
+        actor_id=get_current_user_id(),
+        ip=get_current_client_ip(),
+        trace_id=get_current_trace_id(),
+        session=uow.session,
+    )
+    return ApiResponse.ok(DelayDiscardResult(log_id=log_id, discarded=discarded))

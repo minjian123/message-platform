@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """主题服务（msg 任务 01-1；Kiwi 2412）。
 
 覆盖：创建（成功 / 重名 / 分区数越界 / 保留期越界 / 命名空间非法 / 主题名非法）、查询（成功 / 不存在）、
@@ -234,3 +235,23 @@ async def test_create_and_expand_write_assignments(
     assert [partition.partition_no for partition in expanded] == [0, 1, 2, 3]
     assert [list(partition.replicas)[:1] for partition in expanded[:2]] == [[first[0][0]], [first[1][0]]]
     assert all(len(partition.replicas) == 2 for partition in expanded[2:])
+
+
+@pytest.mark.kiwi_id(2495)
+async def test_create_topic_integrity_error_maps_to_350008(
+    service: TopicService,
+    current_tenant: CurrentTenant,
+    make_request: MakeRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发同名（唯一约束 IntegrityError）兜底为 350008，不透出 500。"""
+    from sqlalchemy.exc import IntegrityError
+
+    async def _raise(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise IntegrityError("INSERT", {}, Exception("duplicate"))
+
+    monkeypatch.setattr(service._topics, "create", _raise)
+    with pytest.raises(MsgTopicExistsError) as excinfo:
+        await service.create_topic(tenant=current_tenant, request=make_request())
+    assert excinfo.value.code == int(MsgErrorCode.TOPIC_EXISTS)

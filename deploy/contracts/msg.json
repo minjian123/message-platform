@@ -556,6 +556,33 @@
         "title": "ApiResponse[ConsumeResult]",
         "type": "object"
       },
+      "ApiResponse_DelayDiscardResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelayDiscardResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[DelayDiscardResult]",
+        "type": "object"
+      },
       "ApiResponse_DelaySummary_": {
         "additionalProperties": false,
         "properties": {
@@ -824,6 +851,33 @@
           }
         },
         "title": "ApiResponse[MemberAssignment]",
+        "type": "object"
+      },
+      "ApiResponse_MessageDeleteResult_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageDeleteResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[MessageDeleteResult]",
         "type": "object"
       },
       "ApiResponse_MessagePage_": {
@@ -1691,6 +1745,46 @@
           }
         },
         "title": "ConsumeResult",
+        "type": "object"
+      },
+      "DelayDiscardRequest": {
+        "additionalProperties": false,
+        "description": "丢弃延迟记录请求。",
+        "properties": {
+          "reason": {
+            "description": "处置原因（必填）",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "DelayDiscardRequest",
+        "type": "object"
+      },
+      "DelayDiscardResult": {
+        "additionalProperties": false,
+        "description": "丢弃延迟记录结果。",
+        "properties": {
+          "discarded": {
+            "description": "是否丢弃成功",
+            "title": "Discarded",
+            "type": "boolean"
+          },
+          "log_id": {
+            "description": "记录 ID",
+            "title": "Log Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_id",
+          "discarded"
+        ],
+        "title": "DelayDiscardResult",
         "type": "object"
       },
       "DelayLevel": {
@@ -2761,6 +2855,83 @@
           "consumer_id"
         ],
         "title": "MemberRequest",
+        "type": "object"
+      },
+      "MessageDeleteBatchRequest": {
+        "additionalProperties": false,
+        "description": "批量删消息请求。",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "description": "显式确认（必须为 true）",
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "log_ids": {
+            "description": "记录 ID 列表（≤ 100）",
+            "items": {
+              "type": "string"
+            },
+            "title": "Log Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "log_ids"
+        ],
+        "title": "MessageDeleteBatchRequest",
+        "type": "object"
+      },
+      "MessageDeleteItem": {
+        "additionalProperties": false,
+        "description": "单条删消息结果。",
+        "properties": {
+          "log_id": {
+            "description": "记录 ID",
+            "title": "Log Id",
+            "type": "string"
+          },
+          "result": {
+            "description": "结果：deleted / not_found / already_deleted",
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_id",
+          "result"
+        ],
+        "title": "MessageDeleteItem",
+        "type": "object"
+      },
+      "MessageDeleteResult": {
+        "additionalProperties": false,
+        "description": "删消息结果（单条与批量共用）。",
+        "properties": {
+          "deleted": {
+            "description": "本次删除条数",
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MessageDeleteItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "not_found": {
+            "description": "不存在或已删除条数",
+            "title": "Not Found",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "deleted",
+          "not_found"
+        ],
+        "title": "MessageDeleteResult",
         "type": "object"
       },
       "MessagePage": {
@@ -4110,9 +4281,9 @@
         "description": "创建主题请求（`tenant_id` **不在请求体**：由基座解析链注入，防客户端自报冒充）。",
         "properties": {
           "cleanup_policy": {
+            "const": "delete",
             "default": "delete",
-            "description": "清理策略（首期只支持 delete）",
-            "maxLength": 16,
+            "description": "清理策略（首期只支持 delete；其它值按参数非法拒绝）",
             "title": "Cleanup Policy",
             "type": "string"
           },
@@ -5960,6 +6131,127 @@
         ]
       }
     },
+    "/api/v1/msg/admin/delayed/{log_id}/discard": {
+      "post": {
+        "description": "丢弃一条延迟记录（未到期也丢弃；强审计失败即恢复）。\n\n需要 msg:manage 权限；`confirm` 缺失 / 原因为空 10001；记录不存在或已转投 350003。",
+        "operationId": "discard_delayed_api_v1_msg_admin_delayed__log_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "log_id",
+            "required": true,
+            "schema": {
+              "title": "Log Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "显式确认（必须为 true）",
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "显式确认（必须为 true）",
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DelayDiscardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_DelayDiscardResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Discard Delayed",
+        "tags": [
+          "msg-admin-delayed"
+        ],
+        "x-error-codes": [
+          350003,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
     "/api/v1/msg/admin/dlq": {
       "get": {
         "description": "死信列表（默认排除已归档）。\n\n需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。\n\nRaises:\n    ParamError: 失败时间区间倒置（10001）。",
@@ -7211,6 +7503,215 @@
           350001,
           350009,
           350010,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
+    "/api/v1/msg/admin/messages/delete": {
+      "post": {
+        "description": "批量删除消息（逐条墓碑标记；一次最多 100 条）。\n\n需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失或批量超限 10001。",
+        "operationId": "delete_messages_api_v1_msg_admin_messages_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageDeleteBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MessageDeleteResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Delete Messages",
+        "tags": [
+          "msg-admin-messages"
+        ],
+        "x-error-codes": [
+          350001,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
+    "/api/v1/msg/admin/messages/{log_id}/delete": {
+      "post": {
+        "description": "删除一条消息（墓碑标记；位点与 LEO 不变）。\n\n需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；\n记录不存在或已删除返回 `not_found`（不报 500）。",
+        "operationId": "delete_message_api_v1_msg_admin_messages__log_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "log_id",
+            "required": true,
+            "schema": {
+              "title": "Log Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "显式确认（必须为 true）",
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "显式确认（必须为 true）",
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MessageDeleteResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Delete Message",
+        "tags": [
+          "msg-admin-messages"
+        ],
+        "x-error-codes": [
+          350001,
           350011,
           350012,
           350027
@@ -9224,6 +9725,224 @@
         ],
         "x-error-codes": [
           350001,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
+    "/api/v1/msg/admin/topics/{topic_id}/disable": {
+      "post": {
+        "description": "停用主题（**只停数据面**：发布 / 消费 350028；管理面查询与写操作照常）。\n\n需要 msg:manage 权限；`confirm` 缺失 10001；主题不存在 350001；`deleting` 状态 350028；\n重复停用幂等返回 200。",
+        "operationId": "disable_topic_api_v1_msg_admin_topics__topic_id__disable_post",
+        "parameters": [
+          {
+            "description": "主题 ID（雪花）",
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "description": "主题 ID（雪花）",
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "显式确认（必须为 true）",
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "显式确认（必须为 true）",
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TopicItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Disable Topic",
+        "tags": [
+          "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350001,
+          350028,
+          350009,
+          350011,
+          350012,
+          350027
+        ]
+      }
+    },
+    "/api/v1/msg/admin/topics/{topic_id}/enable": {
+      "post": {
+        "description": "启用主题（数据面恢复；重复启用幂等返回 200）。\n\n需要 msg:manage 权限；主题不存在 350001；`deleting` 状态 350028。",
+        "operationId": "enable_topic_api_v1_msg_admin_topics__topic_id__enable_post",
+        "parameters": [
+          {
+            "description": "主题 ID（雪花）",
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "description": "主题 ID（雪花）",
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TopicItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Enable Topic",
+        "tags": [
+          "msg-admin-topics"
+        ],
+        "x-error-codes": [
+          350001,
+          350028,
+          350009,
           350011,
           350012,
           350027

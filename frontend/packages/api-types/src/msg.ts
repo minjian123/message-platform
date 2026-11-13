@@ -182,6 +182,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/msg/admin/delayed/{log_id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discard Delayed
+         * @description 丢弃一条延迟记录（未到期也丢弃；强审计失败即恢复）。
+         *
+         *     需要 msg:manage 权限；`confirm` 缺失 / 原因为空 10001；记录不存在或已转投 350003。
+         */
+        post: operations["discard_delayed_api_v1_msg_admin_delayed__log_id__discard_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/msg/admin/dlq": {
         parameters: {
             query?: never;
@@ -356,6 +378,51 @@ export interface paths {
         get: operations["search_messages_api_v1_msg_admin_messages_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/messages/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Messages
+         * @description 批量删除消息（逐条墓碑标记；一次最多 100 条）。
+         *
+         *     需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失或批量超限 10001。
+         */
+        post: operations["delete_messages_api_v1_msg_admin_messages_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/messages/{log_id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Message
+         * @description 删除一条消息（墓碑标记；位点与 LEO 不变）。
+         *
+         *     需要 msg:manage 权限 + 主题级 `manage`；`confirm` 缺失 10001；
+         *     记录不存在或已删除返回 `not_found`（不报 500）。
+         */
+        post: operations["delete_message_api_v1_msg_admin_messages__log_id__delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -706,6 +773,51 @@ export interface paths {
         get: operations["topic_delete_impact_api_v1_msg_admin_topics__topic_id__delete_impact_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/topics/{topic_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable Topic
+         * @description 停用主题（**只停数据面**：发布 / 消费 350028；管理面查询与写操作照常）。
+         *
+         *     需要 msg:manage 权限；`confirm` 缺失 10001；主题不存在 350001；`deleting` 状态 350028；
+         *     重复停用幂等返回 200。
+         */
+        post: operations["disable_topic_api_v1_msg_admin_topics__topic_id__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/msg/admin/topics/{topic_id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable Topic
+         * @description 启用主题（数据面恢复；重复启用幂等返回 200）。
+         *
+         *     需要 msg:manage 权限；主题不存在 350001；`deleting` 状态 350028。
+         */
+        post: operations["enable_topic_api_v1_msg_admin_topics__topic_id__enable_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1683,6 +1795,20 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[DelayDiscardResult] */
+        ApiResponse_DelayDiscardResult_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["DelayDiscardResult"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[DelaySummary] */
         ApiResponse_DelaySummary_: {
             /**
@@ -1817,6 +1943,20 @@ export interface components {
              */
             code: number;
             data?: components["schemas"]["MemberAssignment"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
+        /** ApiResponse[MessageDeleteResult] */
+        ApiResponse_MessageDeleteResult_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["MessageDeleteResult"] | null;
             /**
              * Message
              * @default ok
@@ -2369,6 +2509,33 @@ export interface components {
              * @default false
              */
             paused: boolean;
+        };
+        /**
+         * DelayDiscardRequest
+         * @description 丢弃延迟记录请求。
+         */
+        DelayDiscardRequest: {
+            /**
+             * Reason
+             * @description 处置原因（必填）
+             */
+            reason: string;
+        };
+        /**
+         * DelayDiscardResult
+         * @description 丢弃延迟记录结果。
+         */
+        DelayDiscardResult: {
+            /**
+             * Discarded
+             * @description 是否丢弃成功
+             */
+            discarded: boolean;
+            /**
+             * Log Id
+             * @description 记录 ID
+             */
+            log_id: string;
         };
         /**
          * DelayLevel
@@ -3110,6 +3277,57 @@ export interface components {
              * @description 主题名（与创建主题时的 name 同值）
              */
             topic: string;
+        };
+        /**
+         * MessageDeleteBatchRequest
+         * @description 批量删消息请求。
+         */
+        MessageDeleteBatchRequest: {
+            /**
+             * Confirm
+             * @description 显式确认（必须为 true）
+             * @default false
+             */
+            confirm: boolean;
+            /**
+             * Log Ids
+             * @description 记录 ID 列表（≤ 100）
+             */
+            log_ids: string[];
+        };
+        /**
+         * MessageDeleteItem
+         * @description 单条删消息结果。
+         */
+        MessageDeleteItem: {
+            /**
+             * Log Id
+             * @description 记录 ID
+             */
+            log_id: string;
+            /**
+             * Result
+             * @description 结果：deleted / not_found / already_deleted
+             */
+            result: string;
+        };
+        /**
+         * MessageDeleteResult
+         * @description 删消息结果（单条与批量共用）。
+         */
+        MessageDeleteResult: {
+            /**
+             * Deleted
+             * @description 本次删除条数
+             */
+            deleted: number;
+            /** Items */
+            items: components["schemas"]["MessageDeleteItem"][];
+            /**
+             * Not Found
+             * @description 不存在或已删除条数
+             */
+            not_found: number;
         };
         /**
          * MessagePage
@@ -3905,10 +4123,11 @@ export interface components {
         TopicCreateRequest: {
             /**
              * Cleanup Policy
-             * @description 清理策略（首期只支持 delete）
+             * @description 清理策略（首期只支持 delete；其它值按参数非法拒绝）
              * @default delete
+             * @constant
              */
-            cleanup_policy: string;
+            cleanup_policy: "delete";
             /**
              * Name
              * @description 主题名（建议 {域}.{对象}.{动作}）
@@ -5020,6 +5239,89 @@ export interface operations {
             };
         };
     };
+    discard_delayed_api_v1_msg_admin_delayed__log_id__discard_post: {
+        parameters: {
+            query?: {
+                /** @description 显式确认（必须为 true） */
+                confirm?: boolean;
+            };
+            header?: never;
+            path: {
+                log_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DelayDiscardRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_DelayDiscardResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
     list_dead_letters_api_v1_msg_admin_dlq_get: {
         parameters: {
             query?: {
@@ -5636,6 +5938,163 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_MessagePage_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    delete_messages_api_v1_msg_admin_messages_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageDeleteBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_MessageDeleteResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    delete_message_api_v1_msg_admin_messages__log_id__delete_post: {
+        parameters: {
+            query?: {
+                /** @description 显式确认（必须为 true） */
+                confirm?: boolean;
+            };
+            header?: never;
+            path: {
+                log_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_MessageDeleteResult_"];
                 };
             };
             /** @description 未认证 */
@@ -7033,6 +7492,163 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_DeleteImpact_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    disable_topic_api_v1_msg_admin_topics__topic_id__disable_post: {
+        parameters: {
+            query?: {
+                /** @description 显式确认（必须为 true） */
+                confirm?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TopicItem_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    enable_topic_api_v1_msg_admin_topics__topic_id__enable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 主题 ID（雪花） */
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_TopicItem_"];
                 };
             };
             /** @description 未认证 */
