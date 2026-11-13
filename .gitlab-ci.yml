@@ -133,6 +133,8 @@ backend-test:
     BMS_ENV: test
     # 覆盖率采集口径：与本地预检同源——`engkit.coverage_plugin` 按 `MSG_COVERAGE_DATA` 落盘
     # （xdist worker 各落 `<基址>.<pid>`），再由 `engkit coverage` 合并判定，不用 `pytest --cov`。
+    # 门禁范围**只含产品代码**：`services` 下 3 个产品模块逐个列出（测试包 `services/msg/tests` 不计入，
+    # 2026-11-14 拍板——覆盖率口径是「产品代码 100%」，测试代码不自我测量）；新增 `services/*.py` 时同步登记。
     MSG_COVERAGE_DATA: $CI_PROJECT_DIR/backend/.cache/coverage/.coverage
     MSG_COVERAGE_SOURCE: bms_msg,services,ops
   script:
@@ -148,7 +150,8 @@ backend-test:
       --root "$CI_PROJECT_DIR"
       --data-file "$MSG_COVERAGE_DATA"
       --out "$CI_PROJECT_DIR/coverage.json"
-      --module bms_msg --module services --module ops
+      --module bms_msg --module ops
+      --module services.form_registry --module services.module_registry --module services.table_registry
       --fail-under 100
   coverage: '/percent=(\d+(?:\.\d+)?)/'
   artifacts:
