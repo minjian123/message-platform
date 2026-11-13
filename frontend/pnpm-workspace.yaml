@@ -10,3 +10,7 @@ allowBuilds:
 onlyBuiltDependencies:
   - '@parcel/watcher'
   - vue-demi
+# 传递依赖钉版（2026-11-14）：rolldown 由 vite 8 引入，msg 锁文件曾解析到 1.2.16、mdm 为 1.2.12；
+# Linux CI 上 1.2.16 对 MF 共享包装的 named-export 链接报 MISSING_EXPORT。与 mdm 已验证组合对齐。
+overrides:
+  rolldown: 1.2.12
