@@ -17,6 +17,7 @@ from bms_core.api.base import BaseRouter, mount_service_routers
 from bms_core.core.concurrent import ConcurrentStableList
 
 from bms_msg.api.admin import acls as admin_acls
+from bms_msg.api.admin import connections as admin_connections
 from bms_msg.api.admin import delayed as admin_delayed
 from bms_msg.api.admin import delayed_summary as admin_delayed_summary
 from bms_msg.api.admin import dlq as admin_dlq
@@ -55,6 +56,7 @@ api_router = mount_service_routers(
             admin_usage.router,
             admin_offsets.router,
             admin_dlq.router,
+            admin_connections.router,
         ]
     )
 )

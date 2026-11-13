@@ -419,3 +419,14 @@ async def test_permission_denied_blocks_dispose(client: AsyncClient, api_app: Fa
         "/api/v1/msg/admin/dlq/1/ignore", json={"confirm": True, "reason": "x"}, headers=DEMO_HEADERS
     )
     assert (response.status_code, _body(response)["code"]) == (403, 30001)
+
+
+@pytest.mark.kiwi_id(2493)
+async def test_list_rejects_reversed_time_range(client: AsyncClient) -> None:
+    """失败时间区间倒置：10001（06-1-4）。"""
+    response = await client.get(
+        "/api/v1/msg/admin/dlq",
+        params={"failed_from": "2026-02-01T00:00:00", "failed_to": "2026-01-01T00:00:00"},
+        headers=DEMO_HEADERS,
+    )
+    assert (response.status_code, response.json()["code"]) == (200, 10001)

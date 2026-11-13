@@ -64,7 +64,7 @@ class DlqList(BaseSchema):
     """死信分页响应。"""
 
     items: Annotated[ConcurrentStableList[DlqItem], CONTRACT_COLLECTION] = Field(description="当页死信")
-    total: int = Field(description="过滤后总数")
+    total: int = Field(description="过滤前总数")
     page: int = Field(description="页码")
     size: int = Field(description="每页条数")
 

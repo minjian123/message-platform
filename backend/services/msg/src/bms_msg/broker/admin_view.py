@@ -7,6 +7,7 @@
 否则会成为跨租户直读入口。
 """
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -248,37 +249,44 @@ class PartitionInspector(BaseFrameworkObject):
         for row in rows:
             leaders.set(int(row.partition_no), str(row.leader))
             epochs.set(int(row.partition_no), int(getattr(row, "epoch", 0) or 0))
-        result: ConcurrentStableList[PartitionView] = ConcurrentStableList()
-        for number in range(int(resolved.partition_count)):
-            if partition is not None and number != partition:
-                continue
-            leo = await self._messages.leo(topic_id=topic_id, partition_no=number)
-            committed: int | None = None
-            lag: int | None = None
-            owner: str | None = None
-            if record is not None:
-                committed = await self._offsets.get(group=group or "", topic_id=topic_id, partition_no=number)
-                lag = leo - committed
-                owner = record.owner_of(number)
-            snapshot = (
-                None
-                if self._replication is None
-                else await self._replication.snapshot(topic_id=topic_id, partition_no=number)
-            )
-            result.add(
-                PartitionView(
-                    partition_no=number,
-                    leader=snapshot.leader if snapshot is not None else leaders.get(number),
-                    leo=leo,
-                    committed=committed,
-                    lag=lag,
-                    owner=owner,
-                    hw=snapshot.hw if snapshot is not None else None,
-                    isr=ConcurrentStableList(snapshot.isr) if snapshot is not None else ConcurrentStableList(),
-                    epoch=snapshot.epoch if snapshot is not None else epochs.get(number, 0),
+        numbers: ConcurrentStableList[int] = ConcurrentStableList(
+            number for number in range(int(resolved.partition_count)) if partition is None or number == partition
+        )
+        semaphore = asyncio.Semaphore(32)
+
+        async def _view(number: int) -> PartitionView:
+            """取单个分区的投影（并发上限由信号量控制）。"""
+            async with semaphore:
+                leo = await self._messages.leo(topic_id=topic_id, partition_no=number)
+                committed: int | None = None
+                lag: int | None = None
+                owner: str | None = None
+                if record is not None:
+                    committed = await self._offsets.get(group=group or "", topic_id=topic_id, partition_no=number)
+                    lag = leo - committed
+                    owner = record.owner_of(number)
+                snapshot = (
+                    None
+                    if self._replication is None
+                    else await self._replication.snapshot(topic_id=topic_id, partition_no=number)
                 )
+            return PartitionView(
+                partition_no=number,
+                leader=snapshot.leader if snapshot is not None else leaders.get(number),
+                leo=leo,
+                committed=committed,
+                lag=lag,
+                owner=owner,
+                hw=snapshot.hw if snapshot is not None else None,
+                isr=ConcurrentStableList(snapshot.isr) if snapshot is not None else ConcurrentStableList(),
+                epoch=snapshot.epoch if snapshot is not None else epochs.get(number, 0),
             )
-        return PartitionDetailView(partition_count=int(resolved.partition_count), items=result)
+
+        views = await asyncio.gather(*(_view(number) for number in numbers))
+        return PartitionDetailView(
+            partition_count=int(resolved.partition_count),
+            items=ConcurrentStableList(views),
+        )
 
 
 class MessageInspector(BaseFrameworkObject):

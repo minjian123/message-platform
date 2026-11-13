@@ -70,11 +70,11 @@ class MessageItem(BaseSchema):
 
 
 class MessagePage(BaseSchema):
-    """消息检索分页（`total` 为过滤后总数）。"""
+    """消息检索分页（`total` 为过滤前总数）。"""
 
     namespace: str = Field(description="命名空间")
     topic: str = Field(description="主题名")
-    total: int = Field(description="过滤后总数")
+    total: int = Field(description="过滤前总数")
     page: int = Field(description="页码（从 1 起）")
     size: int = Field(description="每页条数")
     items: Annotated[ConcurrentStableList[MessageItem], CONTRACT_COLLECTION] = Field(
@@ -105,7 +105,7 @@ class DelaySummary(BaseSchema):
 
     namespace: str | None = Field(description="命名空间过滤值")
     topic: str | None = Field(description="主题过滤值")
-    total: int = Field(description="过滤后待投总条数")
+    total: int = Field(description="过滤前待投总条数")
     levels: Annotated[ConcurrentStableList[LevelBucket], CONTRACT_COLLECTION] = Field(
         description="九档分布（按档位声明序）"
     )

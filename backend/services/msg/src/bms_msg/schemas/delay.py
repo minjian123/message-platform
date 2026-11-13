@@ -28,11 +28,11 @@ class DelayedItem(BaseSchema):
 
 
 class DelayedPage(BaseSchema):
-    """待投列表分页（`total` 为过滤后总数）。"""
+    """待投列表分页（`total` 为过滤前总数）。"""
 
     items: Annotated[ConcurrentStableList[DelayedItem], CONTRACT_COLLECTION] = Field(
         description="当页延迟消息（到期时刻升序，最急的在前）"
     )
-    total: int = Field(description="过滤后总数")
+    total: int = Field(description="过滤前总数")
     page: int = Field(description="页码（从 1 起）")
     size: int = Field(description="每页条数")

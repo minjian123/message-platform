@@ -24,6 +24,7 @@ from bms_core.api.errors import build_error_response
 from bms_core.core.exceptions import BizError, ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
+from bms_core.error_mapper.base import apply_error_mapper
 from bms_core.msgclient.frame import (
     PROTOCOL_VERSION,
     Frame,
@@ -647,8 +648,11 @@ async def _handle_frame(
         ) from exc
     except BizError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
+        # 与 JSON 路径同源：按 `[[errcodes]].maps_from` 声明把基座码改写为产品码
+        # （如 82013 → 350027），避免两形态同码承诺落空。
+        mapped = apply_error_mapper(exc)
         raise FrameHandled(
-            _response(error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id))
+            _response(error_frame(code=mapped.code, message=mapped.message or str(mapped), request_id=request_id))
         ) from exc
     _log(frame_type=frame_type, request_id=request_id, request=request, outcome="ok")
     return _response(result_frame(frame_type=frame_type, request_id=request_id, result=result))

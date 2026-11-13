@@ -60,6 +60,7 @@ _RESET_ERRORS = [
     int(MsgErrorCode.OFFSET_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """位点重置端点声明的错误码（`x-error-codes`；`10001` 属契约层，不登记）。"""
 

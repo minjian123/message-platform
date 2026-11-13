@@ -107,6 +107,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/msg/admin/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Connections
+         * @description 连接列表（单实例视图）。
+         *
+         *     Args:
+         *         tenant: 当前租户。
+         *         connections: 连接登记表。
+         *         tuning: 连接参数（空闲阈值）。
+         *         page: 页码。
+         *         size: 每页条数。
+         *
+         *     Returns:
+         *         ApiResponse[ConnectionPage]: 按建立时刻倒序的当前页。
+         */
+        get: operations["list_connections_api_v1_msg_admin_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/msg/admin/delayed": {
         parameters: {
             query?: never;
@@ -164,6 +194,9 @@ export interface paths {
          * @description 死信列表（默认排除已归档）。
          *
          *     需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。
+         *
+         *     Raises:
+         *         ParamError: 失败时间区间倒置（10001）。
          */
         get: operations["list_dead_letters_api_v1_msg_admin_dlq_get"];
         put?: never;
@@ -690,7 +723,7 @@ export interface paths {
         put?: never;
         /**
          * Expand Topic Partitions
-         * @description 扩分区（**只增不减**：目标值不大于现状即 350009）。
+         * @description 扩分区（**只增不减**：等于现状幂等返回 200，小于现状返回 350009）。
          *
          *     需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。
          *     占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。
@@ -1622,6 +1655,20 @@ export interface components {
              */
             message: string;
         };
+        /** ApiResponse[ConnectionPage] */
+        ApiResponse_ConnectionPage_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data?: components["schemas"]["ConnectionPage"] | null;
+            /**
+             * Message
+             * @default ok
+             */
+            message: string;
+        };
         /** ApiResponse[ConsumeResult] */
         ApiResponse_ConsumeResult_: {
             /**
@@ -2157,6 +2204,92 @@ export interface components {
             uptime_ms: number;
         };
         /**
+         * ConnectionItem
+         * @description 一条连接的只读视图（地址已脱敏）。
+         */
+        ConnectionItem: {
+            /**
+             * Connection Id
+             * @description 连接标识（连接键的短哈希，不回传原始键）
+             */
+            connection_id: string;
+            /**
+             * Http Version
+             * @description 协商到的 HTTP 版本
+             */
+            http_version: string;
+            /**
+             * Last Heartbeat At
+             * @description 最近心跳时刻（UTC）
+             */
+            last_heartbeat_at?: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             * @description 最近请求时刻（UTC）
+             */
+            last_seen_at: string;
+            /**
+             * Opened At
+             * Format: date-time
+             * @description 建立时刻（UTC）
+             */
+            opened_at: string;
+            /**
+             * Remote Prefix
+             * @description 脱敏地址（IPv4 只留前两段，IPv6 只留前 64 位）
+             */
+            remote_prefix: string;
+            /**
+             * Requests
+             * @description 累计请求数
+             */
+            requests: number;
+            /**
+             * Scheme
+             * @description 承载协议（http / https）
+             */
+            scheme: string;
+            /**
+             * State
+             * @description 状态：active / idle / draining / stale
+             */
+            state: string;
+            /**
+             * Streams
+             * @description 长驻流数
+             */
+            streams: number;
+            /**
+             * Tenant Id
+             * @description 租户内部身份；匿名连接为 null
+             */
+            tenant_id?: string | null;
+        };
+        /**
+         * ConnectionPage
+         * @description 连接列表分页（单实例视图，跨实例聚合归 02-8-4）。
+         */
+        ConnectionPage: {
+            /** Items */
+            items: components["schemas"]["ConnectionItem"][];
+            /**
+             * Page
+             * @description 页码（从 1 起）
+             */
+            page: number;
+            /**
+             * Size
+             * @description 每页条数
+             */
+            size: number;
+            /**
+             * Total
+             * @description 当前租户的连接总数（过滤后）
+             */
+            total: number;
+        };
+        /**
          * ConsumeRequest
          * @description 拉取请求（成员制：须先 `join`，且 `partition` 必须在该成员的分配内）。
          */
@@ -2282,7 +2415,7 @@ export interface components {
             topic: string | null;
             /**
              * Total
-             * @description 过滤后待投总条数
+             * @description 过滤前待投总条数
              */
             total: number;
         };
@@ -2335,7 +2468,7 @@ export interface components {
         };
         /**
          * DelayedPage
-         * @description 待投列表分页（`total` 为过滤后总数）。
+         * @description 待投列表分页（`total` 为过滤前总数）。
          */
         DelayedPage: {
             /**
@@ -2355,7 +2488,7 @@ export interface components {
             size: number;
             /**
              * Total
-             * @description 过滤后总数
+             * @description 过滤前总数
              */
             total: number;
         };
@@ -2650,7 +2783,7 @@ export interface components {
             size: number;
             /**
              * Total
-             * @description 过滤后总数
+             * @description 过滤前总数
              */
             total: number;
         };
@@ -2789,7 +2922,7 @@ export interface components {
         };
         /**
          * GroupPage
-         * @description 组列表分页（`total` 为过滤后总数）。
+         * @description 组列表分页（`total` 为过滤前总数）。
          */
         GroupPage: {
             /**
@@ -2809,7 +2942,7 @@ export interface components {
             size: number;
             /**
              * Total
-             * @description 过滤后总数
+             * @description 过滤前总数
              */
             total: number;
         };
@@ -2980,7 +3113,7 @@ export interface components {
         };
         /**
          * MessagePage
-         * @description 消息检索分页（`total` 为过滤后总数）。
+         * @description 消息检索分页（`total` 为过滤前总数）。
          */
         MessagePage: {
             /**
@@ -3010,7 +3143,7 @@ export interface components {
             topic: string;
             /**
              * Total
-             * @description 过滤后总数
+             * @description 过滤前总数
              */
             total: number;
         };
@@ -4582,6 +4715,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_AclRevokeResult_"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 限流 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            /** @description 服务异常 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+        };
+    };
+    list_connections_api_v1_msg_admin_connections_get: {
+        parameters: {
+            query?: {
+                /** @description 页码（从 1 起） */
+                page?: number;
+                /** @description 每页条数 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ConnectionPage_"];
                 };
             };
             /** @description 未认证 */

@@ -167,6 +167,13 @@ def test_error_frame_without_request_id() -> None:
         (350023, ErrorCategory.BUSINESS_REJECT, "business", False),
         (350015, ErrorCategory.TRANSIENT, "business", True),
         (350005, ErrorCategory.TRANSIENT, "business", True),
+        (350025, ErrorCategory.TRANSIENT, "business", True),
+        (350026, ErrorCategory.TRANSIENT, "business", True),
+        (350027, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350028, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350029, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350030, ErrorCategory.BUSINESS_REJECT, "business", False),
+        (350031, ErrorCategory.BUSINESS_REJECT, "business", False),
         (350022, ErrorCategory.TRANSIENT, "system", True),
         (350032, ErrorCategory.TRANSIENT, "system", True),
         (350033, ErrorCategory.TRANSIENT, "system", True),
@@ -175,6 +182,7 @@ def test_error_frame_without_request_id() -> None:
         (99999, ErrorCategory.SERVER_BUG, "system", False),
     ],
 )
+@pytest.mark.kiwi_id(2493)
 def test_classify_table(code: int, category: ErrorCategory, layer: str, retryable: bool) -> None:
     """码 → 类别 → 层 → 重试 的映射逐条固定（04-4 升三元组，既有 layer / retryable 值不变）。
 

@@ -35,6 +35,7 @@ from typing import Annotated, cast
 from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.core.exceptions import BizError, ParamError
+from bms_core.error_mapper.base import apply_error_mapper
 from bms_core.msgclient.frame import FrameType, decode_frame
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
@@ -934,8 +935,9 @@ async def subscribe_frames(
     try:
         request_id, query = _frame_subscribe_query(body, tenant)
     except BizError as exc:
+        mapped = apply_error_mapper(exc)
         return StreamingResponse(
-            _single_frame(error_frame(code=exc.code, message=exc.message or str(exc))),
+            _single_frame(error_frame(code=mapped.code, message=mapped.message or str(mapped))),
             media_type=FRAME_MEDIA_TYPE,
             headers=_STREAM_HEADERS,
         )
@@ -948,8 +950,9 @@ async def subscribe_frames(
             action=ACL_ACTION_SUBSCRIBE,
         )
     except BizError as exc:
+        mapped = apply_error_mapper(exc)
         return StreamingResponse(
-            _single_frame(error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id)),
+            _single_frame(error_frame(code=mapped.code, message=mapped.message or str(mapped), request_id=request_id)),
             media_type=FRAME_MEDIA_TYPE,
             headers=_STREAM_HEADERS,
         )

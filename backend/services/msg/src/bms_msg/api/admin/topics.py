@@ -72,6 +72,7 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """查询端点声明的错误码（`x-error-codes`）。"""
 
@@ -82,6 +83,7 @@ _CREATE_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """创建端点声明的错误码（`x-error-codes`）。"""
 
@@ -91,6 +93,7 @@ _WRITE_ERRORS = [
     int(MsgErrorCode.PARTITION_COUNT_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """主题写操作端点声明的错误码（扩分区 / 改保留期；`10001` 属契约层，不登记）。"""
 
@@ -98,6 +101,7 @@ _DELETE_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """删主题端点声明的错误码（重复删除幂等受理，故不声明 `350028`）。"""
 
@@ -105,6 +109,7 @@ _IMPACT_ERRORS = [
     int(MsgErrorCode.TOPIC_NOT_FOUND),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """影响预检端点声明的错误码。"""
 
@@ -511,7 +516,7 @@ async def expand_topic_partitions(
     acl: TopicAclServiceDep,
     assigner: PartitionAssignerDep,
 ) -> ApiResponse[TopicDetail]:
-    """扩分区（**只增不减**：目标值不大于现状即 350009）。
+    """扩分区（**只增不减**：等于现状幂等返回 200，小于现状返回 350009）。
 
     需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。
     占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。

@@ -394,27 +394,22 @@ async def test_log_id_lookup_hits_cache_and_scans(tmp_path: Path) -> None:
     assert missing is None
 
 
-async def test_unbound_topic_fails_closed(tmp_path: Path) -> None:
-    """F16：未登记且盘上无目录 → 六个端口方法与四个原语全部抛 `PartitionNotBoundError`。"""
+@pytest.mark.kiwi_id(2493)
+async def test_unbound_topic_reads_as_empty_writes_fail_closed(tmp_path: Path) -> None:
+    """F16：未登记且盘上无目录 → 写仍 fail-closed；读返回 0 / 空页（06-1-4）。"""
     unbound = FileMessageStore(directory=PartitionDirectory(root=tmp_path), fsync_mode="os")
     with pytest.raises(PartitionNotBoundError):
         await _append(unbound, index=0)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.fetch(topic_id=TOPIC_ID, partition_no=PARTITION, from_offset=0, max_messages=1)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.leo(topic_id=TOPIC_ID, partition_no=PARTITION)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.segments(topic_id=TOPIC_ID, partition_no=PARTITION)
+    assert len(await unbound.fetch(topic_id=TOPIC_ID, partition_no=PARTITION, from_offset=0, max_messages=1)) == 0
+    assert await unbound.leo(topic_id=TOPIC_ID, partition_no=PARTITION) == 0
+    assert await unbound.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION) == 0
+    assert len(await unbound.segments(topic_id=TOPIC_ID, partition_no=PARTITION)) == 0
     with pytest.raises(PartitionNotBoundError):
         await unbound.truncate_before(topic_id=TOPIC_ID, partition_no=PARTITION, offset=0)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.locate(topic_id=TOPIC_ID, partition_no=PARTITION, offset=0)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.read_range(topic_id=TOPIC_ID, partition_no=PARTITION, from_offset=0, max_messages=1)
-    with pytest.raises(PartitionNotBoundError):
-        await unbound.read_bytes(topic_id=TOPIC_ID, partition_no=PARTITION, offset=0)
+    assert await unbound.locate(topic_id=TOPIC_ID, partition_no=PARTITION, offset=0) is None
+    assert len(await unbound.read_range(topic_id=TOPIC_ID, partition_no=PARTITION, from_offset=0, max_messages=1)) == 0
+    assert await unbound.read_bytes(topic_id=TOPIC_ID, partition_no=PARTITION, offset=0) is None
+    assert await unbound.corrupted_segments(topic_id=TOPIC_ID, partition_no=PARTITION) == ()
 
 
 async def test_directory_layout(tmp_path: Path) -> None:

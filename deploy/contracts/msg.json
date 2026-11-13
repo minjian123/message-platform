@@ -502,6 +502,33 @@
         "title": "ApiResponse[ConnectionInfo]",
         "type": "object"
       },
+      "ApiResponse_ConnectionPage_": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "default": 0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "default": "ok",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "title": "ApiResponse[ConnectionPage]",
+        "type": "object"
+      },
       "ApiResponse_ConsumeResult_": {
         "additionalProperties": false,
         "properties": {
@@ -1430,6 +1457,133 @@
         "title": "ConnectionInfo",
         "type": "object"
       },
+      "ConnectionItem": {
+        "additionalProperties": false,
+        "description": "一条连接的只读视图（地址已脱敏）。",
+        "properties": {
+          "connection_id": {
+            "description": "连接标识（连接键的短哈希，不回传原始键）",
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "http_version": {
+            "description": "协商到的 HTTP 版本",
+            "title": "Http Version",
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最近心跳时刻（UTC）",
+            "title": "Last Heartbeat At"
+          },
+          "last_seen_at": {
+            "description": "最近请求时刻（UTC）",
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "opened_at": {
+            "description": "建立时刻（UTC）",
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "remote_prefix": {
+            "description": "脱敏地址（IPv4 只留前两段，IPv6 只留前 64 位）",
+            "title": "Remote Prefix",
+            "type": "string"
+          },
+          "requests": {
+            "description": "累计请求数",
+            "title": "Requests",
+            "type": "integer"
+          },
+          "scheme": {
+            "description": "承载协议（http / https）",
+            "title": "Scheme",
+            "type": "string"
+          },
+          "state": {
+            "description": "状态：active / idle / draining / stale",
+            "title": "State",
+            "type": "string"
+          },
+          "streams": {
+            "description": "长驻流数",
+            "title": "Streams",
+            "type": "integer"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "租户内部身份；匿名连接为 null",
+            "title": "Tenant Id"
+          }
+        },
+        "required": [
+          "connection_id",
+          "remote_prefix",
+          "http_version",
+          "scheme",
+          "opened_at",
+          "last_seen_at",
+          "streams",
+          "requests",
+          "state"
+        ],
+        "title": "ConnectionItem",
+        "type": "object"
+      },
+      "ConnectionPage": {
+        "additionalProperties": false,
+        "description": "连接列表分页（单实例视图，跨实例聚合归 02-8-4）。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "description": "页码（从 1 起）",
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "description": "每页条数",
+            "title": "Size",
+            "type": "integer"
+          },
+          "total": {
+            "description": "当前租户的连接总数（过滤后）",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "ConnectionPage",
+        "type": "object"
+      },
       "ConsumeRequest": {
         "additionalProperties": false,
         "description": "拉取请求（成员制：须先 `join`，且 `partition` 必须在该成员的分配内）。",
@@ -1607,7 +1761,7 @@
             "title": "Topic"
           },
           "total": {
-            "description": "过滤后待投总条数",
+            "description": "过滤前待投总条数",
             "title": "Total",
             "type": "integer"
           }
@@ -1685,7 +1839,7 @@
       },
       "DelayedPage": {
         "additionalProperties": false,
-        "description": "待投列表分页（`total` 为过滤后总数）。",
+        "description": "待投列表分页（`total` 为过滤前总数）。",
         "properties": {
           "items": {
             "description": "当页延迟消息（到期时刻升序，最急的在前）",
@@ -1706,7 +1860,7 @@
             "type": "integer"
           },
           "total": {
-            "description": "过滤后总数",
+            "description": "过滤前总数",
             "title": "Total",
             "type": "integer"
           }
@@ -2142,7 +2296,7 @@
             "type": "integer"
           },
           "total": {
-            "description": "过滤后总数",
+            "description": "过滤前总数",
             "title": "Total",
             "type": "integer"
           }
@@ -2335,7 +2489,7 @@
       },
       "GroupPage": {
         "additionalProperties": false,
-        "description": "组列表分页（`total` 为过滤后总数）。",
+        "description": "组列表分页（`total` 为过滤前总数）。",
         "properties": {
           "items": {
             "description": "当页组（组名升序）",
@@ -2356,7 +2510,7 @@
             "type": "integer"
           },
           "total": {
-            "description": "过滤后总数",
+            "description": "过滤前总数",
             "title": "Total",
             "type": "integer"
           }
@@ -2611,7 +2765,7 @@
       },
       "MessagePage": {
         "additionalProperties": false,
-        "description": "消息检索分页（`total` 为过滤后总数）。",
+        "description": "消息检索分页（`total` 为过滤前总数）。",
         "properties": {
           "items": {
             "description": "当页消息头（按分区号、offset 升序）",
@@ -2642,7 +2796,7 @@
             "type": "string"
           },
           "total": {
-            "description": "过滤后总数",
+            "description": "过滤前总数",
             "title": "Total",
             "type": "integer"
           }
@@ -5353,6 +5507,118 @@
         ]
       }
     },
+    "/api/v1/msg/admin/connections": {
+      "get": {
+        "description": "连接列表（单实例视图）。\n\nArgs:\n    tenant: 当前租户。\n    connections: 连接登记表。\n    tuning: 连接参数（空闲阈值）。\n    page: 页码。\n    size: 每页条数。\n\nReturns:\n    ApiResponse[ConnectionPage]: 按建立时刻倒序的当前页。",
+        "operationId": "list_connections_api_v1_msg_admin_connections_get",
+        "parameters": [
+          {
+            "description": "页码（从 1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（从 1 起）",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每页条数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ConnectionPage_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "List Connections",
+        "tags": [
+          "msg-admin-connections"
+        ],
+        "x-error-codes": []
+      }
+    },
     "/api/v1/msg/admin/delayed": {
       "get": {
         "description": "延迟中消息列表（到期时刻升序，最急的在前；只读，不触发转投）。\n\n需要 msg:query 权限；按租户隔离。命名空间非法 350010，主题不存在或未启用 350001，\n分区号越界 350009，档位非法 10001；`size` 上界 100（越界 10001）。",
@@ -5696,7 +5962,7 @@
     },
     "/api/v1/msg/admin/dlq": {
       "get": {
-        "description": "死信列表（默认排除已归档）。\n\n需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。",
+        "description": "死信列表（默认排除已归档）。\n\n需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。\n\nRaises:\n    ParamError: 失败时间区间倒置（10001）。",
         "operationId": "list_dead_letters_api_v1_msg_admin_dlq_get",
         "parameters": [
           {
@@ -5939,7 +6205,8 @@
         "x-error-codes": [
           350029,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6039,7 +6306,8 @@
         "x-error-codes": [
           350029,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6154,7 +6422,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6269,7 +6538,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6384,7 +6654,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6540,7 +6811,8 @@
           350013,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -6670,7 +6942,8 @@
           350013,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -7042,7 +7315,8 @@
           350009,
           350002,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -7779,7 +8053,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -7879,7 +8154,8 @@
         "x-error-codes": [
           350016,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -7983,7 +8259,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -8087,7 +8364,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -8191,7 +8469,8 @@
           350009,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -8422,7 +8701,8 @@
           350001,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       },
       "post": {
@@ -8520,7 +8800,8 @@
           350025,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -8632,7 +8913,8 @@
         "x-error-codes": [
           350001,
           350011,
-          350012
+          350012,
+          350027
         ]
       },
       "get": {
@@ -8731,7 +9013,8 @@
           350001,
           350010,
           350011,
-          350012
+          350012,
+          350027
         ]
       },
       "patch": {
@@ -8841,7 +9124,8 @@
           350028,
           350009,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
@@ -8941,13 +9225,14 @@
         "x-error-codes": [
           350001,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },
     "/api/v1/msg/admin/topics/{topic_id}/partitions": {
       "post": {
-        "description": "扩分区（**只增不减**：目标值不大于现状即 350009）。\n\n需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。\n占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。",
+        "description": "扩分区（**只增不减**：等于现状幂等返回 200，小于现状返回 350009）。\n\n需要 msg:manage 权限；主题不存在 350001，状态为 `disabled` / `deleting` 时 350028。\n占用现有 `TopicService.expand_partitions()`，不迁移既有 key 映射。",
         "operationId": "expand_topic_partitions_api_v1_msg_admin_topics__topic_id__partitions_post",
         "parameters": [
           {
@@ -9053,7 +9338,8 @@
           350028,
           350009,
           350011,
-          350012
+          350012,
+          350027
         ]
       }
     },

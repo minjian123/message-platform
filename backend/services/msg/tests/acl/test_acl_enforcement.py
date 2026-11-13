@@ -324,11 +324,11 @@ async def test_admin_list_filter_helpers_skip_denied(current_tenant: CurrentTena
 
 
 async def test_frame_publish_and_subscribe_denied(client: AsyncClient, fake_acl: _FakeAcl) -> None:
-    """帧路径 ACL 拒绝：返回 error 帧（82013），不落到 JSON 4xx。"""
+    """帧路径 ACL 拒绝：按 maps_from 映射为产品码 350027，不落到 JSON 4xx。"""
     fake_acl.deny.update({ACL_ACTION_PUBLISH, ACL_ACTION_SUBSCRIBE})
     publish_header = frame_header(extra={"namespace": NAMESPACE, "topic": TOPIC})
     published = await post_frame(client, "/msg/publish", frame_bytes(int(FrameType.PUBLISH), publish_header, b"x"))
-    assert decode_frames(published.content).frames[0].header["code"] == 82013
+    assert decode_frames(published.content).frames[0].header["code"] == 350027
 
     subscribe_header = frame_header(
         extra={
@@ -340,7 +340,7 @@ async def test_frame_publish_and_subscribe_denied(client: AsyncClient, fake_acl:
         }
     )
     subscribed = await post_frame(client, "/msg/subscribe", frame_bytes(int(FrameType.SUBSCRIBE), subscribe_header))
-    assert decode_frames(subscribed.content).frames[0].header["code"] == 82013
+    assert decode_frames(subscribed.content).frames[0].header["code"] == 350027
 
 
 async def test_stream_frames_encodes_error_event(monkeypatch: pytest.MonkeyPatch) -> None:

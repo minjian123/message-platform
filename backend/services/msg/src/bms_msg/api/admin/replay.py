@@ -62,6 +62,7 @@ _MANAGE_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """写操作端点声明的错误码（`x-error-codes`）。"""
 
@@ -69,6 +70,7 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.REPLAY_TASK_NOT_FOUND),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """进度查询端点声明的错误码（`x-error-codes`）。"""
 

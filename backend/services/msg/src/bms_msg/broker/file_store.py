@@ -1368,7 +1368,8 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
             CorruptedRecordError: 记录损坏。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return ConcurrentStableList()
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read(from_offset=from_offset, max_messages=max_messages)
 
@@ -1385,7 +1386,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return 0
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.leo
 
@@ -1402,7 +1404,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return 0
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.start
 
@@ -1419,7 +1422,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return ConcurrentStableList()
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.segments()
 
@@ -1483,7 +1487,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return None
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.locate(offset=offset)
 
@@ -1504,7 +1509,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return ConcurrentStableList()
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_range(from_offset=from_offset, max_messages=max_messages)
 
@@ -1523,7 +1529,8 @@ class FileMessageStore(MessageStore):
             PartitionNotBoundError: 主题目录未登记。
             CorruptedRecordError: 记录损坏。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return None
         partition = await self._open(topic_id=topic_id, partition_no=partition_no)
         return partition.read_bytes(offset=offset)
 
@@ -1606,6 +1613,20 @@ class FileMessageStore(MessageStore):
         )
         return ConcurrentStableList(message_header_view(message) for message in messages)
 
+    def _locate(self, topic_id: int) -> TopicLocation | None:
+        """取主题目录身份（未登记返回 None；读路径用它判空，不建目录）。
+
+        Args:
+            topic_id: 主题主键。
+
+        Returns:
+            TopicLocation | None: 目录身份；未登记且盘上无目录为 None。
+        """
+        location = self._directory.locate(topic_id)
+        if location is None:
+            location = self._directory.recover(topic_id=int(topic_id))
+        return location
+
     def _require_location(self, topic_id: int) -> TopicLocation:
         """取主题目录身份（未登记即抛错）。
 
@@ -1618,9 +1639,7 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 未登记。
         """
-        location = self._directory.locate(topic_id)
-        if location is None:
-            location = self._directory.recover(topic_id=int(topic_id))
+        location = self._locate(topic_id)
         if location is None:
             raise PartitionNotBoundError(f"主题目录未登记：topic_id={topic_id}（须先经 TopicRouter.resolve 解析）")
         return location
@@ -1773,7 +1792,8 @@ class FileMessageStore(MessageStore):
         Raises:
             PartitionNotBoundError: 主题目录未登记。
         """
-        self._require_location(topic_id)
+        if self._locate(topic_id) is None:
+            return ()
         partition = self._partition(topic_id=topic_id, partition_no=partition_no)
         return partition.corrupted_segments()
 

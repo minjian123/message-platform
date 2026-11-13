@@ -39,6 +39,7 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """查询端点声明的错误码（`x-error-codes`）。"""
 

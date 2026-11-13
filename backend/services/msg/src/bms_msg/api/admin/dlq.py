@@ -71,6 +71,7 @@ _QUERY_ERRORS = [
     int(MsgErrorCode.DEAD_LETTER_NOT_FOUND),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """查询端点声明的错误码（`x-error-codes`）。"""
 
@@ -83,6 +84,7 @@ _MANAGE_ERRORS = [
     int(MsgErrorCode.NAMESPACE_INVALID),
     int(MsgErrorCode.TENANT_SUSPENDED),
     int(MsgErrorCode.TENANT_NOT_FOUND),
+    int(MsgErrorCode.ACL_DENIED),
 ]
 """处置端点声明的错误码（`x-error-codes`）。"""
 
@@ -250,7 +252,12 @@ async def list_dead_letters(
     """死信列表（默认排除已归档）。
 
     需要 msg:query 权限；按租户隔离；无主题 `describe` 授权的行不返回。
+
+    Raises:
+        ParamError: 失败时间区间倒置（10001）。
     """
+    if failed_from is not None and failed_to is not None and failed_from > failed_to:
+        raise ParamError("失败时间区间倒置")
     rows, total = await _service(uow).list(
         tenant_id=int(tenant.tenant_id),
         page=page,

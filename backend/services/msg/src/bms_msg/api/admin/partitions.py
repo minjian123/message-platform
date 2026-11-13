@@ -1,8 +1,8 @@
 """分区详情只读端点（`GET /api/v1/msg/admin/partitions`；06-1-1 详细设计 §5）。
 
 - 权限 `msg:query` + 主题级 `describe` 授权；租户仅由 `CurrentTenantDep` 提供。
-- 实时 LEO 取 `MessageStore.leo()`（不是落库检查点）；`hw` / `isr` 恒为可空占位，
-  02-4 / 02-5 交付后只换取值、不改契约。
+- 实时 LEO 取 `MessageStore.leo()`（不是落库检查点）；`hw` / `isr` 已接复制协调器真实值
+  （02-4 / 02-5 交付；关闭复制时 `hw=LEO`、`isr=[本节点]`），不再以可空占位返回。
 """
 
 from typing import Annotated, cast
