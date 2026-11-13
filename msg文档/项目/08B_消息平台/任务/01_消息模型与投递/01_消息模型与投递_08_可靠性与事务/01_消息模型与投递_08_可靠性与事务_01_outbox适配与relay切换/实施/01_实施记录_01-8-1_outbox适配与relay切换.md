@@ -28,7 +28,7 @@
 | msg | 用例 | `services/msg/tests/client/test_outbox_relay_switch.py` | U1~U4，4 例，真应用 / 真数据面 / 真消费端 |
 | msg | 文档 | 本记录 + [测试记录](../测试/01_测试记录_01-8-1_outbox适配与relay切换.md) | 证据链 |
 
-**零变更**：`BaseOutboxStore` / `BaseOutboxDispatcher` 端口契约与版本、`SqlOutboxStore` 与 `sys_outbox` 表结构、`PollOutboxDispatcher` 既有行为、`MsgEventPublisher` 与 `bms_core.msgclient` 全链、`[event].provider` / `[service_client].provider` 语义、07-4 的矩阵 / 清单 / 场景单源、契约快照、错误码表、RocketMQ / outbox / HTTP 原链路、msg 仓服务端业务代码、事务消息与 CDC 实现。
+**零变更**：`BaseOutboxStore` / `BaseOutboxDispatcher` 端口契约与版本、`SqlOutboxStore` 与 `sys_outbox` 表结构、`PollOutboxDispatcher` 既有行为、`MsgEventPublisher` 与 `bms_core.msgclient` 全链、`[event].provider` / `[service_client].provider` 语义、07-4 的矩阵 / 清单 / 场景单源、契约快照、错误码表、outbox / HTTP 原链路（RocketMQ 已下线）、msg 仓服务端业务代码、事务消息与 CDC 实现。
 
 ## 3. 关键实现决策 <a id="decisions"></a>
 
@@ -94,7 +94,7 @@ D:/Develop/bizs/bms/backend/.venv/Scripts/python.exe -m engkit docs-scope
 | # | 事项 | 归口 |
 | --- | --- | --- |
 | 1 | 8B_05 复制能力未交付，生产迁移仍被闸门阻断 | 02-4 / 02-5 / 02-8、平台级生产部署架构 |
-| 2 | 真实 RocketMQ 集群 / 真实容器 / 真盘联调未执行 | 平台级生产部署架构（证据为进程内真应用 + 真 SQLite 发件箱） |
+| 2 | 真实集群 / 真实容器 / 真盘联调未执行（原 RocketMQ 链路已下线） | 平台级生产部署架构（证据为进程内真应用 + 真 SQLite 发件箱） |
 | 3 | `config_fingerprint` 三键扩展需 07-4-1 §6.1 / §6.3 协同回写 | 本任务消费方回写（随本记录提交） |
 | 4 | 域级键与白名单 / 灰度未落地，只能整端口切换 | bms 平台级生产部署架构 |
 | 5 | `claim_pending` 多实例重复抢批（无 `SKIP LOCKED` / 租约列） | 02-8 / 平台级容量实测（知识档案 14 §4） |

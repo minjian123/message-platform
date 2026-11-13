@@ -73,7 +73,7 @@
 | msg | 验收证据 | `01-8-1/实施/`、`01-8-1/测试/` 各一份记录（命令 / 原始输出 / 结论 / 偏差与遗留） | 否 |
 | 两仓 | 记录回写 | 计划表 §3 01-8 行 + §5 门禁 9；冲突字面回写（§13） | 否 |
 
-**零变更清单**：`BaseOutboxStore` / `BaseOutboxDispatcher` 端口方法集与契约版本；`SqlOutboxStore` 与 `sys_outbox` 表结构；`PollOutboxDispatcher` 既有行为（重试 / 退避 / 死信 / 轮询参数）；`MsgEventPublisher` 与 `bms_core.msgclient` 全链；`[event].provider` / `[service_client].provider` 键位与语义；`MsgServiceClient`；07-4 的 `preconditions.toml` / `switch_matrix.toml` / `rollback_scenarios.toml` 单源文件字段；RocketMQ / outbox / HTTP 原链路；契约快照；错误码表；msg 仓服务端业务代码；`deploy/compose/msg.yml` / `Dockerfile`；《架构设计 · 接入面》§9 语义节点（只写语义，不写实现细节，见《[文档生成规范](../../../../../../../../bms文档/规范/文档生成规范.md)》§8.6）。
+**零变更清单**：`BaseOutboxStore` / `BaseOutboxDispatcher` 端口方法集与契约版本；`SqlOutboxStore` 与 `sys_outbox` 表结构；`PollOutboxDispatcher` 既有行为（重试 / 退避 / 死信 / 轮询参数）；`MsgEventPublisher` 与 `bms_core.msgclient` 全链；`[event].provider` / `[service_client].provider` 键位与语义；`MsgServiceClient`；07-4 的 `preconditions.toml` / `switch_matrix.toml` / `rollback_scenarios.toml` 单源文件字段；outbox / HTTP 原链路（RocketMQ 已下线）；契约快照；错误码表；msg 仓服务端业务代码；`deploy/compose/msg.yml` / `Dockerfile`；《架构设计 · 接入面》§9 语义节点（只写语义，不写实现细节，见《[文档生成规范](../../../../../../../../bms文档/规范/文档生成规范.md)》§8.6）。
 
 ## 3. 现状核对结论 <a id="current"></a>
 
@@ -88,7 +88,7 @@
 | 7 | 01-8-1 §2-3、07-4 父任务 §3-2 写「非法值 fail-safe 回原链路」，与 07-4-1 §6.2 / 07-4-2 输入基线的「非法拒启」冲突 | 按拍板沿用已定稿「非法拒启」；冲突字面登记回写，本轮不改既有文档（§13、§15） |
 | 8 | `switch_matrix.toml` 的 `config_fingerprint` 口径为「两个 provider 值 + 命名空间 + msg 实例地址 + 策略」 | 本任务新增第三个 provider，需扩为三个；登记为 07-4-1 协同回写项（§6.4、§13） |
 | 9 | 知识档案 [14](../../../../../../../../bms文档/资料/知识档案/消息与事件驱动/14_事件驱动_事务性发件箱.md) §8 把「outbox 表保留 + relay 换 msg 客户端」列为 first step；[16](../../../../../../../../bms文档/资料/知识档案/消息与事件驱动/16_事件驱动_CDC与日志尾随.md) §7 把 connector 列为「8B_04 评估」且首期不做业务表 CDC | 与拍板形态一致；connector 只留口子（§9） |
-| 10 | 本地无 Docker / 无真实 RocketMQ broker | 联调主证据为进程内真 msg 应用 + 真 `SqlOutboxStore`；原链路事件侧真实集群归平台级生产部署架构（§14） |
+| 10 | 本地无 Docker / 无真实集群 | 联调主证据为进程内真 msg 应用 + 真 `SqlOutboxStore`；原链路事件侧真实集群归平台级生产部署架构（§14） |
 
 ## 4. 形态选型定稿 <a id="form"></a>
 
@@ -155,7 +155,7 @@
 | 键 | 缺省 | 切到 msg | 切回 |
 | --- | --- | --- | --- |
 | `[outbox].provider` | `poll`（原 relay） | `msg` | 改回 `poll` |
-| `[event].provider` | `""`（null 占位）/ `rocketmq` | `msg`（07-4 口径，本任务不改） | 07-4 口径 |
+| `[event].provider` | `""`（null 占位）/ `msg` | `msg`（07-4 口径，本任务不改） | 07-4 口径 |
 | `[service_client].provider` | `http` | `msg`（07-4 口径，本任务不改） | 07-4 口径 |
 
 `backend/config.toml` 的 `[outbox]` 注释补 `msg` 取值语义；**缺省值保持 `poll` 不变**。
@@ -177,7 +177,7 @@
 ### 6.3 生效方式 <a id="switch-effect"></a>
 
 - 只改配置文件 / 环境变量 + **重启调用方服务**；不发布业务代码、不重建业务镜像；插件装配在启动期完成，运行期不监听配置文件（bms 07B `06_01` 口径）。
-- 切换 / 回滚不删除原链路，`poll` 实现与 RocketMQ / outbox / HTTP fallback 保留一个版本。
+- 切换 / 回滚不删除原链路，`poll` 实现与 outbox / HTTP fallback 保留一个版本。
 - 本任务只提供**可切的键与证据**；生产环境的真实切换由平台级生产部署架构执行，当前仍被 8B_05 复制能力硬阻断（D24 / `check --env prod` 退出 1）。
 
 ### 6.4 `config_fingerprint` 扩展 <a id="switch-fingerprint"></a>
@@ -307,7 +307,7 @@
 | # | 开放项 | 影响 | 归口 |
 | --- | --- | --- | --- |
 | 1 | 8B_05 复制能力未交付（02-4 / 02-5 / 02-8 搁置） | 生产迁移硬阻断，本任务只做可切性与隔离环境证据 | 8B_05 / 平台级生产部署架构 |
-| 2 | 真实 RocketMQ 集群 / 真实容器 / 真盘未联调 | 原链路事件侧证据为 `degraded`，不默认通过 | 平台级生产部署架构 |
+| 2 | 真实集群 / 真实容器 / 真盘未联调（原 RocketMQ 链路已下线） | 原链路事件侧证据为 `degraded`，不默认通过 | 平台级生产部署架构 |
 | 3 | 域级键（平台级生产部署架构）未落地 | 只能整端口切换，回滚粒度粗 | bms 平台级生产部署架构 |
 | 4 | `[event].provider` 与 `[outbox].provider` 是否联动 | 本设计定稿为职责分离（§5.2）；如需联动须先回写本设计 | 设计评审 |
 | 5 | `config_fingerprint` 三键扩展需 07-4-1 协同回写 | 未回写前切换点摘要缺 `[outbox].provider` | 07-4-1 消费方 |
