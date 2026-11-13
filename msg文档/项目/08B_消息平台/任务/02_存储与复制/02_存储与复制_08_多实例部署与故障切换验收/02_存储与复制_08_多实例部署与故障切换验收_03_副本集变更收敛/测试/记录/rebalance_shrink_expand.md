@@ -102,7 +102,7 @@ docker exec -e BMS_APP__SERVICE=msg msg-drill-1 python -m ops.rebalance apply \
 
 | # | 项 | 处置 |
 | --- | --- | --- |
-| 1 | 扩容逐分区串行，3 分区约 90s（每分区等真实追平） | **预期行为**（迁移安全优先）；批量扩缩容耗时随分区数线性，容量观测归 8B_12 / 07-5 |
+| 1 | 扩容逐分区串行，3 分区约 90s（每分区等真实追平） | **预期行为**（迁移安全优先）；批量扩缩容耗时随分区数线性，容量观测归平台级容量实测 |
 | 2 | `/internal/replication/fetch` 无按分区路径，日志无法逐分区证明「无 fetch」 | 判据改为「卸载 + 挂载跳过 + 指标行 + 失败计数」四证（§3.3 H4），已记录口径 |
 | 3 | 演练环境未 cleanup（按 2026-11-13 拍板保留现场） | 两轮演练主题与三实例留在 `msgdrill_*`，后续复跑可直接使用；需要回收时执行 `ops.cluster_drill cleanup` |
 | 4 | 镜像按提交短号另建（`drill-1347595` → `drill-b01ddf7` → `drill-e21bdf6` → `drill-6d27537` → `drill-5fc781d`） | 未覆盖 05-3-1 已验证的 `drill/msg:drill-1347595` |

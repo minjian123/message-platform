@@ -793,7 +793,7 @@ def render_matrix_rows(matrix: SwitchMatrix) -> ConcurrentStableFrozenList[str]:
         ConcurrentStableFrozenList[str]: 表头 + 分隔行 + 每个域一行。
     """
     rows: ConcurrentStableList[str] = ConcurrentStableList()
-    rows.add("| 域键 | 端口 | 类别 | 批次 | 开关键 | 域级键（8B_08） | 默认值 | 观察指标 | 回滚判据 | 责任人 |")
+    rows.add("| 域键 | 端口 | 类别 | 批次 | 开关键 | 域级键（平台级） | 默认值 | 观察指标 | 回滚判据 | 责任人 |")
     rows.add("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for domain in matrix.domains:
         metrics = " / ".join(f"`{item}`" for item in domain.observe_metrics)

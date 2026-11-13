@@ -79,7 +79,7 @@
     "exit_code": 2,
     "requires_review": true,
     "reasons": [
-      "G11：slow_disk 最新记录为 降级通过，已归口：07-6 部署阶段（真盘 I/O 延迟注入，8B_08）",
+      "G11：slow_disk 最新记录为 降级通过，已归口：07-6 部署阶段（真盘 I/O 延迟注入，平台级生产部署架构）",
       "G11：poison_message 最新记录为 降级通过，已归口：06-5 死信管理（生产同样触发，需 ACL 释放与 ORM 过期解耦后复验本场景）",
       "slow_disk：降级",
       "poison_message：降级"
@@ -90,7 +90,7 @@
     "exit_code": 2,
     "requires_review": true,
     "reasons": [
-      "G11：slow_disk 最新记录为 降级通过，已归口：07-6 部署阶段（真盘 I/O 延迟注入，8B_08）",
+      "G11：slow_disk 最新记录为 降级通过，已归口：07-6 部署阶段（真盘 I/O 延迟注入，平台级生产部署架构）",
       "G11：poison_message 最新记录为 降级通过，已归口：06-5 死信管理（生产同样触发，需 ACL 释放与 ORM 过期解耦后复验本场景）",
       "slow_disk：降级",
       "poison_message：降级"
