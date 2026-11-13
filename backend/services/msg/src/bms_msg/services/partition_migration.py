@@ -875,6 +875,10 @@ class PartitionMigrationService(BaseFrameworkObject):
                     leos.add(snapshot.leo)
                     if node not in leader.isr:
                         in_sync = False
+                    # 目标必须真的拉取过：非承载占位（快照惰性重建）从未拉取，`last_known_isr` 为空；
+                    # 空分区下仅靠「LEO ≥ HW」会被瞬时 ISR 骗过（真机复跑暴露）。
+                    if node not in snapshot.last_known_isr:
+                        in_sync = False
                 target_leo = min(leos) if leos else leader.leo
                 remaining = max(leader.hw - target_leo, 0)
                 caught = in_sync and target_leo >= leader.hw

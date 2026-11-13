@@ -149,6 +149,7 @@ def _snapshot(
     isr: tuple[str, ...] = ("msg-1",),
     replicas: tuple[str, ...] = ("msg-1",),
     start: int = 0,
+    last_known_isr: tuple[str, ...] | None = None,
 ) -> ReplicationSnapshot:
     """构造复制快照。"""
     return ReplicationSnapshot(
@@ -159,6 +160,7 @@ def _snapshot(
         isr=ConcurrentStableFrozenList(isr),
         replicas=ConcurrentStableFrozenList(replicas),
         start_offset=start,
+        last_known_isr=ConcurrentStableFrozenList(isr if last_known_isr is None else last_known_isr),
     )
 
 
@@ -430,6 +432,32 @@ async def test_status_refreshes_catching_up() -> None:
     assert rows[0].item.status == "catching_up"
 
     control.snapshots.set("msg-2", _snapshot(node="msg-2", leo=10, isr=("msg-1", "msg-2")))
+    rows = await service.status(plan_id=planned.plan_id)
+    assert rows[0].item.status == "succeeded"
+    assert rows[0].caught_up is True
+
+
+async def test_status_target_not_yet_pulled_stays_catching_up() -> None:
+    """状态：目标未真正拉取（非承载占位）时不算追平，空分区也不例外。"""
+    topology = FakeTopology(ConcurrentStableList([_partition(replicas=("msg-1",))]))
+    control = FakeControl(
+        ConcurrentStableDict(
+            {
+                "msg-1": _snapshot(node="msg-1", leo=0, hw=0, isr=("msg-1",)),
+                "msg-2": _snapshot(node="msg-2", leo=0, isr=("msg-1",), last_known_isr=()),
+            }
+        )
+    )
+    service = _service(topology, control, FakeSwitch())
+    planned = await service.plan(nodes=NODES, factor=2, min_insync=1)
+    # 占位场景：leader 的瞬时 ISR 已含目标，但目标从未拉取（last_known_isr 为空）。
+    control.snapshots.set("msg-1", _snapshot(node="msg-1", leo=0, hw=0, isr=("msg-1", "msg-2")))
+    await service.apply(plan_id=planned.plan_id, operator="t", reason="r", wait_ms=0)
+    rows = await service.status(plan_id=planned.plan_id)
+    assert rows[0].item.status == "catching_up"
+    assert rows[0].caught_up is False
+
+    control.snapshots.set("msg-2", _snapshot(node="msg-2", leo=0, isr=("msg-1", "msg-2")))
     rows = await service.status(plan_id=planned.plan_id)
     assert rows[0].item.status == "succeeded"
     assert rows[0].caught_up is True
