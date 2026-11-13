@@ -1,0 +1,38 @@
+## 缩容：msg-3 卸载与停止挂载
+[info     ] msg_replication_partition_detached [bms_msg.replication] local_leo=0 partition=0 reason=not_in_replicas service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.629517+00:00
+[info     ] msg_replication_partition_detached [bms_msg.replication] local_leo=0 partition=1 reason=not_in_replicas service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.633847+00:00
+[info     ] msg_replication_partition_detached [bms_msg.replication] local_leo=0 partition=2 reason=not_in_replicas service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.637404+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=0 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:47.835303+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=1 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:47.835725+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=2 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:47.836076+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=0 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:17.850424+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=1 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:17.851019+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=2 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:17.851514+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=1 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:48.043987+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=2 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:48.044715+00:00
+[debug    ] msg_replication_mount_skipped  [bms_msg.replication] detail=not_in_replica_set partition=2 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:18.098084+00:00
+## 缩容：leader 侧成员变更
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=0 removed=['msg-3'] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.724895+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=1 removed=['msg-3'] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.728781+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=2 removed=['msg-3'] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.732791+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=0 removed=[] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:25.054193+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=0 removed=['msg-3'] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.701779+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=1 removed=['msg-3'] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.706870+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=[] isr_size=2 partition=2 removed=['msg-3'] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:53:20.711437+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=0 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:24.811554+00:00
+## 扩容：msg-3 挂载与成员变更
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=0 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:25.802415+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=1 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:49.200924+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=2 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:18.744362+00:00
+## 扩容：leader 侧成员加入与 ISR 扩张
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=0 removed=[] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:25.054193+00:00
+[info     ] msg_replication_isr_expand     [bms_msg.replication] isr_size=3 leo=0 partition=0 replica=msg-3 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:48.038296+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=1 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:49.304396+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=2 removed=[] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:19.152745+00:00
+[info     ] msg_replication_isr_expand     [bms_msg.replication] isr_size=3 leo=0 partition=2 replica=msg-3 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:48.154771+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=0 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:24.811554+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=1 removed=[] role=leader service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:54:49.263878+00:00
+[info     ] msg_replication_isr_expand     [bms_msg.replication] isr_size=3 leo=0 partition=1 replica=msg-3 service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:18.091840+00:00
+[info     ] msg_replication_membership_changed [bms_msg.replication] added=['msg-3'] isr_size=2 partition=2 removed=[] role=follower service=msg service_version=0.1.0 topic_id=58793353962844977940558998600155136 ts=2026-11-13T01:55:19.132899+00:00
+## 全轮：拉取失败（应为 0）
+0

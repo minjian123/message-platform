@@ -1,0 +1,743 @@
+{
+  "task": "02-8-3 副本集变更收敛 · 真机缩容 → 扩容复跑",
+  "executed_at": "2026-11-13",
+  "environment": {
+    "cluster": "msg-drill-1..3（隔离演练集群）",
+    "image": "drill/msg:drill-5fc781d",
+    "commit": "5fc781d",
+    "database": "msgdrill_msg",
+    "topic_id": 58793353962844977940558998600155136,
+    "topic_name": "drill.membership.probe.1794530890",
+    "partition_count": 3
+  },
+  "shrink": {
+    "plan": {
+      "blocks": [],
+      "items": [
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1",
+            "msg-3"
+          ],
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ],
+      "plan_id": "rb-20261113T015313Z-b1ba2a"
+    },
+    "apply": {
+      "catching_up": 0,
+      "degraded": 0,
+      "failed": 0,
+      "items": [
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ],
+      "plan_id": "rb-20261113T015313Z-b1ba2a",
+      "succeeded": 3
+    },
+    "status": {
+      "plan_id": "rb-20261113T015313Z-b1ba2a",
+      "rows": [
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "shrink",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015313Z-b1ba2a",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 shrink 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ]
+    },
+    "db_before": [
+      "58793353962844977940558998600155136\t0\t[\"msg-1\", \"msg-2\", \"msg-3\"]\tmsg-1\t0",
+      "58793353962844977940558998600155136\t1\t[\"msg-2\", \"msg-1\", \"msg-3\"]\tmsg-2\t0",
+      "58793353962844977940558998600155136\t2\t[\"msg-1\", \"msg-2\", \"msg-3\"]\tmsg-1\t1"
+    ],
+    "db_after": [
+      "58793353962844977940558998600155136\t0\t[\"msg-1\", \"msg-2\"]\tmsg-1\t0",
+      "58793353962844977940558998600155136\t1\t[\"msg-2\", \"msg-1\"]\tmsg-2\t0",
+      "58793353962844977940558998600155136\t2\t[\"msg-1\", \"msg-2\"]\tmsg-1\t1"
+    ],
+    "timeline": [
+      "2026-11-13T09:53:07+08:00 mode=shrink topic=58793353962844977940558998600155136 nodes=msg-1,msg-2 factor=2",
+      "2026-11-13T09:53:07+08:00 data_dir_bytes_before=105770\t/var/lib/msg/data",
+      "node msg-drill-1 mounted=msg_replication_mounted_partitions{service=\"msg\"} 29.0",
+      "node msg-drill-1 msg_isr_size{partition=\"0\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-1 msg_isr_size{partition=\"1\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-1 msg_isr_size{partition=\"2\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-2 mounted=msg_replication_mounted_partitions{service=\"msg\"} 29.0",
+      "node msg-drill-2 msg_isr_size{partition=\"0\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-2 msg_isr_size{partition=\"1\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-2 msg_isr_size{partition=\"2\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-3 mounted=msg_replication_mounted_partitions{service=\"msg\"} 29.0",
+      "node msg-drill-3 msg_isr_size{partition=\"0\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-3 msg_isr_size{partition=\"1\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "node msg-drill-3 msg_isr_size{partition=\"2\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 3.0",
+      "2026-11-13T09:53:14+08:00 plan rc=0 plan_id=rb-20261113T015313Z-b1ba2a",
+      "2026-11-13T09:53:20+08:00 apply rc=0",
+      "2026-11-13T09:53:30+08:00 data_dir_bytes_after=105770\t/var/lib/msg/data",
+      "2026-11-13T09:54:07+08:00 msg3_fetch_after_shrink=3 (window 30s since 2026-11-13T09:53:20+08:00)",
+      "done 2026-11-13T09:54:07+08:00"
+    ]
+  },
+  "expand": {
+    "plan": {
+      "blocks": [],
+      "items": [
+        {
+          "action": "expand",
+          "attempt": 1,
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-3",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-3",
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ],
+      "plan_id": "rb-20261113T015418Z-f87506"
+    },
+    "apply": {
+      "catching_up": 0,
+      "degraded": 0,
+      "failed": 0,
+      "items": [
+        {
+          "action": "expand",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-3",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "isr_verified": true,
+          "operator": "minjian",
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-3",
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ],
+      "plan_id": "rb-20261113T015418Z-f87506",
+      "succeeded": 3
+    },
+    "status": {
+      "plan_id": "rb-20261113T015418Z-f87506",
+      "rows": [
+        {
+          "action": "expand",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 0,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-1",
+            "msg-2",
+            "msg-3"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-2",
+          "from_replicas": [
+            "msg-2",
+            "msg-1"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 1,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-2",
+          "to_replicas": [
+            "msg-2",
+            "msg-3",
+            "msg-1"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        },
+        {
+          "action": "expand",
+          "attempt": 1,
+          "caught_up": false,
+          "error": "",
+          "from_leader": "msg-1",
+          "from_replicas": [
+            "msg-1",
+            "msg-2"
+          ],
+          "isr_verified": true,
+          "leader_hw": 0,
+          "leader_leo": 0,
+          "operator": "minjian",
+          "partition_no": 2,
+          "plan_id": "rb-20261113T015418Z-f87506",
+          "progress_hw": 0,
+          "progress_leo": 0,
+          "reason": "02-8-3 真机 expand 复跑",
+          "remaining": 0,
+          "remaining_records": 0,
+          "result": "noop",
+          "retained_tail": 0,
+          "status": "succeeded",
+          "step": "expand",
+          "to_leader": "msg-1",
+          "to_replicas": [
+            "msg-3",
+            "msg-1",
+            "msg-2"
+          ],
+          "topic_id": 58793353962844977940558998600155136
+        }
+      ]
+    },
+    "db_before": [
+      "58793353962844977940558998600155136\t0\t[\"msg-1\", \"msg-2\"]\tmsg-1\t0",
+      "58793353962844977940558998600155136\t1\t[\"msg-2\", \"msg-1\"]\tmsg-2\t0",
+      "58793353962844977940558998600155136\t2\t[\"msg-1\", \"msg-2\"]\tmsg-1\t1"
+    ],
+    "db_after": [
+      "58793353962844977940558998600155136\t0\t[\"msg-1\", \"msg-2\", \"msg-3\"]\tmsg-1\t0",
+      "58793353962844977940558998600155136\t1\t[\"msg-2\", \"msg-1\", \"msg-3\"]\tmsg-2\t0",
+      "58793353962844977940558998600155136\t2\t[\"msg-1\", \"msg-2\", \"msg-3\"]\tmsg-1\t1"
+    ],
+    "timeline": [
+      "2026-11-13T09:54:12+08:00 mode=expand topic=58793353962844977940558998600155136 nodes=msg-1,msg-2,msg-3 factor=3",
+      "2026-11-13T09:54:12+08:00 data_dir_bytes_before=105770\t/var/lib/msg/data",
+      "node msg-drill-1 mounted=msg_replication_mounted_partitions{service=\"msg\"} 29.0",
+      "node msg-drill-1 msg_isr_size{partition=\"0\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-1 msg_isr_size{partition=\"1\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-1 msg_isr_size{partition=\"2\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-2 mounted=msg_replication_mounted_partitions{service=\"msg\"} 29.0",
+      "node msg-drill-2 msg_isr_size{partition=\"0\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-2 msg_isr_size{partition=\"1\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-2 msg_isr_size{partition=\"2\",service=\"msg\",topic_id=\"58793353962844977940558998600155136\"} 2.0",
+      "node msg-drill-3 mounted=msg_replication_mounted_partitions{service=\"msg\"} 26.0",
+      "2026-11-13T09:54:19+08:00 plan rc=0 plan_id=rb-20261113T015418Z-f87506",
+      "2026-11-13T09:55:49+08:00 apply rc=0",
+      "2026-11-13T09:57:04+08:00 data_dir_bytes_after=105770\t/var/lib/msg/data",
+      "done 2026-11-13T09:57:12+08:00"
+    ]
+  },
+  "metrics": {
+    "shrink": {
+      "mounted_msg3": [
+        [
+          "2026-11-13T09:53:07+08:00",
+          29.0
+        ],
+        [
+          "2026-11-13T09:53:20+08:00",
+          26.0
+        ]
+      ],
+      "isr_series": {
+        "msg-drill-1.p0": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-1.p1": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-1.p2": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-2.p0": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-2.p1": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-2.p2": [
+          [
+            "2026-11-13T09:53:07+08:00",
+            3.0
+          ],
+          [
+            "2026-11-13T09:53:20+08:00",
+            2.0
+          ]
+        ]
+      },
+      "last_sample": "2026-11-13T09:53:29+08:00 msg-drill-3 mounted=26.0 isr="
+    },
+    "expand": {
+      "mounted_msg3": [
+        [
+          "2026-11-13T09:54:12+08:00",
+          26.0
+        ],
+        [
+          "2026-11-13T09:54:48+08:00",
+          27.0
+        ],
+        [
+          "2026-11-13T09:55:18+08:00",
+          28.0
+        ],
+        [
+          "2026-11-13T09:55:48+08:00",
+          29.0
+        ]
+      ],
+      "isr_series": {
+        "msg-drill-1.p0": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ],
+          [
+            "2026-11-13T09:54:48+08:00",
+            3.0
+          ]
+        ],
+        "msg-drill-1.p1": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-1.p2": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ],
+          [
+            "2026-11-13T09:55:48+08:00",
+            3.0
+          ]
+        ],
+        "msg-drill-2.p0": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ]
+        ],
+        "msg-drill-2.p1": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ],
+          [
+            "2026-11-13T09:55:18+08:00",
+            3.0
+          ]
+        ],
+        "msg-drill-2.p2": [
+          [
+            "2026-11-13T09:54:12+08:00",
+            2.0
+          ]
+        ]
+      },
+      "last_sample": "2026-11-13T09:57:03+08:00 msg-drill-3 mounted=29.0 isr=p0=3.0,p1=3.0,p2=3.0,"
+    }
+  }
+}
