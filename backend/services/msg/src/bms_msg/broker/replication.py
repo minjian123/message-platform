@@ -1079,6 +1079,17 @@ class ReplicationCoordinator(ReplicationView):
         )
         return True
 
+    async def _drop_placeholder(self, key: ReplicaKey) -> None:
+        """丢弃非承载占位（请求 / 快照路径惰性重建的运行态），由挂载轮重新挂载。
+
+        占位从未承载（不计已挂载数、无指标行），故只移除表项、不打卸载日志。
+
+        Args:
+            key: 分区键。
+        """
+        async with self._attach_lock:
+            self._partitions.pop(key, None)
+
     async def _build_state(self, *, topic_id: int, partition_no: int) -> PartitionReplication:
         """构造分区运行态（拓扑解析 + 初始 HW）。
 
@@ -2094,7 +2105,8 @@ class ReplicationCoordinator(ReplicationView):
         remaining = 0
         for assignment in assignments:
             key: ReplicaKey = (int(assignment.topic_id), int(assignment.partition_no))
-            if key in self._partitions:
+            existing = self._partitions.get(key)
+            if existing is not None and existing.hosted:
                 continue
             if not self._hosts(assignment):
                 skipped += 1
@@ -2105,6 +2117,9 @@ class ReplicationCoordinator(ReplicationView):
                     detail="not_in_replica_set",
                 )
                 continue
+            if existing is not None:
+                # 非承载占位（请求 / 快照路径惰性重建）：本节点重新进入副本集后由挂载轮替换为承载态。
+                await self._drop_placeholder(key)
             if mounted >= self._config.mount_batch:
                 remaining += 1
                 continue

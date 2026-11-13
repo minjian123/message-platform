@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""副本集变更收敛（msg 任务 02-8-3；Kiwi 2490）。
+"""副本集变更收敛（msg 任务 02-8-3；Kiwi 2491）。
 
 覆盖详细设计 §8 的 G1 ~ G8：
 
@@ -19,13 +19,20 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import pytest
-from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableFrozenList, ConcurrentStableSet
+from bms_core.core.concurrent import (
+    ConcurrentStableDict,
+    ConcurrentStableFrozenList,
+    ConcurrentStableList,
+    ConcurrentStableSet,
+)
 
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.replication import (
     FollowerProgress,
+    PartitionAssignment,
     PartitionTopology,
     ReplicaConfig,
+    ReplicaMountSource,
     ReplicaRole,
     ReplicationCoordinator,
     ReplicationMetrics,
@@ -34,7 +41,7 @@ from bms_msg.broker.replication import (
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.trace import EMPTY_TRACE
 
-pytestmark = pytest.mark.kiwi_id(2490)
+pytestmark = pytest.mark.kiwi_id(2491)
 
 TOPIC_ID = 9201
 PARTITION_NO = 0
@@ -411,3 +418,68 @@ async def test_unload_keeps_local_data() -> None:
     assert follower._partitions.get(KEY) is None
     assert await store.leo(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 1
     assert await store.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+
+
+class _FixedSource(ReplicaMountSource):
+    """固定分配清单（挂载轮用例）。"""
+
+    def __init__(self, assignments: Iterable[PartitionAssignment]) -> None:
+        """初始化。
+
+        Args:
+            assignments: 分配事实清单。
+        """
+        self.assignments = ConcurrentStableList(assignments)
+
+    async def list_assignments(self) -> ConcurrentStableList[PartitionAssignment]:
+        """返回固定分配清单。
+
+        Returns:
+            ConcurrentStableList[PartitionAssignment]: 分配事实。
+        """
+        return ConcurrentStableList(self.assignments)
+
+
+async def test_expand_remounts_non_hosted_placeholder() -> None:
+    """G2 扩容（真机路径）：快照留下的非承载占位须由挂载轮替换为承载态。
+
+    真机 `ops.rebalance plan` 的预检会对新成员调 `snapshot`，运行态因此留下非承载占位；
+    扩容写回副本集后，`mount_once` 若仍按「键已存在即跳过」处理，该节点永不再挂载、
+    不拉取、不进 ISR（真机复跑暴露）。
+    """
+    topology = _MutableTopology(NODES3)
+    source = _FixedSource(
+        [PartitionAssignment(topic_id=TOPIC_ID, partition_no=PARTITION_NO, replicas=ConcurrentStableFrozenList(NODES3))]
+    )
+    coordinator = ReplicationCoordinator(
+        config=_config(node_id="n3", nodes=NODES3),
+        store=InMemoryMessageStore(),
+        topology_loader=topology,
+        mount_source=source,
+        clock=lambda: 1_000.0,
+    )
+    state = await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.hosted is True
+    assert coordinator._metrics.snapshot().mounted_partitions == 1
+
+    topology.set_replicas(NODES2)
+    await coordinator.refresh_once()
+    assert KEY not in coordinator.mounted_partition_keys()
+    assert coordinator._metrics.snapshot().mounted_partitions == 0
+
+    # 请求 / 快照路径惰性重建：留下非承载占位（不计已挂载数、无指标行）
+    assert await coordinator.snapshot(topic_id=TOPIC_ID, partition_no=PARTITION_NO) is not None
+    assert KEY in coordinator.mounted_partition_keys()
+    placeholder = coordinator._partitions[KEY]
+    assert placeholder.hosted is False
+    assert coordinator._metrics.snapshot().mounted_partitions == 0
+
+    topology.set_replicas(NODES3)
+    await coordinator.refresh_once()
+    assert coordinator._partitions[KEY].hosted is False
+
+    assert await coordinator.mount_once() == 1
+    remounted = coordinator._partitions[KEY]
+    assert remounted.hosted is True
+    assert remounted is not placeholder
+    assert coordinator._metrics.snapshot().mounted_partitions == 1
