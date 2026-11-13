@@ -3,6 +3,7 @@
 覆盖：跨实例可见性（新队列实例无需预热）、TTL 过期后回源、`add` 立即生效、有界裁剪、清理后不可见。
 """
 
+# pyright: reportPrivateUsage=false
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
@@ -110,6 +111,19 @@ async def test_cache_is_bounded(
     await tight.contains(topic_id=9001, partition_no=0, offset=0)
     await tight.contains(topic_id=9001, partition_no=0, offset=1)
     assert tight.cache_size == 1
+
+
+async def test_prune_clears_all_expired_without_second_loop(
+    replay_uow: Callable[[], AbstractAsyncContextManager[UnitOfWork]], clock: _Clock
+) -> None:
+    """全部过期时一次清空：第二段淘汰循环不进入（02-8-4 分支覆盖）。"""
+    queue = DatabaseDeadLetterQueue(uow_factory=replay_uow, cache_limit=2, clock=clock)
+    now = clock()
+    for offset in range(3):
+        queue._cache[(9001, 0, offset)] = (True, now)
+    clock.value += 6.0
+    queue._trim()
+    assert queue.cache_size == 0
 
 
 async def test_purge_topics_hides_entries(queue: DatabaseDeadLetterQueue) -> None:

@@ -276,6 +276,25 @@ async def test_message_search_writes_normal_audit(client: AsyncClient, api_app: 
     assert "msg:message.search" in _actions(api_app)
 
 
+async def test_delete_message_store_reports_not_found(
+    client: AsyncClient, api_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """记录可定位但存储删除返回 False：按 not_found 处理，不写成功审计。"""
+    topic_id = await _create_topic(client)
+    await _seed_message(api_app, topic_id=topic_id)
+    store = cast("InMemoryMessageStore", api_app.state.message_store)
+
+    async def _false(**kwargs: object) -> bool:
+        del kwargs
+        return False
+
+    monkeypatch.setattr(store, "delete", _false)
+    response = await client.post("/api/v1/msg/admin/messages/l-1/delete?confirm=true", headers=HEADERS)
+    data = _data(response)
+    assert (data["deleted"], data["not_found"]) == (0, 1)
+    assert "msg:message.delete" not in _actions(api_app)
+
+
 async def test_delete_message_not_found_and_already_deleted(client: AsyncClient, api_app: FastAPI) -> None:
     """不存在返回 not_found；重复删除返回 already_deleted（不写成功审计、不 500）。"""
     topic_id = await _create_topic(client)

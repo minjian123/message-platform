@@ -117,6 +117,30 @@ async def test_hash_collision_is_verified_by_reading_record(tmp_path: Path, monk
     view = await restarted.find_by_log_id(log_id="l-0")
     assert view is not None
     assert view.offset == 0
+    # 02-8-4 分支覆盖：第一个候选（offset 0）不匹配，继续回读下一个候选
+    view = await restarted.find_by_log_id(log_id="l-1")
+    assert view is not None
+    assert view.offset == 1
+
+
+async def test_disk_index_collision_skips_non_matching_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """未加载分区的磁盘索引扫描：哈希碰撞时跳过不匹配候选，命中正确 offset。"""
+    store = _store(tmp_path)
+
+    def _constant_hash(_log_id: str) -> int:
+        """恒定哈希（强制碰撞）。"""
+        return 1
+
+    monkeypatch.setattr(file_store_module, "log_id_hash", _constant_hash)
+    await _append(store, index=0)
+    await _append(store, index=1)
+
+    restarted = _store(tmp_path)
+    view = await restarted.find_by_log_id(log_id="l-1")
+    assert view is not None
+    assert view.offset == 1
 
 
 def test_index_append_and_read_tolerate_io_errors(tmp_path: Path) -> None:

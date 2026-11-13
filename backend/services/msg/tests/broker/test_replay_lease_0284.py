@@ -103,6 +103,8 @@ async def test_list_active_respects_lease_and_expiry(
     task_id = int(task.id)
     now = clock()
 
+    # 02-8-4 回归：未给 owner / now 时不过滤租约（既有调用方兼容）
+    assert [int(item.id) for item in await repository.list_active(limit=10)] == [task_id]
     assert [int(item.id) for item in await repository.list_active(limit=10, owner="A", now=now)] == [task_id]
     assert await repository.claim(task_id=task_id, owner="A", expires_at=now, now=now) is True
     assert await repository.list_active(limit=10, owner="B", now=now) == []
