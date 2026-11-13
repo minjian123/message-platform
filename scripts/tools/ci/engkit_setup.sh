@@ -13,6 +13,8 @@
 #      的 URL（含当时的 `CI_JOB_TOKEN`），故每次先 `remote set-url` 再 fetch；
 #   4. `uv sync --frozen` 另按 pyproject 的路径依赖拉 engkit 包（提供 ruff / pyright 版本与命令），
 #      与克隆是**两条都要有**的路径（基线读文件，包提供工具）。
+#   5. **跨仓克隆需在目标项目授权**（2026-11-13）：调用方 `mjs/msg` 必须登记在 `bms/engkit`（以及 `bms/bms`）
+#      的 job token 入向白名单，未登记即 403；详见 `bms_setup.sh` 同号注释与 bms《开发部署规划》CI 节。
 
 ENGKIT_REPO_ROOT="${CI_PROJECT_DIR:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 ENGKIT_CLONE_DIR="${ENGKIT_REPO_ROOT}/../engkit"

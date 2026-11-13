@@ -15,6 +15,11 @@
 #   3. 检出统一 `--detach`：runner 工作区跨作业复用时看的是**远端当前值**，不会停在首次克隆的旧提交；
 #      同时始终刷新 `origin/main`（`check_prototype_review --changed origin/main` 等差分门禁的基线）；
 #   4. 拉取失败即失败（不静默跳过）——基座缺失时依赖安装必然报错，早失败可归因清晰。
+#   5. **跨仓克隆需在目标项目授权**（2026-11-13）：GitLab job token 走**被访问项目**的入向白名单，
+#      调用方 `mjs/msg` 必须登记在 `bms/bms` 与 `bms/engkit` 的 Settings › CI/CD › Job token permissions
+#      里；未登记即 403（`remote: Authentication by CI/CD job token not allowed from msg to project #N`），
+#      与代码无关。新增跨仓克隆依赖（或新增产品仓）时同步登记。口径见 bms《开发部署规划》
+#      「开发工作流与 CI」节。
 
 BMS_REPO_ROOT="${CI_PROJECT_DIR:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 BMS_CLONE_DIR="${BMS_REPO_ROOT}/../bms"
