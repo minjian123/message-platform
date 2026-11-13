@@ -208,8 +208,18 @@ async def test_expand_registers_new_member_out_of_isr() -> None:
     assert list(state.followers.keys()) == ["n2", "n3"]
     assert state.followers["n3"].in_sync is False
     assert state.followers["n3"].leo == 0
+    assert state.followers["n3"].last_fetch_ms == float("-inf")
     assert "n3" not in state.isr
     assert list(state.isr) == list(NODES2)
+
+    # 从未拉取过的新成员不得因「LEO 0 ≥ HW 0」被扫描提前拉进 ISR（空分区占位）。
+    await leader.scan_isr_once()
+    assert "n3" not in state.isr
+
+    # 真实拉取一次后（新鲜度建立）才由扫描重入。
+    state.followers.set("n3", FollowerProgress(leo=0, last_fetch_ms=1_000.0, in_sync=False))
+    await leader.scan_isr_once()
+    assert "n3" in state.isr
 
 
 async def test_detach_when_node_removed_from_replicas() -> None:

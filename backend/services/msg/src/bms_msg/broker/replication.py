@@ -1952,7 +1952,6 @@ class ReplicationCoordinator(ReplicationView):
         state.replicas = replicas
         state.min_insync_replicas = self._effective_min_insync(topology.min_insync_replicas, len(replicas))
         start = await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no)
-        now = self._clock()
         current: ConcurrentStableDict[str, FollowerProgress] = ConcurrentStableDict()
         for member in replicas:
             if member == new_leader:
@@ -1962,7 +1961,9 @@ class ReplicationCoordinator(ReplicationView):
             # 新加入者按日志起点建进度且 `in_sync=False`，等拉取追平后由扫描路径重入。
             current.set(
                 member,
-                progress if progress is not None else FollowerProgress(leo=start, last_fetch_ms=now, in_sync=False),
+                progress
+                if progress is not None
+                else FollowerProgress(leo=start, last_fetch_ms=float("-inf"), in_sync=False),
             )
         state.followers = current
         state.isr = ConcurrentStableSet(member for member in state.isr if member in replicas)
