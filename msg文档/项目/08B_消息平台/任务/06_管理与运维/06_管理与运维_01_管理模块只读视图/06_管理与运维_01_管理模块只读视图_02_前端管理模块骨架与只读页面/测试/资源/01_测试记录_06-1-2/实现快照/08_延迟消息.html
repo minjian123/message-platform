@@ -18,7 +18,6 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 08 · 延迟消息</h1>
 <div class="frame"><section data-v-f9ea3dc7="" class="admin-page" data-test="page-delayed">
-  <h1 data-v-f9ea3dc7="">延迟消息</h1>
   <p data-v-f9ea3dc7="" class="admin-page__hint" data-test="delayed-readonly">只读：不提供改期与取消</p>
   <section data-v-f9ea3dc7="" data-test="delayed-summary">
     <div data-v-f9ea3dc7="" class="el-descriptions el-descriptions--small">
@@ -49,29 +48,37 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
           <div data-v-f9ea3dc7=""></div>
           <div data-v-f9ea3dc7=""></div>
           <div data-v-f9ea3dc7=""></div>
+          <div data-v-f9ea3dc7=""></div>
         </div>
         <div class="el-table__header-wrapper">
-          <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 340px;">
+          <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 440px;">
             <colgroup>
-              <col name="el-table_8_column_44" width="100">
-              <col name="el-table_8_column_45" width="100">
-              <col name="el-table_8_column_46" width="140">
+              <col name="el-table_7_column_40" width="100">
+              <col name="el-table_7_column_41" width="100">
+              <col name="el-table_7_column_42" width="100">
+              <col name="el-table_7_column_43" width="140">
             </colgroup>
             <thead class="">
               <tr class="">
-                <th class="el-table_8_column_44 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <th class="el-table_7_column_40 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                   <div class="cell">档位
                     <!---->
                     <!---->
                   </div>
                 </th>
-                <th class="el-table_8_column_45 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <th class="el-table_7_column_41 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                   <div class="cell">条数
                     <!---->
                     <!---->
                   </div>
                 </th>
-                <th class="el-table_8_column_46 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                <th class="el-table_7_column_42 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <div class="cell">占比
+                    <!---->
+                    <!---->
+                  </div>
+                </th>
+                <th class="el-table_7_column_43 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                   <div class="cell">最小剩余时间
                     <!---->
                     <!---->
@@ -85,62 +92,78 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
           <div class="el-scrollbar">
             <div class="el-scrollbar__wrap el-scrollbar__wrap--hidden-default">
               <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
-                <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 340px;">
+                <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 440px;">
                   <colgroup>
-                    <col name="el-table_8_column_44" width="100">
-                    <col name="el-table_8_column_45" width="100">
-                    <col name="el-table_8_column_46" width="140">
+                    <col name="el-table_7_column_40" width="100">
+                    <col name="el-table_7_column_41" width="100">
+                    <col name="el-table_7_column_42" width="100">
+                    <col name="el-table_7_column_43" width="140">
                   </colgroup>
                   <!--v-if-->
                   <tbody tabindex="-1">
                     <tr class="el-table__row">
-                      <td colspan="1" rowspan="1" class="el-table_8_column_44 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_40 el-table__cell">
                         <div class="cell">
                           <!---->1s
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_45 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_41 el-table__cell">
                         <div class="cell">
                           <!---->3
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_46 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_42 el-table__cell">
                         <div class="cell">
-                          <!---->200
+                          <!---->17.6%
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_7_column_43 el-table__cell">
+                        <div class="cell">
+                          <!---->0 秒
                         </div>
                       </td>
                     </tr>
                     <tr class="el-table__row">
-                      <td colspan="1" rowspan="1" class="el-table_8_column_44 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_40 el-table__cell">
                         <div class="cell">
                           <!---->5m
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_45 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_41 el-table__cell">
                         <div class="cell">
                           <!---->12
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_46 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_42 el-table__cell">
                         <div class="cell">
-                          <!---->280000
+                          <!---->70.6%
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_7_column_43 el-table__cell">
+                        <div class="cell">
+                          <!---->4 分钟
                         </div>
                       </td>
                     </tr>
                     <tr class="el-table__row">
-                      <td colspan="1" rowspan="1" class="el-table_8_column_44 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_40 el-table__cell">
                         <div class="cell">
                           <!---->60m
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_45 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_41 el-table__cell">
                         <div class="cell">
                           <!---->0
                         </div>
                       </td>
-                      <td colspan="1" rowspan="1" class="el-table_8_column_46 el-table__cell">
+                      <td colspan="1" rowspan="1" class="el-table_7_column_42 el-table__cell">
                         <div class="cell">
-                          <!---->0
+                          <!---->0.0%
+                        </div>
+                      </td>
+                      <td colspan="1" rowspan="1" class="el-table_7_column_43 el-table__cell">
+                        <div class="cell">
+                          <!---->0 秒
                         </div>
                       </td>
                     </tr>
@@ -188,10 +211,52 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
         <!--v-if-->
         <div class="el-input__wrapper" tabindex="-1">
           <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="delayed-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-8451-57"><!-- suffix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="delayed-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-2105-101"><!-- suffix slot -->
           <!--v-if-->
         </div><!-- append slot -->
         <!--v-if-->
+      </div>
+      <div data-v-f9ea3dc7="" class="el-input">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="delayed-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题过滤" id="el-id-2105-102"><!-- suffix slot -->
+          <!--v-if-->
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-f9ea3dc7="" class="el-input">
+        <!-- input -->
+        <!-- prepend slot -->
+        <!--v-if-->
+        <div class="el-input__wrapper" tabindex="-1">
+          <!-- prefix slot -->
+          <!--v-if--><input class="el-input__inner" data-test="delayed-partition" type="text" autocomplete="off" tabindex="0" placeholder="分区过滤" id="el-id-2105-103"><!-- suffix slot -->
+          <!--v-if-->
+        </div><!-- append slot -->
+        <!--v-if-->
+      </div>
+      <div data-v-f9ea3dc7="" class="el-select" data-test="delayed-level">
+        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+          <!--v-if-->
+          <div class="el-select__selection">
+            <!--v-if-->
+            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-2105-90" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-2105-104">
+              <!--v-if-->
+            </div>
+            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>档位过滤</span></div>
+          </div>
+          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+              </svg></i>
+            <!--v-if-->
+            <!--v-if-->
+          </div>
+        </div>
+        <!--teleport start-->
+        <!--teleport end-->
       </div><button data-v-f9ea3dc7="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="delayed-query">
         <!--v-if--><span class="">查询</span>
       </button><button data-v-f9ea3dc7="" aria-disabled="false" type="button" class="el-button" data-test="delayed-reset">
@@ -213,53 +278,53 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
           <div class="el-table__header-wrapper">
             <table class="el-table__header" border="0" cellpadding="0" cellspacing="0" style="width: 910px;">
               <colgroup>
-                <col name="el-table_9_column_47" width="180">
-                <col name="el-table_9_column_48" width="140">
-                <col name="el-table_9_column_49" width="80">
-                <col name="el-table_9_column_50" width="90">
-                <col name="el-table_9_column_51" width="180">
-                <col name="el-table_9_column_52" width="120">
-                <col name="el-table_9_column_53" width="120">
+                <col name="el-table_8_column_44" width="180">
+                <col name="el-table_8_column_45" width="140">
+                <col name="el-table_8_column_46" width="80">
+                <col name="el-table_8_column_47" width="90">
+                <col name="el-table_8_column_48" width="180">
+                <col name="el-table_8_column_49" width="120">
+                <col name="el-table_8_column_50" width="120">
               </colgroup>
               <thead class="">
                 <tr class="">
-                  <th class="el-table_9_column_47 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_44 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">log_id
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_48 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_45 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">主题
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_49 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_46 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">分区
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_50 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_47 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">档位
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_51 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_48 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">到期时间
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_52 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_49 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">剩余时间
                       <!---->
                       <!---->
                     </div>
                   </th>
-                  <th class="el-table_9_column_53 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
+                  <th class="el-table_8_column_50 is-leaf el-table__cell" colspan="1" rowspan="1" scope="col">
                     <div class="cell">trace_id
                       <!---->
                       <!---->
@@ -275,48 +340,48 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
                 <div class="el-scrollbar__view" style="display: inline-block; vertical-align: middle;">
                   <table class="el-table__body" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed; width: 910px;">
                     <colgroup>
-                      <col name="el-table_9_column_47" width="180">
-                      <col name="el-table_9_column_48" width="140">
-                      <col name="el-table_9_column_49" width="80">
-                      <col name="el-table_9_column_50" width="90">
-                      <col name="el-table_9_column_51" width="180">
-                      <col name="el-table_9_column_52" width="120">
-                      <col name="el-table_9_column_53" width="120">
+                      <col name="el-table_8_column_44" width="180">
+                      <col name="el-table_8_column_45" width="140">
+                      <col name="el-table_8_column_46" width="80">
+                      <col name="el-table_8_column_47" width="90">
+                      <col name="el-table_8_column_48" width="180">
+                      <col name="el-table_8_column_49" width="120">
+                      <col name="el-table_8_column_50" width="120">
                     </colgroup>
                     <!--v-if-->
                     <tbody tabindex="-1">
                       <tr class="el-table__row">
-                        <td colspan="1" rowspan="1" class="el-table_9_column_47 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_44 el-table__cell">
                           <div class="cell">
                             <!---->01J8Y7FGHIJ
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_48 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_45 el-table__cell">
                           <div class="cell">
                             <!---->order.created
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_49 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_46 el-table__cell">
                           <div class="cell">
                             <!---->0
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_50 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_47 el-table__cell">
                           <div class="cell">
                             <!---->5m
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_51 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_48 el-table__cell">
                           <div class="cell">
-                            <!---->2026-11-09T10:05:00Z
+                            <!---->2026-11-09 18:05:00
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_52 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_49 el-table__cell">
                           <div class="cell">
-                            <!---->280000
+                            <!---->4 分钟
                           </div>
                         </td>
-                        <td colspan="1" rowspan="1" class="el-table_9_column_53 el-table__cell">
+                        <td colspan="1" rowspan="1" class="el-table_8_column_50 el-table__cell">
                           <div class="cell">
                             <!---->—
                           </div>

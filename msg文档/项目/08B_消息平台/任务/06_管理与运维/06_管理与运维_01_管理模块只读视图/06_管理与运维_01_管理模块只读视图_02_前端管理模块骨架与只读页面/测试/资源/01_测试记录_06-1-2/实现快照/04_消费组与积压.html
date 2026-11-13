@@ -18,7 +18,6 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 04 · 消费组与积压</h1>
 <div class="frame"><section data-v-e80e582e="" class="admin-page" data-test="page-groups">
-  <h1 data-v-e80e582e="">消费组与积压</h1>
   <p data-v-e80e582e="" class="admin-page__hint">位点重置归 06-2，本页只读</p>
   <section data-v-2f1cb3c3="" data-v-e80e582e="" class="readonly-list" data-test="readonly-list" data-state="ready">
     <header data-v-2f1cb3c3="" class="readonly-list__head">
@@ -36,7 +35,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
         <!--v-if-->
         <div class="el-input__wrapper" tabindex="-1">
           <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="groups-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-8451-10"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+          <!--v-if--><input class="el-input__inner" data-test="groups-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-2105-10"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
         </div><!-- append slot -->
         <!--v-if-->
       </div>
@@ -46,7 +45,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
         <!--v-if-->
         <div class="el-input__wrapper" tabindex="-1">
           <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="groups-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-8451-11"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+          <!--v-if--><input class="el-input__inner" data-test="groups-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-2105-11"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
         </div><!-- append slot -->
         <!--v-if-->
       </div><button data-v-e80e582e="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="groups-query">

@@ -18,7 +18,6 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 02 · 平台概览</h1>
 <div class="frame"><section data-v-2e4c4204="" class="admin-page" data-test="page-overview">
-  <h1 data-v-2e4c4204="">平台概览</h1>
   <p data-v-2e4c4204="" class="admin-page__hint" data-test="overview-grafana-hint">趋势图不自绘，跳转 Grafana 看板</p>
   <section data-v-c27a427a="" data-v-2e4c4204="" class="overview-metrics" data-test="overview-metrics" data-state="ready">
     <div data-v-c27a427a="" class="overview-metrics__head">
@@ -27,52 +26,54 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
       </button>
     </div>
     <p data-v-c27a427a="" class="overview-metrics__hint" data-test="overview-hint">挂载取一次，每 30 秒刷新</p>
+    <p data-v-c27a427a="" class="overview-metrics__hint" data-test="overview-updated">上次更新：2026/11/13 14:02:08</p>
+    <!--v-if-->
     <div data-v-c27a427a="" class="overview-metrics__grid">
-      <div data-v-a20fceb8="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-throughput" data-ready="true" data-degraded="false">
-        <div data-v-a20fceb8="" class="bms-metric-card__header"><span data-v-a20fceb8="" class="bms-metric-card__title" data-test="metric-title">入口吞吐</span><button data-v-a20fceb8="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
-        <div data-v-a20fceb8="" class="bms-metric-card__value" data-test="metric-value">
-          <!--v-if--><span data-v-a20fceb8="" class="bms-metric-card__number">1,280</span><span data-v-a20fceb8="" class="bms-metric-card__unit" data-test="metric-unit">/s</span>
+      <div data-v-23066fe2="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-throughput" data-ready="true" data-degraded="false">
+        <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">入口吞吐</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+        <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+          <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">1,280</span><span data-v-23066fe2="" class="bms-metric-card__unit" data-test="metric-unit">/s</span>
         </div>
         <!--v-if-->
-        <div data-v-a20fceb8="" class="bms-metric-card__trend">
+        <div data-v-23066fe2="" class="bms-metric-card__trend">
           <!--v-if-->
         </div>
-        <div data-v-a20fceb8="" class="bms-metric-card__caption" data-test="metric-caption">采样周期均值</div>
+        <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">采样周期均值</div>
       </div>
-      <div data-v-a20fceb8="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-lag" data-ready="true" data-degraded="false">
-        <div data-v-a20fceb8="" class="bms-metric-card__header"><span data-v-a20fceb8="" class="bms-metric-card__title" data-test="metric-title">当前积压</span><button data-v-a20fceb8="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
-        <div data-v-a20fceb8="" class="bms-metric-card__value" data-test="metric-value">
-          <!--v-if--><span data-v-a20fceb8="" class="bms-metric-card__number">3,412</span>
+      <div data-v-23066fe2="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-lag" data-ready="true" data-degraded="false">
+        <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">当前积压</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+        <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+          <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">3,412</span>
           <!--v-if-->
         </div>
         <!--v-if-->
-        <div data-v-a20fceb8="" class="bms-metric-card__trend">
+        <div data-v-23066fe2="" class="bms-metric-card__trend">
           <!--v-if-->
         </div>
-        <div data-v-a20fceb8="" class="bms-metric-card__caption" data-test="metric-caption">当前租户汇总</div>
+        <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">当前租户汇总</div>
       </div>
-      <div data-v-a20fceb8="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-dlq" data-ready="true" data-degraded="false">
-        <div data-v-a20fceb8="" class="bms-metric-card__header"><span data-v-a20fceb8="" class="bms-metric-card__title" data-test="metric-title">死信数</span><button data-v-a20fceb8="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
-        <div data-v-a20fceb8="" class="bms-metric-card__value" data-test="metric-value">
-          <!--v-if--><span data-v-a20fceb8="" class="bms-metric-card__number">17</span>
+      <div data-v-23066fe2="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-dlq" data-ready="true" data-degraded="false">
+        <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">死信数</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+        <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+          <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">17</span>
           <!--v-if-->
         </div>
         <!--v-if-->
-        <div data-v-a20fceb8="" class="bms-metric-card__trend">
+        <div data-v-23066fe2="" class="bms-metric-card__trend">
           <!--v-if-->
         </div>
-        <div data-v-a20fceb8="" class="bms-metric-card__caption" data-test="metric-caption">待处置</div>
+        <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">待处置</div>
       </div>
-      <div data-v-a20fceb8="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-disk" data-ready="true" data-degraded="false">
-        <div data-v-a20fceb8="" class="bms-metric-card__header"><span data-v-a20fceb8="" class="bms-metric-card__title" data-test="metric-title">磁盘使用率</span><button data-v-a20fceb8="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
-        <div data-v-a20fceb8="" class="bms-metric-card__value" data-test="metric-value">
-          <!--v-if--><span data-v-a20fceb8="" class="bms-metric-card__number">63</span><span data-v-a20fceb8="" class="bms-metric-card__unit" data-test="metric-unit">%</span>
+      <div data-v-23066fe2="" data-v-c27a427a="" class="bms-metric-card" data-test="overview-card-disk" data-ready="true" data-degraded="false">
+        <div data-v-23066fe2="" class="bms-metric-card__header"><span data-v-23066fe2="" class="bms-metric-card__title" data-test="metric-title">磁盘使用率</span><button data-v-23066fe2="" type="button" class="bms-metric-card__refresh" data-test="metric-refresh"> 刷新 </button></div>
+        <div data-v-23066fe2="" class="bms-metric-card__value" data-test="metric-value">
+          <!--v-if--><span data-v-23066fe2="" class="bms-metric-card__number">63</span><span data-v-23066fe2="" class="bms-metric-card__unit" data-test="metric-unit">%</span>
         </div>
         <!--v-if-->
-        <div data-v-a20fceb8="" class="bms-metric-card__trend">
+        <div data-v-23066fe2="" class="bms-metric-card__trend">
           <!--v-if-->
         </div>
-        <div data-v-a20fceb8="" class="bms-metric-card__caption" data-test="metric-caption">多卷取最大值</div>
+        <div data-v-23066fe2="" class="bms-metric-card__caption" data-test="metric-caption">多卷取最大值</div>
       </div>
     </div>
   </section>

@@ -18,213 +18,353 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 06 · 死信与重放</h1>
 <div class="frame"><section data-v-99d786b7="" class="admin-page" data-test="page-dlq">
-  <h1 data-v-99d786b7="">死信与重放</h1>
-  <section data-v-2f1cb3c3="" data-v-99d786b7="" class="readonly-list" data-test="readonly-list" data-state="empty">
-    <header data-v-2f1cb3c3="" class="readonly-list__head">
-      <h2 data-v-2f1cb3c3="">死信</h2>
-      <div data-v-2f1cb3c3="" class="readonly-list__actions">
-        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
-          <!--v-if--><span class="">重新加载</span>
-        </button>
+  <div data-v-99d786b7="" class="el-tabs el-tabs--top" data-test="dlq-tabs">
+    <div class="el-tabs__header is-top">
+      <div class="el-tabs__nav-wrap is-top">
+        <!---->
+        <div class="el-tabs__nav-scroll">
+          <div class="el-tabs__nav is-top" style="transform: translateX(-0px);" role="tablist">
+            <div class="el-tabs__active-bar is-top" style="transition: none; width: 0px; transform: translateX(0px);"></div>
+            <div class="el-tabs__item is-top is-active" id="tab-dlq" aria-controls="pane-dlq" role="tab" aria-selected="true" tabindex="0">死信
+              <!---->
+            </div>
+            <div class="el-tabs__item is-top" id="tab-replay" aria-controls="pane-replay" role="tab" aria-selected="false" tabindex="-1">重放任务
+              <!---->
+            </div>
+          </div>
+        </div>
       </div>
-    </header>
-    <div data-v-99d786b7="" class="admin-page__filters">
-      <div data-v-99d786b7="" class="el-select" style="width: 150px;" data-test="dlq-status">
-        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
-          <!--v-if-->
-          <div class="el-select__selection">
-            <!--v-if-->
-            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-8451-26" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-8451-44">
+      <!---->
+    </div>
+    <div class="el-tabs__content">
+      <div data-v-99d786b7="" id="pane-dlq" class="el-tab-pane" role="tabpanel" aria-hidden="false" aria-labelledby="tab-dlq">
+        <section data-v-2f1cb3c3="" data-v-99d786b7="" class="readonly-list" data-test="readonly-list" data-state="empty">
+          <header data-v-2f1cb3c3="" class="readonly-list__head">
+            <h2 data-v-2f1cb3c3="">死信</h2>
+            <div data-v-2f1cb3c3="" class="readonly-list__actions">
+              <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+                <!--v-if--><span class="">重新加载</span>
+              </button>
+            </div>
+          </header>
+          <div data-v-99d786b7="" class="admin-page__filters">
+            <div data-v-99d786b7="" class="el-select" style="width: 150px;" data-test="dlq-status">
+              <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                <!--v-if-->
+                <div class="el-select__selection">
+                  <!--v-if-->
+                  <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-2105-32" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-2105-68">
+                    <!--v-if-->
+                  </div>
+                  <div class="el-select__selected-item el-select__placeholder is-transparent"><span>状态</span></div>
+                </div>
+                <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                      <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                    </svg></i>
+                  <!--v-if-->
+                  <!--v-if-->
+                </div>
+              </div>
+              <!--teleport start-->
+              <!--teleport end-->
+            </div>
+            <div data-v-99d786b7="" class="el-select" style="width: 160px;" data-test="dlq-reason">
+              <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                <!--v-if-->
+                <div class="el-select__selection">
+                  <!--v-if-->
+                  <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-2105-39" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-2105-69">
+                    <!--v-if-->
+                  </div>
+                  <div class="el-select__selected-item el-select__placeholder is-transparent"><span>原因</span></div>
+                </div>
+                <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                      <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                    </svg></i>
+                  <!--v-if-->
+                  <!--v-if-->
+                </div>
+              </div>
+              <!--teleport start-->
+              <!--teleport end-->
+            </div>
+            <div data-v-99d786b7="" class="el-input el-input--suffix" style="width: 160px;">
+              <!-- input -->
+              <!-- prepend slot -->
+              <!--v-if-->
+              <div class="el-input__wrapper" tabindex="-1">
+                <!-- prefix slot -->
+                <!--v-if--><input class="el-input__inner" data-test="dlq-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-2105-70"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+              </div><!-- append slot -->
               <!--v-if-->
             </div>
-            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>状态</span></div>
-          </div>
-          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
-              </svg></i>
-            <!--v-if-->
-            <!--v-if-->
-          </div>
-        </div>
-        <!--teleport start-->
-        <!--teleport end-->
-      </div>
-      <div data-v-99d786b7="" class="el-select" style="width: 160px;" data-test="dlq-reason">
-        <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
-          <!--v-if-->
-          <div class="el-select__selection">
-            <!--v-if-->
-            <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-8451-33" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-8451-45">
+            <div data-v-99d786b7="" class="el-input-number is-without-controls is-center" style="width: 110px;" data-test="dlq-partition">
+              <!--v-if-->
+              <!--v-if-->
+              <div class="el-input">
+                <!-- input -->
+                <!-- prepend slot -->
+                <!--v-if-->
+                <div class="el-input__wrapper" tabindex="-1">
+                  <!-- prefix slot -->
+                  <!--v-if--><input class="el-input__inner" step="1" max="9007199254740991" min="0" type="number" autocomplete="off" tabindex="0" placeholder="分区" role="spinbutton" aria-valuemax="9007199254740991" aria-valuemin="0" aria-valuenow="" aria-disabled="false" id="el-id-2105-71"><!-- suffix slot -->
+                  <!--v-if-->
+                </div><!-- append slot -->
+                <!--v-if-->
+              </div>
+            </div>
+            <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
+              <!-- input -->
+              <!-- prepend slot -->
+              <!--v-if-->
+              <div class="el-input__wrapper" tabindex="-1">
+                <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-2105-44" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="失败时间起" role="combobox" id="el-id-2105-72"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+              </div><!-- append slot -->
               <!--v-if-->
             </div>
-            <div class="el-select__selected-item el-select__placeholder is-transparent"><span>原因</span></div>
+            <!--teleport start-->
+            <!--teleport end-->
+            <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
+              <!-- input -->
+              <!-- prepend slot -->
+              <!--v-if-->
+              <div class="el-input__wrapper" tabindex="-1">
+                <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-2105-45" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="失败时间止" role="combobox" id="el-id-2105-75"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+              </div><!-- append slot -->
+              <!--v-if-->
+            </div>
+            <!--teleport start-->
+            <!--teleport end-->
+            <div data-v-99d786b7="" class="el-input el-input--suffix" style="width: 200px;">
+              <!-- input -->
+              <!-- prepend slot -->
+              <!--v-if-->
+              <div class="el-input__wrapper" tabindex="-1">
+                <!-- prefix slot -->
+                <!--v-if--><input class="el-input__inner" data-test="dlq-keyword" type="text" autocomplete="off" tabindex="0" placeholder="log_id / message_id" id="el-id-2105-78"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+              </div><!-- append slot -->
+              <!--v-if-->
+            </div><button data-v-99d786b7="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="dlq-query">
+              <!--v-if--><span class="">查询</span>
+            </button><button data-v-99d786b7="" aria-disabled="false" type="button" class="el-button" data-test="dlq-reset">
+              <!--v-if--><span class="">重置</span>
+            </button>
           </div>
-          <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-                <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
-              </svg></i>
-            <!--v-if-->
+          <!--v-if-->
+          <div data-v-2f1cb3c3="" class="el-empty" data-test="readonly-empty">
+            <div class="el-empty__image"><svg viewBox="0 0 79 86" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+                <defs>
+                  <linearGradient id="linearGradient-1-el-id-2105-88" x1="38.8503086%" y1="0%" x2="61.1496914%" y2="100%">
+                    <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+                    <stop stop-color="var(--el-empty-fill-color-4)" offset="100%"></stop>
+                  </linearGradient>
+                  <linearGradient id="linearGradient-2-el-id-2105-88" x1="0%" y1="9.5%" x2="100%" y2="90.5%">
+                    <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+                    <stop stop-color="var(--el-empty-fill-color-6)" offset="100%"></stop>
+                  </linearGradient>
+                  <rect id="path-3-el-id-2105-88" x="0" y="0" width="17" height="36"></rect>
+                </defs>
+                <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+                  <g transform="translate(-1268.000000, -535.000000)">
+                    <g transform="translate(1268.000000, 535.000000)">
+                      <path d="M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z" fill="var(--el-empty-fill-color-3)"></path>
+                      <polygon fill="var(--el-empty-fill-color-7)" transform="translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) " points="13 58 53 58 42 45 2 45"></polygon>
+                      <g transform="translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)">
+                        <polygon fill="var(--el-empty-fill-color-7)" transform="translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) " points="2.84078316e-14 3 18 3 23 7 5 7"></polygon>
+                        <polygon fill="var(--el-empty-fill-color-5)" points="-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"></polygon>
+                        <rect fill="url(#linearGradient-1-el-id-2105-88)" transform="translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) " x="38" y="7" width="17" height="36"></rect>
+                        <polygon fill="var(--el-empty-fill-color-2)" transform="translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) " points="24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"></polygon>
+                      </g>
+                      <rect fill="url(#linearGradient-2-el-id-2105-88)" x="13" y="45" width="40" height="36"></rect>
+                      <g transform="translate(53.000000, 45.000000)">
+                        <use fill="var(--el-empty-fill-color-8)" transform="translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) " xlink:href="#path-3-el-id-2105-88"></use>
+                        <polygon fill="var(--el-empty-fill-color-9)" mask="url(#mask-4-el-id-2105-88)" transform="translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) " points="7 0 24 0 20 18 7 16.5"></polygon>
+                      </g>
+                      <polygon fill="var(--el-empty-fill-color-2)" transform="translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) " points="62 45 79 45 70 58 53 58"></polygon>
+                    </g>
+                  </g>
+                </g>
+              </svg></div>
+            <div class="el-empty__description">
+              <p>暂无数据</p>
+            </div>
             <!--v-if-->
           </div>
-        </div>
+        </section>
+      </div>
+      <div data-v-99d786b7="" id="pane-replay" class="el-tab-pane" role="tabpanel" aria-hidden="true" aria-labelledby="tab-replay" style="display: none;">
+        <section data-v-2f1cb3c3="" data-v-271c00a1="" class="readonly-list" data-test="replay-list" data-state="empty">
+          <header data-v-2f1cb3c3="" class="readonly-list__head">
+            <h2 data-v-2f1cb3c3="">重放任务</h2>
+            <div data-v-2f1cb3c3="" class="readonly-list__actions">
+              <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
+                <!--v-if--><span class="">重新加载</span>
+              </button>
+            </div>
+          </header>
+          <div data-v-271c00a1="" class="replay-filters">
+            <div data-v-271c00a1="" class="replay-filters__row">
+              <div data-v-271c00a1="" class="el-select" style="width: 140px;" data-test="replay-status">
+                <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                  <!--v-if-->
+                  <div class="el-select__selection">
+                    <!--v-if-->
+                    <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-2105-46" aria-expanded="false" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-2105-79">
+                      <!--v-if-->
+                    </div>
+                    <div class="el-select__selected-item el-select__placeholder is-transparent"><span>状态</span></div>
+                  </div>
+                  <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                        <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                      </svg></i>
+                    <!--v-if-->
+                    <!--v-if-->
+                  </div>
+                </div>
+                <!--teleport start-->
+                <!--teleport end-->
+              </div>
+              <div data-v-271c00a1="" class="el-input el-input--suffix" style="width: 120px;">
+                <!-- input -->
+                <!-- prepend slot -->
+                <!--v-if-->
+                <div class="el-input__wrapper" tabindex="-1">
+                  <!-- prefix slot -->
+                  <!--v-if--><input class="el-input__inner" data-test="replay-namespace" type="text" autocomplete="off" tabindex="0" placeholder="命名空间" id="el-id-2105-80"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+                </div><!-- append slot -->
+                <!--v-if-->
+              </div>
+              <div data-v-271c00a1="" class="el-input el-input--suffix" style="width: 170px;">
+                <!-- input -->
+                <!-- prepend slot -->
+                <!--v-if-->
+                <div class="el-input__wrapper" tabindex="-1">
+                  <!-- prefix slot -->
+                  <!--v-if--><input class="el-input__inner" data-test="replay-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-2105-81"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+                </div><!-- append slot -->
+                <!--v-if-->
+              </div>
+            </div>
+            <div data-v-271c00a1="" class="replay-filters__row">
+              <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
+                <!-- input -->
+                <!-- prepend slot -->
+                <!--v-if-->
+                <div class="el-input__wrapper" tabindex="-1">
+                  <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-2105-54" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="创建时间" role="combobox" id="el-id-2105-82"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+                </div><!-- append slot -->
+                <!--v-if-->
+              </div>
+              <!--teleport start-->
+              <!--teleport end-->
+              <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
+                <!-- input -->
+                <!-- prepend slot -->
+                <!--v-if-->
+                <div class="el-input__wrapper" tabindex="-1">
+                  <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-2105-55" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="创建时间" role="combobox" id="el-id-2105-85"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+                </div><!-- append slot -->
+                <!--v-if-->
+              </div>
+              <!--teleport start-->
+              <!--teleport end--><button data-v-271c00a1="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="replay-query">
+                <!--v-if--><span class="">查询</span>
+              </button><button data-v-271c00a1="" aria-disabled="false" type="button" class="el-button" data-test="replay-reset">
+                <!--v-if--><span class="">重置</span>
+              </button><button data-v-271c00a1="" aria-disabled="false" type="button" class="el-button el-button--success is-plain" data-test="replay-create">
+                <!--v-if--><span class="">新建重放任务</span>
+              </button>
+            </div>
+          </div>
+          <div data-v-2f1cb3c3="" class="el-empty" data-test="readonly-empty">
+            <div class="el-empty__image"><svg viewBox="0 0 79 86" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+                <defs>
+                  <linearGradient id="linearGradient-1-el-id-2105-89" x1="38.8503086%" y1="0%" x2="61.1496914%" y2="100%">
+                    <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+                    <stop stop-color="var(--el-empty-fill-color-4)" offset="100%"></stop>
+                  </linearGradient>
+                  <linearGradient id="linearGradient-2-el-id-2105-89" x1="0%" y1="9.5%" x2="100%" y2="90.5%">
+                    <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
+                    <stop stop-color="var(--el-empty-fill-color-6)" offset="100%"></stop>
+                  </linearGradient>
+                  <rect id="path-3-el-id-2105-89" x="0" y="0" width="17" height="36"></rect>
+                </defs>
+                <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+                  <g transform="translate(-1268.000000, -535.000000)">
+                    <g transform="translate(1268.000000, 535.000000)">
+                      <path d="M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z" fill="var(--el-empty-fill-color-3)"></path>
+                      <polygon fill="var(--el-empty-fill-color-7)" transform="translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) " points="13 58 53 58 42 45 2 45"></polygon>
+                      <g transform="translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)">
+                        <polygon fill="var(--el-empty-fill-color-7)" transform="translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) " points="2.84078316e-14 3 18 3 23 7 5 7"></polygon>
+                        <polygon fill="var(--el-empty-fill-color-5)" points="-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"></polygon>
+                        <rect fill="url(#linearGradient-1-el-id-2105-89)" transform="translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) " x="38" y="7" width="17" height="36"></rect>
+                        <polygon fill="var(--el-empty-fill-color-2)" transform="translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) " points="24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"></polygon>
+                      </g>
+                      <rect fill="url(#linearGradient-2-el-id-2105-89)" x="13" y="45" width="40" height="36"></rect>
+                      <g transform="translate(53.000000, 45.000000)">
+                        <use fill="var(--el-empty-fill-color-8)" transform="translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) " xlink:href="#path-3-el-id-2105-89"></use>
+                        <polygon fill="var(--el-empty-fill-color-9)" mask="url(#mask-4-el-id-2105-89)" transform="translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) " points="7 0 24 0 20 18 7 16.5"></polygon>
+                      </g>
+                      <polygon fill="var(--el-empty-fill-color-2)" transform="translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) " points="62 45 79 45 70 58 53 58"></polygon>
+                    </g>
+                  </g>
+                </g>
+              </svg></div>
+            <div class="el-empty__description">
+              <p>暂无数据</p>
+            </div>
+            <!--v-if-->
+          </div>
+        </section>
         <!--teleport start-->
+        <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+          <div class="el-overlay el-modal-dialog" style="z-index: 2015; display: none;">
+            <div role="dialog" aria-modal="true" aria-label="新建重放任务" aria-describedby="el-id-2105-57" class="el-overlay-dialog"></div>
+          </div>
+        </transition-stub>
+        <!--teleport end-->
+        <!--teleport start-->
+        <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+          <div class="el-overlay el-modal-dialog" style="z-index: 2016; display: none;">
+            <div role="dialog" aria-modal="true" aria-label="确认创建重放任务" aria-describedby="el-id-2105-59" class="el-overlay-dialog"></div>
+          </div>
+        </transition-stub>
+        <!--teleport end-->
+        <!--teleport start-->
+        <transition-stub name="el-drawer-fade" appear="false" persisted="true" css="true">
+          <div class="el-overlay is-drawer el-modal-drawer" style="z-index: 2017; display: none;">
+            <div aria-modal="true" aria-label="重放任务详情" aria-describedby="el-id-2105-61" data-test="replay-detail-drawer" class="el-drawer rtl" style="width: 620px;" role="dialog"><span class="el-drawer__sr-focus" tabindex="-1"></span>
+              <header class="el-drawer__header"><span id="el-id-2105-60" role="heading" aria-level="2" class="el-drawer__title">重放任务详情</span><button aria-label="Close this dialog" class="el-drawer__close-btn" type="button"><i class="el-icon el-drawer__close"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                      <path fill="currentColor" d="M764.288 214.592 512 466.88 259.712 214.592a31.936 31.936 0 0 0-45.12 45.12L466.752 512 214.528 764.224a31.936 31.936 0 1 0 45.12 45.184L512 557.184l252.288 252.288a31.936 31.936 0 0 0 45.12-45.12L557.12 512.064l252.288-252.352a31.936 31.936 0 1 0-45.12-45.184z"></path>
+                    </svg></i></button></header>
+              <!--v-if-->
+              <div class="el-drawer__footer"><button data-v-5bea1400="" aria-disabled="false" type="button" class="el-button" data-test="replay-detail-close">
+                  <!--v-if--><span class="">关闭</span>
+                </button>
+                <!--v-if-->
+                <!--v-if-->
+                <!--v-if-->
+              </div>
+              <!--v-if-->
+            </div>
+          </div>
+        </transition-stub>
+        <!--teleport end-->
+        <!--teleport start-->
+        <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+          <div class="el-overlay el-modal-dialog" style="z-index: 2018; display: none;">
+            <div role="dialog" aria-modal="true" aria-label="暂停重放任务" aria-describedby="el-id-2105-63" class="el-overlay-dialog"></div>
+          </div>
+        </transition-stub>
         <!--teleport end-->
       </div>
-      <div data-v-99d786b7="" class="el-input el-input--suffix" style="width: 160px;">
-        <!-- input -->
-        <!-- prepend slot -->
-        <!--v-if-->
-        <div class="el-input__wrapper" tabindex="-1">
-          <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="dlq-topic" type="text" autocomplete="off" tabindex="0" placeholder="主题" id="el-id-8451-46"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
-        </div><!-- append slot -->
-        <!--v-if-->
-      </div>
-      <div data-v-99d786b7="" class="el-input-number is-without-controls is-center" style="width: 110px;" data-test="dlq-partition">
-        <!--v-if-->
-        <!--v-if-->
-        <div class="el-input">
-          <!-- input -->
-          <!-- prepend slot -->
-          <!--v-if-->
-          <div class="el-input__wrapper" tabindex="-1">
-            <!-- prefix slot -->
-            <!--v-if--><input class="el-input__inner" step="1" max="9007199254740991" min="0" type="number" autocomplete="off" tabindex="0" placeholder="分区" role="spinbutton" aria-valuemax="9007199254740991" aria-valuemin="0" aria-valuenow="" aria-disabled="false" id="el-id-8451-47"><!-- suffix slot -->
-            <!--v-if-->
-          </div><!-- append slot -->
-          <!--v-if-->
-        </div>
-      </div>
-      <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
-        <!-- input -->
-        <!-- prepend slot -->
-        <!--v-if-->
-        <div class="el-input__wrapper" tabindex="-1">
-          <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-8451-38" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="失败时间起" role="combobox" id="el-id-8451-48"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
-        </div><!-- append slot -->
-        <!--v-if-->
-      </div>
-      <!--teleport start-->
-      <!--teleport end-->
-      <div class="el-input el-input--prefix el-input--suffix el-date-editor el-date-editor--datetime el-tooltip__trigger el-tooltip__trigger" style="width: 190px;">
-        <!-- input -->
-        <!-- prepend slot -->
-        <!--v-if-->
-        <div class="el-input__wrapper" tabindex="-1">
-          <!-- prefix slot --><span class="el-input__prefix"><span class="el-input__prefix-inner"><i class="el-icon el-input__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path><path fill="currentColor" d="M480 256a32 32 0 0 1 32 32v256a32 32 0 0 1-64 0V288a32 32 0 0 1 32-32"></path><path fill="currentColor" d="M480 512h256q32 0 32 32t-32 32H480q-32 0-32-32t32-32"></path></svg></i><!--v-if--></span></span><input class="el-input__inner" aria-controls="el-id-8451-39" aria-expanded="false" aria-haspopup="dialog" type="text" autocomplete="off" tabindex="0" placeholder="失败时间止" role="combobox" id="el-id-8451-51"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
-        </div><!-- append slot -->
-        <!--v-if-->
-      </div>
-      <!--teleport start-->
-      <!--teleport end-->
-      <div data-v-99d786b7="" class="el-input el-input--suffix" style="width: 200px;">
-        <!-- input -->
-        <!-- prepend slot -->
-        <!--v-if-->
-        <div class="el-input__wrapper" tabindex="-1">
-          <!-- prefix slot -->
-          <!--v-if--><input class="el-input__inner" data-test="dlq-keyword" type="text" autocomplete="off" tabindex="0" placeholder="log_id / message_id" id="el-id-8451-54"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><i class="el-icon el-input__icon el-input__clear" style="visibility: hidden;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill="currentColor" d="m466.752 512-90.496-90.496a32 32 0 0 1 45.248-45.248L512 466.752l90.496-90.496a32 32 0 1 1 45.248 45.248L557.248 512l90.496 90.496a32 32 0 1 1-45.248 45.248L512 557.248l-90.496 90.496a32 32 0 0 1-45.248-45.248z"></path><path fill="currentColor" d="M512 896a384 384 0 1 0 0-768 384 384 0 0 0 0 768m0 64a448 448 0 1 1 0-896 448 448 0 0 1 0 896"></path></svg></i><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
-        </div><!-- append slot -->
-        <!--v-if-->
-      </div><button data-v-99d786b7="" aria-disabled="false" type="button" class="el-button el-button--primary" data-test="dlq-query">
-        <!--v-if--><span class="">查询</span>
-      </button><button data-v-99d786b7="" aria-disabled="false" type="button" class="el-button" data-test="dlq-reset">
-        <!--v-if--><span class="">重置</span>
-      </button>
     </div>
-    <div data-v-2f1cb3c3="" class="el-empty" data-test="readonly-empty">
-      <div class="el-empty__image"><svg viewBox="0 0 79 86" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-          <defs>
-            <linearGradient id="linearGradient-1-el-id-8451-55" x1="38.8503086%" y1="0%" x2="61.1496914%" y2="100%">
-              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
-              <stop stop-color="var(--el-empty-fill-color-4)" offset="100%"></stop>
-            </linearGradient>
-            <linearGradient id="linearGradient-2-el-id-8451-55" x1="0%" y1="9.5%" x2="100%" y2="90.5%">
-              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
-              <stop stop-color="var(--el-empty-fill-color-6)" offset="100%"></stop>
-            </linearGradient>
-            <rect id="path-3-el-id-8451-55" x="0" y="0" width="17" height="36"></rect>
-          </defs>
-          <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
-            <g transform="translate(-1268.000000, -535.000000)">
-              <g transform="translate(1268.000000, 535.000000)">
-                <path d="M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z" fill="var(--el-empty-fill-color-3)"></path>
-                <polygon fill="var(--el-empty-fill-color-7)" transform="translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) " points="13 58 53 58 42 45 2 45"></polygon>
-                <g transform="translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)">
-                  <polygon fill="var(--el-empty-fill-color-7)" transform="translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) " points="2.84078316e-14 3 18 3 23 7 5 7"></polygon>
-                  <polygon fill="var(--el-empty-fill-color-5)" points="-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"></polygon>
-                  <rect fill="url(#linearGradient-1-el-id-8451-55)" transform="translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) " x="38" y="7" width="17" height="36"></rect>
-                  <polygon fill="var(--el-empty-fill-color-2)" transform="translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) " points="24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"></polygon>
-                </g>
-                <rect fill="url(#linearGradient-2-el-id-8451-55)" x="13" y="45" width="40" height="36"></rect>
-                <g transform="translate(53.000000, 45.000000)">
-                  <use fill="var(--el-empty-fill-color-8)" transform="translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) " xlink:href="#path-3-el-id-8451-55"></use>
-                  <polygon fill="var(--el-empty-fill-color-9)" mask="url(#mask-4-el-id-8451-55)" transform="translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) " points="7 0 24 0 20 18 7 16.5"></polygon>
-                </g>
-                <polygon fill="var(--el-empty-fill-color-2)" transform="translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) " points="62 45 79 45 70 58 53 58"></polygon>
-              </g>
-            </g>
-          </g>
-        </svg></div>
-      <div class="el-empty__description">
-        <p>暂无数据</p>
-      </div>
-      <!--v-if-->
-    </div>
-  </section>
-  <section data-v-2f1cb3c3="" data-v-99d786b7="" class="readonly-list" data-test="readonly-list" data-state="empty">
-    <header data-v-2f1cb3c3="" class="readonly-list__head">
-      <h2 data-v-2f1cb3c3="">重放任务</h2>
-      <div data-v-2f1cb3c3="" class="readonly-list__actions">
-        <!--v-if--><button data-v-2f1cb3c3="" aria-disabled="false" type="button" class="el-button el-button--small" data-test="readonly-refresh">
-          <!--v-if--><span class="">重新加载</span>
-        </button>
-      </div>
-    </header>
-    <div data-v-2f1cb3c3="" class="el-empty" data-test="readonly-empty">
-      <div class="el-empty__image"><svg viewBox="0 0 79 86" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-          <defs>
-            <linearGradient id="linearGradient-1-el-id-8451-56" x1="38.8503086%" y1="0%" x2="61.1496914%" y2="100%">
-              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
-              <stop stop-color="var(--el-empty-fill-color-4)" offset="100%"></stop>
-            </linearGradient>
-            <linearGradient id="linearGradient-2-el-id-8451-56" x1="0%" y1="9.5%" x2="100%" y2="90.5%">
-              <stop stop-color="var(--el-empty-fill-color-1)" offset="0%"></stop>
-              <stop stop-color="var(--el-empty-fill-color-6)" offset="100%"></stop>
-            </linearGradient>
-            <rect id="path-3-el-id-8451-56" x="0" y="0" width="17" height="36"></rect>
-          </defs>
-          <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
-            <g transform="translate(-1268.000000, -535.000000)">
-              <g transform="translate(1268.000000, 535.000000)">
-                <path d="M39.5,86 C61.3152476,86 79,83.9106622 79,81.3333333 C79,78.7560045 57.3152476,78 35.5,78 C13.6847524,78 0,78.7560045 0,81.3333333 C0,83.9106622 17.6847524,86 39.5,86 Z" fill="var(--el-empty-fill-color-3)"></path>
-                <polygon fill="var(--el-empty-fill-color-7)" transform="translate(27.500000, 51.500000) scale(1, -1) translate(-27.500000, -51.500000) " points="13 58 53 58 42 45 2 45"></polygon>
-                <g transform="translate(34.500000, 31.500000) scale(-1, 1) rotate(-25.000000) translate(-34.500000, -31.500000) translate(7.000000, 10.000000)">
-                  <polygon fill="var(--el-empty-fill-color-7)" transform="translate(11.500000, 5.000000) scale(1, -1) translate(-11.500000, -5.000000) " points="2.84078316e-14 3 18 3 23 7 5 7"></polygon>
-                  <polygon fill="var(--el-empty-fill-color-5)" points="-3.69149156e-15 7 38 7 38 43 -3.69149156e-15 43"></polygon>
-                  <rect fill="url(#linearGradient-1-el-id-8451-56)" transform="translate(46.500000, 25.000000) scale(-1, 1) translate(-46.500000, -25.000000) " x="38" y="7" width="17" height="36"></rect>
-                  <polygon fill="var(--el-empty-fill-color-2)" transform="translate(39.500000, 3.500000) scale(-1, 1) translate(-39.500000, -3.500000) " points="24 7 41 7 55 -3.63806207e-12 38 -3.63806207e-12"></polygon>
-                </g>
-                <rect fill="url(#linearGradient-2-el-id-8451-56)" x="13" y="45" width="40" height="36"></rect>
-                <g transform="translate(53.000000, 45.000000)">
-                  <use fill="var(--el-empty-fill-color-8)" transform="translate(8.500000, 18.000000) scale(-1, 1) translate(-8.500000, -18.000000) " xlink:href="#path-3-el-id-8451-56"></use>
-                  <polygon fill="var(--el-empty-fill-color-9)" mask="url(#mask-4-el-id-8451-56)" transform="translate(12.000000, 9.000000) scale(-1, 1) translate(-12.000000, -9.000000) " points="7 0 24 0 20 18 7 16.5"></polygon>
-                </g>
-                <polygon fill="var(--el-empty-fill-color-2)" transform="translate(66.000000, 51.500000) scale(-1, 1) translate(-66.000000, -51.500000) " points="62 45 79 45 70 58 53 58"></polygon>
-              </g>
-            </g>
-          </g>
-        </svg></div>
-      <div class="el-empty__description">
-        <p>暂无数据</p>
-      </div>
-      <!--v-if-->
-    </div>
-  </section><!-- 详情抽屉 -->
+  </div><!-- 详情抽屉 -->
   <!--teleport start-->
   <transition-stub name="el-drawer-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay is-drawer el-modal-drawer" style="z-index: 2010; display: none;">
-      <div aria-modal="true" aria-label="死信详情" aria-describedby="el-id-8451-41" data-test="dlq-detail-drawer" class="el-drawer rtl" style="width: 480px;" role="dialog"><span class="el-drawer__sr-focus" tabindex="-1"></span>
-        <header class="el-drawer__header"><span id="el-id-8451-40" role="heading" aria-level="2" class="el-drawer__title">死信详情</span><button aria-label="Close this dialog" class="el-drawer__close-btn" type="button"><i class="el-icon el-drawer__close"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+    <div class="el-overlay is-drawer el-modal-drawer" style="z-index: 2019; display: none;">
+      <div aria-modal="true" aria-label="死信详情" aria-describedby="el-id-2105-65" data-test="dlq-detail-drawer" class="el-drawer rtl" style="width: 480px;" role="dialog"><span class="el-drawer__sr-focus" tabindex="-1"></span>
+        <header class="el-drawer__header"><span id="el-id-2105-64" role="heading" aria-level="2" class="el-drawer__title">死信详情</span><button aria-label="Close this dialog" class="el-drawer__close-btn" type="button"><i class="el-icon el-drawer__close"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
                 <path fill="currentColor" d="M764.288 214.592 512 466.88 259.712 214.592a31.936 31.936 0 0 0-45.12 45.12L466.752 512 214.528 764.224a31.936 31.936 0 1 0 45.12 45.184L512 557.184l252.288 252.288a31.936 31.936 0 0 0 45.12-45.12L557.12 512.064l252.288-252.352a31.936 31.936 0 1 0-45.12-45.184z"></path>
               </svg></i></button></header>
         <!--v-if-->
@@ -237,8 +377,8 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
   <!-- 处置确认 -->
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay el-modal-dialog" style="z-index: 2011; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="重放" aria-describedby="el-id-8451-43" class="el-overlay-dialog"></div>
+    <div class="el-overlay el-modal-dialog" style="z-index: 2020; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="重放" aria-describedby="el-id-2105-67" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->

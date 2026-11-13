@@ -165,7 +165,7 @@
             <el-dialog :model-value="scene === 'retention'" title="改保留期" width="480px" :close-on-click-modal="false">
               <el-form label-width="110px">
                 <el-form-item label="保留时长（毫秒）">
-                  <el-input-number :model-value="604800000" :min="1" :max="31622400000" size="small"></el-input-number>
+                  <el-input-number :model-value="2592000000" :min="1" :max="31622400000" size="small"></el-input-number>
                 </el-form-item>
                 <el-form-item label="容量上限（字节）">
                   <el-input-number :model-value="0" :min="0" size="small"></el-input-number>
@@ -247,7 +247,7 @@
                   <el-input-number :model-value="6" :min="1" :max="1024" size="small"></el-input-number>
                 </el-form-item>
                 <el-form-item label="保留期（毫秒）">
-                  <el-input-number :model-value="604800000" :min="1" size="small"></el-input-number>
+                  <el-input-number :model-value="2592000000" :min="1" size="small"></el-input-number>
                 </el-form-item>
                 <el-form-item label="容量上限">
                   <el-input-number :model-value="0" :min="0" size="small"></el-input-number>

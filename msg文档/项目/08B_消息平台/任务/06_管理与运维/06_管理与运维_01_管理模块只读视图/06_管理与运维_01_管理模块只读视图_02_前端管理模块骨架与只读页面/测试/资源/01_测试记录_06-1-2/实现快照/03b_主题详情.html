@@ -18,8 +18,7 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
 </style></head><body>
 <h1>实现渲染快照 · 03b · 主题详情</h1>
 <div class="frame"><section data-v-be821548="" class="admin-page" data-test="page-topic-detail">
-  <div data-v-be821548="" class="admin-page__head">
-    <h1 data-v-be821548="">order.created</h1>
+  <div data-v-be821548="" class="admin-page__head"><span data-v-be821548=""></span>
     <div data-v-be821548="" class="admin-page__actions"><button data-v-be821548="" aria-disabled="false" type="button" class="el-button" data-test="topic-expand">
         <!--v-if--><span class="">扩分区</span>
       </button><button data-v-be821548="" aria-disabled="false" type="button" class="el-button" data-test="topic-retention">
@@ -42,20 +41,21 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
             <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">分区数</td>
             <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">3</td>
             <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">状态</td>
-            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">active</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">正常</td>
           </tr>
           <tr>
             <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">保留期</td>
-            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">86400000</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0"><span data-v-be821548="" title="86400000">1 天</span></td>
             <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">清理策略</td>
             <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="0">delete</td>
             <td class="el-descriptions__cell el-descriptions__label is-bordered-label" colspan="1">创建时间</td>
-            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="1">2026-11-09T00:00:00Z</td>
+            <td class="el-descriptions__cell el-descriptions__content is-bordered-content" colspan="1">2026-11-09 08:00:00</td>
           </tr>
         </tbody>
       </table>
     </div>
   </div>
+  <!--v-if-->
   <!--v-if-->
   <section data-v-2f1cb3c3="" data-v-be821548="" class="readonly-list" data-test="readonly-list" data-state="ready">
     <header data-v-2f1cb3c3="" class="readonly-list__head">
@@ -279,24 +279,23 @@ input,.el-input__inner{border:1px solid #dcdfe6;border-radius:4px;padding:5px 8p
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
     <div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="扩分区" aria-describedby="el-id-8451-9" class="el-overlay-dialog"></div>
+      <div role="dialog" aria-modal="true" aria-label="扩分区" aria-describedby="el-id-2105-9" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
     <div class="el-overlay el-modal-dialog" style="z-index: 2002; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="改保留期" aria-describedby="el-id-8451-5" class="el-overlay-dialog"></div>
+      <div role="dialog" aria-modal="true" aria-label="改保留期" aria-describedby="el-id-2105-5" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
     <div class="el-overlay el-modal-dialog" style="z-index: 2003; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="删除主题（不可恢复）" aria-describedby="el-id-8451-7" class="el-overlay-dialog"></div>
+      <div role="dialog" aria-modal="true" aria-label="删除主题（不可恢复）" aria-describedby="el-id-2105-7" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->
-  <!--v-if-->
 </section></div>
 </body></html>
