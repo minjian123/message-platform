@@ -6,7 +6,7 @@
  * 保存整批提交 `PUT /admin/quotas`，成功后重新取数（以服务端生效值为准，不在前端推算）。
  */
 
-import { ElAlert, ElButton, ElInput, ElOption, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElInput, ElMessage, ElOption, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
 import { useMsgWriteAction } from '../composables/useMsgWriteAction'
@@ -75,9 +75,35 @@ const softViolations = computed(() =>
   }),
 )
 
-/** 是否可保存（有权限、无越界、无提交中）。 */
+/**
+ * 硬限 / 软限是否为非负整数（空串放行：硬限空按 0、软限空按不限）。
+ *
+ * @param row 可编辑行。
+ * @returns 是否非法。
+ */
+function invalidValue(row: EditableRow): boolean {
+  for (const raw of [row.hard, row.soft]) {
+    if (raw.trim() === '') {
+      continue
+    }
+    const value = Number(raw)
+    if (!Number.isInteger(value) || value < 0) {
+      return true
+    }
+  }
+  return false
+}
+
+/** 含非法数值的行。 */
+const invalidRows = computed(() => rows.value.filter(invalidValue))
+
+/** 是否可保存（有权限、无越界、无非法值、无提交中）。 */
 const canSave = computed(
-  () => canManage.value && softViolations.value.length === 0 && saveAction.status.value !== 'running',
+  () =>
+    canManage.value &&
+    softViolations.value.length === 0 &&
+    invalidRows.value.length === 0 &&
+    saveAction.status.value !== 'running',
 )
 
 /**
@@ -129,10 +155,11 @@ async function onScopeChange(): Promise<void> {
   await load()
 }
 
-/** 保存调整：成功后以服务端值为准刷新（越界 / 无权限时按钮已禁用，此处不再重复判空）。 */
+/** 保存调整：成功后提示并以服务端值为准刷新（越界 / 非法 / 无权限时按钮已禁用）。 */
 async function save(): Promise<void> {
   await saveAction.run()
   if (saveAction.status.value === 'done') {
+    ElMessage.success(message('msg.admin.quotas.saved'))
     await load()
   }
 }
@@ -143,7 +170,7 @@ onMounted(load)
 <template>
   <section class="admin-page" data-test="page-quotas">
     <div class="admin-page__head">
-      <h1>{{ message('msg.admin.quotas.title') }}</h1>
+      <span />
       <div class="admin-page__actions">
         <span class="admin-page__hint">{{ message('msg.admin.quotas.scope') }}</span>
         <el-select v-model="scope" style="width: 180px" data-test="quotas-scope" @change="onScopeChange">
@@ -169,6 +196,22 @@ onMounted(load)
 
     <el-alert v-if="loadError !== ''" type="error" :closable="false" show-icon :title="loadError" data-test="quotas-error" />
     <el-alert
+      v-else-if="!canManage"
+      type="info"
+      :closable="false"
+      show-icon
+      :title="message('msg.admin.quotas.readonly')"
+      data-test="quotas-readonly"
+    />
+    <el-alert
+      v-if="invalidRows.length > 0"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="message('msg.admin.quotas.integer')"
+      data-test="quotas-invalid-warning"
+    />
+    <el-alert
       v-else-if="softViolations.length > 0"
       type="warning"
       :closable="false"
@@ -193,12 +236,12 @@ onMounted(load)
       </el-table-column>
       <el-table-column :label="message('msg.admin.quotas.hard')" min-width="150">
         <template #default="{ row }">
-          <el-input v-model="row.hard" size="small" data-test="quota-hard" />
+          <el-input v-model="row.hard" size="small" :disabled="!canManage" data-test="quota-hard" />
         </template>
       </el-table-column>
       <el-table-column :label="message('msg.admin.quotas.soft')" min-width="150">
         <template #default="{ row }">
-          <el-input v-model="row.soft" size="small" data-test="quota-soft" />
+          <el-input v-model="row.soft" size="small" :disabled="!canManage" data-test="quota-soft" />
         </template>
       </el-table-column>
       <el-table-column :label="message('msg.admin.quotas.usage')" min-width="120" align="right">

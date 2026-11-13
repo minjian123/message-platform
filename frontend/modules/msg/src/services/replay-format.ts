@@ -7,6 +7,7 @@
  */
 
 import { message } from '../i18n/messages'
+import { isValidLocal, toLocalText, toUtcParam } from './time-format'
 
 /** 条件摘要的输入（与建任务请求的字段同名同义）。 */
 export interface ReplayScope {
@@ -58,13 +59,13 @@ export function parsePartitionText(text: string): PartitionParse {
 }
 
 /**
- * 把 ISO 时间串转成展示形态（`T` 换空格；`null` 记 `*`）。
+ * 把 UTC 时间串转成本地展示形态（空值记 `*`）。
  *
- * @param value ISO 8601 串。
+ * @param value UTC ISO 串。
  * @returns 展示文本。
  */
 function formatTime(value: string | null): string {
-  return value === null ? '*' : value.replace('T', ' ')
+  return value === null ? '*' : toLocalText(value)
 }
 
 /**
@@ -146,6 +147,9 @@ export function validateReplayForm(form: ReplayForm): string {
   if (form.namespace.trim() === '' || form.topic.trim() === '') {
     return 'msg.admin.replay.validation'
   }
+  if (!isValidLocal(form.timeFrom) || !isValidLocal(form.timeTo)) {
+    return 'msg.admin.common.invalidTime'
+  }
   if (!parsePartitionText(form.partitions).ok) {
     return 'msg.admin.replay.invalidPartitions'
   }
@@ -172,8 +176,8 @@ export function toReplayBody(form: ReplayForm): ReplayBody {
     partitions: parsed.value,
     offset_from: form.offsetFrom ?? null,
     offset_to: form.offsetTo ?? null,
-    time_from: form.timeFrom === '' ? null : form.timeFrom,
-    time_to: form.timeTo === '' ? null : form.timeTo,
+    time_from: toUtcParam(form.timeFrom),
+    time_to: toUtcParam(form.timeTo),
     key: form.key.trim() === '' ? null : form.key.trim(),
     rate_per_second: form.rate,
   }

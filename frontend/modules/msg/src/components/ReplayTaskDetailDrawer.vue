@@ -32,6 +32,7 @@ import {
   type ReplayTaskItem,
 } from '../services/admin-service'
 import { describeReplayScope } from '../services/replay-format'
+import { toLocalText } from '../services/time-format'
 import MsgConfirmDialog from './MsgConfirmDialog.vue'
 
 /** 状态操作。 */
@@ -352,9 +353,9 @@ onScopeDispose(stopPolling)
         <el-descriptions-item :label="message('msg.admin.replay.logIdLast')">
           {{ row.log_id_last ?? message('msg.admin.common.placeholder') }}
         </el-descriptions-item>
-        <el-descriptions-item :label="message('msg.admin.replay.createdAt')">{{ row.created_at }}</el-descriptions-item>
+        <el-descriptions-item :label="message('msg.admin.replay.createdAt')">{{ toLocalText(row.created_at) }}</el-descriptions-item>
         <el-descriptions-item :label="message('msg.admin.replay.finishedAt')">
-          {{ row.finished_at ?? message('msg.admin.common.placeholder') }}
+          {{ toLocalText(row.finished_at ?? null) }}
         </el-descriptions-item>
       </el-descriptions>
 
@@ -387,7 +388,9 @@ onScopeDispose(stopPolling)
             <span :class="item.delta > 0 ? 'replay-detail__delta' : ''">{{ item.delta > 0 ? `+${String(item.delta)}` : item.delta }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="captured_at" :label="message('msg.admin.replay.capturedAt')" width="160" />
+        <el-table-column :label="message('msg.admin.replay.capturedAt')" width="160">
+          <template #default="{ row: item }">{{ toLocalText((item as { captured_at: string | null }).captured_at) }}</template>
+        </el-table-column>
       </el-table>
       <p class="replay-detail__note">{{ message('msg.admin.replay.affectedNote') }}</p>
 

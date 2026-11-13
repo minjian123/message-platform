@@ -1,10 +1,11 @@
 /**
  * 平台概览取数与轮询（概览页与工作台卡片共用同一份投影，不另造取数层）。
  *
- * 挂载取一次 + 每 30 秒刷新；卸载清定时器；刷新不清空已有数值；竞态由基类 `BaseDataState` 令牌保证。
+ * 挂载取一次 + 每 30 秒刷新；卸载清定时器；刷新不清空已有数值（失败保留上次成功值）；
+ * 竞态由基类 `BaseDataState` 令牌保证。
  */
 
-import { getCurrentScope, onScopeDispose, computed, type ComputedRef, type Ref } from 'vue'
+import { getCurrentScope, onScopeDispose, computed, ref, type ComputedRef, type Ref } from 'vue'
 
 import type { ReadOnlyViewState } from '../base/BaseMsgReadOnlyView'
 import type { Overview } from '../services/admin-service'
@@ -24,7 +25,7 @@ export interface OverviewSnapshotOptions {
 
 /** 概览投影状态。 */
 export interface OverviewSnapshotState {
-  /** 最近一次成功快照（未取到为 null）。 */
+  /** 最近一次成功快照（未取到为 null；刷新失败时保留上次成功值）。 */
   overview: ComputedRef<Overview | null>
   /** 展示态。 */
   state: Ref<ReadOnlyViewState>
@@ -32,6 +33,8 @@ export interface OverviewSnapshotState {
   textKey: Ref<string>
   /** 是否首次加载。 */
   firstLoad: Ref<boolean>
+  /** 最近一次成功刷新时刻（未成功过为 null）。 */
+  lastUpdated: Ref<Date | null>
   /** 手动刷新。 */
   refresh: () => Promise<void>
   /** 停止轮询（不清空数据）。 */
@@ -55,9 +58,18 @@ export function useOverviewSnapshot(options: OverviewSnapshotOptions = {}): Over
     autoLoad: false,
   })
   const overview = computed(() => view.rows.value[0] ?? null)
+  const lastUpdated = ref<Date | null>(null)
   const intervalMs = options.intervalMs ?? OVERVIEW_POLL_INTERVAL_MS
   let timer: ReturnType<typeof setInterval> | undefined
   let disposed = false
+
+  /** 取一次并记录成功时刻（失败保留上次成功值）。 */
+  async function refresh(): Promise<void> {
+    await view.refresh()
+    if (view.state.value === 'ready') {
+      lastUpdated.value = new Date()
+    }
+  }
 
   /** 停止轮询（幂等）。 */
   function stop(): void {
@@ -72,9 +84,9 @@ export function useOverviewSnapshot(options: OverviewSnapshotOptions = {}): Over
     if (disposed || timer !== undefined || view.state.value === 'denied') {
       return
     }
-    void view.refresh()
+    void refresh()
     timer = setInterval(() => {
-      void view.refresh()
+      void refresh()
     }, intervalMs)
   }
 
@@ -100,7 +112,8 @@ export function useOverviewSnapshot(options: OverviewSnapshotOptions = {}): Over
     state: view.state,
     textKey: view.textKey,
     firstLoad: view.firstLoad,
-    refresh: view.refresh,
+    lastUpdated,
+    refresh,
     stop,
     start,
     dispose,

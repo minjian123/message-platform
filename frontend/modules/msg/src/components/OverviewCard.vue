@@ -5,7 +5,7 @@ import OverviewMetrics from './OverviewMetrics.vue'
 import { useOverviewSnapshot } from '../composables/useOverviewSnapshot'
 import { message } from '../i18n/messages'
 
-const { overview, state, textKey, firstLoad, refresh } = useOverviewSnapshot()
+const { overview, state, textKey, firstLoad, lastUpdated, refresh } = useOverviewSnapshot()
 </script>
 
 <template>
@@ -16,6 +16,7 @@ const { overview, state, textKey, firstLoad, refresh } = useOverviewSnapshot()
       :state="state"
       :text-key="textKey"
       :first-load="firstLoad"
+      :last-updated="lastUpdated"
       :show-grafana="false"
       :show-polling-hint="false"
       @refresh="refresh"

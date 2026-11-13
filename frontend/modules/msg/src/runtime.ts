@@ -23,6 +23,9 @@ let hostApi: ModuleApi | undefined
 /** 宿主注入用户已持有的权限码（未注入为 `undefined`，与宿主守卫「权限未装载放行」同口径）。 */
 let hostPermissionCodes: readonly string[] | undefined
 
+/** 宿主当前语言（缺省 `zh-cn`；只保留中 / 英两档，与模块文案包一致）。 */
+let hostLocaleTag = 'zh-cn'
+
 /**
  * 从宿主注入的用户对象读取权限码集合。
  *
@@ -42,13 +45,67 @@ function readPermissionCodes(user: unknown): readonly string[] | undefined {
 }
 
 /**
- * 缓存宿主注入的请求能力与用户权限快照。
+ * 归一化语言标识（只保留中 / 英两档，与模块文案包 `msg:zh-cn` / `msg:en` 一致）。
+ *
+ * @param tag 语言标识（可能带地区，如 `en-US`）。
+ * @returns `en` 或 `zh-cn`。
+ */
+export function normalizeLocale(tag: string | undefined): string {
+  if (tag !== undefined && tag.trim().toLowerCase().startsWith('en')) {
+    return 'en'
+  }
+  return 'zh-cn'
+}
+
+/**
+ * 从宿主上下文解析当前语言。
+ *
+ * 取用顺序：`i18n.defaultLocale` → `i18n.locale` → `i18n.locales()` 首个 → `user.locale`；
+ * 都取不到返回 `undefined`（调用方回落 `zh-cn`，**不读浏览器语言**——产品语言以宿主注入为准）。
+ *
+ * @param context 宿主注入上下文。
+ * @returns 归一化语言标识；无法判定返回 `undefined`。
+ */
+function readLocaleTag(context: ModuleHostContext): string | undefined {
+  const i18n = context.i18n as Record<string, unknown> | undefined
+  if (typeof i18n === 'object' && i18n !== null) {
+    const direct = i18n['defaultLocale'] ?? i18n['locale']
+    if (typeof direct === 'string' && direct !== '') {
+      return normalizeLocale(direct)
+    }
+    const locales = i18n['locales']
+    if (typeof locales === 'function') {
+      const values = (locales as () => unknown)()
+      if (Array.isArray(values) && typeof values[0] === 'string') {
+        return normalizeLocale(values[0])
+      }
+    }
+  }
+  const user = context.user as Record<string, unknown> | undefined
+  if (typeof user === 'object' && user !== null && typeof user['locale'] === 'string') {
+    return normalizeLocale(user['locale'])
+  }
+  return undefined
+}
+
+/**
+ * 宿主当前语言（模块文案与 `message()` 的缺省语言）。
+ *
+ * @returns `en` 或 `zh-cn`。
+ */
+export function hostLocale(): string {
+  return hostLocaleTag
+}
+
+/**
+ * 缓存宿主注入的请求能力、用户权限快照与语言。
  *
  * @param context 宿主注入上下文（只读快照）。
  */
 export function applyHostContext(context: ModuleHostContext): void {
   hostApi = context.api
   hostPermissionCodes = readPermissionCodes(context.user)
+  hostLocaleTag = readLocaleTag(context) ?? 'zh-cn'
 }
 
 /**

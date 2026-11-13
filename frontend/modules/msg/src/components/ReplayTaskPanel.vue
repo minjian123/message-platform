@@ -34,9 +34,16 @@ interface Props {
   refreshToken?: number
   /** 需要直接打开详情的任务 ID（死信详情跳转 / `?task=` 深链）。 */
   focusTaskId?: string
+  /** 页签是否处于激活态（切走后关闭详情抽屉，停止进度轮询）。 */
+  active?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { highlightTask: '', refreshToken: 0, focusTaskId: '' })
+const props = withDefaults(defineProps<Props>(), {
+  highlightTask: '',
+  refreshToken: 0,
+  focusTaskId: '',
+  active: true,
+})
 
 const emit = defineEmits<{
   /** 新建成功（父页据此切页签并高亮）。 */
@@ -140,6 +147,15 @@ watch(
   () => props.focusTaskId,
   (taskId) => {
     detailTaskId.value = taskId
+  },
+)
+// 切走页签即关闭详情抽屉（抽屉停止轮询，不在后台空转）。
+watch(
+  () => props.active,
+  (active) => {
+    if (!active) {
+      detailTaskId.value = null
+    }
   },
 )
 </script>

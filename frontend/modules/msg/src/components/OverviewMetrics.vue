@@ -26,6 +26,8 @@ interface Props {
   showPollingHint?: boolean
   /** 是否首次加载（区分「加载中」与「指标采集中」）。 */
   firstLoad?: boolean
+  /** 最近一次成功刷新时刻（展示「上次更新」，失败时说明当前是旧值）。 */
+  lastUpdated?: Date | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -33,12 +35,17 @@ const props = withDefaults(defineProps<Props>(), {
   showGrafana: true,
   showPollingHint: true,
   firstLoad: true,
+  lastUpdated: null,
 })
 
 const emit = defineEmits<{ refresh: [] }>()
 
-/** 数据通路是否就绪（冷启动 / 失败均降级为占位）。 */
-const ready = computed(() => props.state === 'ready' && props.overview?.snapshot_available === true)
+/** 是否已有可用快照（失败时保留上次成功值）。 */
+const hasData = computed(() => props.overview !== null && props.overview.snapshot_available === true)
+/** 数据通路是否就绪（轮询刷新期间沿用上次成功值，不闪空）。 */
+const ready = computed(
+  () => hasData.value && (props.state === 'ready' || props.state === 'error' || (props.state === 'loading' && !props.firstLoad)),
+)
 /** 降级文案（错误态按码映射；首次加载与冷启动分别给占位）。 */
 const degradeText = computed(() => {
   if (props.state === 'error' && props.textKey !== '') {
@@ -49,6 +56,10 @@ const degradeText = computed(() => {
   }
   return message('state.collecting')
 })
+/** 上次成功刷新文案（未成功过不渲染）。 */
+const lastUpdatedText = computed(() =>
+  props.lastUpdated === null ? '' : message('msg.admin.common.lastUpdated').replace('{t}', props.lastUpdated.toLocaleString()),
+)
 /** 是否渲染 Grafana 入口。 */
 const grafanaVisible = computed(() => props.showGrafana && GRAFANA_OVERVIEW_URL !== '' && props.state === 'ready')
 
@@ -106,6 +117,9 @@ const cards = computed(() => {
     <p v-if="showPollingHint" class="overview-metrics__hint" data-test="overview-hint">
       {{ message('msg.admin.overview.polling') }}
     </p>
+    <p v-if="lastUpdatedText !== ''" class="overview-metrics__hint" data-test="overview-updated">
+      {{ lastUpdatedText }}
+    </p>
     <el-alert
       v-if="state === 'denied'"
       type="warning"
@@ -122,7 +136,7 @@ const cards = computed(() => {
       :title="degradeText"
       data-test="overview-error"
     />
-    <div v-else class="overview-metrics__grid">
+    <div v-if="state !== 'denied' && !(state === 'error' && !hasData)" class="overview-metrics__grid">
       <metric-card
         v-for="card in cards"
         :key="card.key"

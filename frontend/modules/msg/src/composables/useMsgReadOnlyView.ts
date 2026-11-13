@@ -195,14 +195,15 @@ export function useMsgReadOnlyView<T>(options: ReadOnlyViewOptions<T>): ReadOnly
   }
 
   /**
-   * 设置查询前置条件。
+   * 设置查询前置条件（从未激活变为激活时才取数，避免与批量筛选重复请求）。
    *
    * @param next 是否具备条件。
    */
   function setActive(next: boolean): void {
+    const wasActive = active
     active = next && !denied
     sync()
-    if (active) {
+    if (active && !wasActive) {
       void refresh()
     }
   }

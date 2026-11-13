@@ -44,6 +44,10 @@ export type DelayedItem = Schema['DelayedItem']
 export type DelaySummary = Schema['DelaySummary']
 /** 平台概览。 */
 export type Overview = Schema['Overview']
+/** 连接列表响应。 */
+export type ConnectionPage = Schema['ConnectionPage']
+/** 连接列表行。 */
+export type ConnectionItem = Schema['ConnectionItem']
 
 /** 主题列表查询参数。 */
 export type TopicQuery = NonNullable<Ops['list_topics_api_v1_msg_admin_topics_get']['parameters']['query']>
@@ -59,6 +63,8 @@ export type DelayedQuery = NonNullable<Ops['list_delayed_api_v1_msg_admin_delaye
 export type DelaySummaryQuery = NonNullable<
   Ops['get_delay_summary_api_v1_msg_admin_delayed_summary_get']['parameters']['query']
 >
+/** 连接列表查询参数。 */
+export type ConnectionQuery = NonNullable<Ops['list_connections_api_v1_msg_admin_connections_get']['parameters']['query']>
 
 /** 业务码错误由 `product-api` 统一提供（此处仅重新导出，供既有引用）。 */
 
@@ -151,6 +157,18 @@ export async function fetchDelayed(params: DelayedQuery = {}): Promise<DelayedPa
 export async function fetchDelaySummary(params: DelaySummaryQuery = {}): Promise<DelaySummary> {
   const data = await getData<Schema['DelaySummary']>('/admin/delayed/summary', params)
   return data ?? EMPTY_DELAY_SUMMARY
+}
+
+/** 连接列表（单实例视图；地址已脱敏）。 */
+export async function fetchConnections(params: ConnectionQuery = {}): Promise<ConnectionPage> {
+  const data = await getData<Schema['ConnectionPage']>('/admin/connections', params)
+  return data ?? { items: [], page: 1, size: 20, total: 0 }
+}
+
+/** 连接列表投影取数器。 */
+export const loadConnections: ReadOnlyLoader<ConnectionItem> = async (params: ReadOnlyQueryParams) => {
+  const page = await fetchConnections(params as ConnectionQuery)
+  return { items: page.items, total: page.total }
 }
 
 /** 主题列表投影取数器。 */

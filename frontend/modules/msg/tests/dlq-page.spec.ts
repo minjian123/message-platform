@@ -34,6 +34,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import DlqPage from '../src/views/DlqPage.vue'
+import { toUtcParam } from '../src/services/time-format'
 
 /** 死信行样例（pending）。 */
 const PENDING = {
@@ -287,8 +288,8 @@ describe('DlqPage', () => {
       reason: 'schema_invalid',
       topic: 'order.created',
       partition: 2,
-      failed_from: '2026-11-01T00:00:00',
-      failed_to: '2026-11-09T00:00:00',
+      failed_from: toUtcParam('2026-11-01T00:00:00'),
+      failed_to: toUtcParam('2026-11-09T00:00:00'),
       keyword: 'log-10',
       page: 1,
       size: 20,

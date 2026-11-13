@@ -32,17 +32,16 @@ function apply(): void {
     view.setActive(false)
     return
   }
-  view.setFilter('namespace', namespace.value)
-  view.setFilter('topic', topic.value)
+  view.setFilters({ namespace: namespace.value.trim(), topic: topic.value.trim() })
   view.setActive(true)
 }
 
-/** 重置条件。 */
+/** 重置条件（先清表单，再一次性提交空条件）。 */
 function reset(): void {
   namespace.value = ''
   topic.value = ''
-  view.reset()
   view.setActive(false)
+  view.setFilters({})
 }
 
 /**
@@ -64,13 +63,13 @@ function display(value: unknown): string {
 
 <template>
   <section class="admin-page" data-test="page-partitions">
-    <h1>{{ message('msg.admin.partitions.title') }}</h1>
     <p class="admin-page__hint" data-test="partitions-choose-hint">{{ message('msg.admin.partitions.choose') }}</p>
     <read-only-list
       :title="message('msg.admin.partitions.title')"
       :state="view.state.value"
       :text-key="view.textKey.value"
       :paginated="false"
+      :skeleton="view.firstLoad.value"
       @refresh="view.refresh"
     >
       <template #filters>

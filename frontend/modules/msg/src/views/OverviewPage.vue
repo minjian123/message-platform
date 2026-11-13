@@ -5,12 +5,11 @@ import OverviewMetrics from '../components/OverviewMetrics.vue'
 import { useOverviewSnapshot } from '../composables/useOverviewSnapshot'
 import { message } from '../i18n/messages'
 
-const { overview, state, textKey, firstLoad, refresh } = useOverviewSnapshot()
+const { overview, state, textKey, firstLoad, lastUpdated, refresh } = useOverviewSnapshot()
 </script>
 
 <template>
   <section class="admin-page" data-test="page-overview">
-    <h1>{{ message('msg.admin.overview.title') }}</h1>
     <p class="admin-page__hint" data-test="overview-grafana-hint">
       {{ message('msg.admin.overview.grafanaHint') }}
     </p>
@@ -19,6 +18,7 @@ const { overview, state, textKey, firstLoad, refresh } = useOverviewSnapshot()
       :state="state"
       :text-key="textKey"
       :first-load="firstLoad"
+      :last-updated="lastUpdated"
       @refresh="refresh"
     />
   </section>

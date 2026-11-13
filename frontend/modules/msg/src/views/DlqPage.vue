@@ -15,6 +15,7 @@ import {
   ElDrawer,
   ElInput,
   ElInputNumber,
+  ElMessage,
   ElOption,
   ElSelect,
   ElTabPane,
@@ -46,6 +47,7 @@ import {
   type DlqItem,
   type ReplayTaskItem,
 } from '../services/admin-service'
+import { isValidLocal, toLocalText, toUtcParam } from '../services/time-format'
 
 const view = useMsgReadOnlyView<DlqItem>({ loader: loadDeadLetters })
 const adminRoute = useAdminRoute()
@@ -144,18 +146,28 @@ const REASON_TEXT: Record<string, string> = {
   processing_failed: 'msg.admin.dlq.reason.processing_failed',
 }
 
-/** 应用筛选。 */
+/** 时间格式校验错误（空串表示通过）。 */
+const timeError = ref('')
+
+/** 应用筛选（一次提交全部条件；时间转 UTC 带 `Z`）。 */
 function apply(): void {
-  view.setFilter('status', status.value)
-  view.setFilter('reason', reason.value)
-  view.setFilter('topic', topic.value)
-  view.setFilter('partition', partition.value)
-  view.setFilter('failed_from', failedFrom.value)
-  view.setFilter('failed_to', failedTo.value)
-  view.setFilter('keyword', keyword.value)
+  if (!isValidLocal(failedFrom.value) || !isValidLocal(failedTo.value)) {
+    timeError.value = message('msg.admin.common.invalidTime')
+    return
+  }
+  timeError.value = ''
+  view.setFilters({
+    status: status.value,
+    reason: reason.value,
+    topic: topic.value.trim(),
+    partition: partition.value,
+    failed_from: toUtcParam(failedFrom.value) ?? '',
+    failed_to: toUtcParam(failedTo.value) ?? '',
+    keyword: keyword.value.trim(),
+  })
 }
 
-/** 重置筛选。 */
+/** 重置筛选（先清表单，再一次性提交空条件）。 */
 function reset(): void {
   status.value = ''
   reason.value = ''
@@ -164,7 +176,16 @@ function reset(): void {
   failedFrom.value = ''
   failedTo.value = ''
   keyword.value = ''
-  view.reset()
+  timeError.value = ''
+  view.setFilters({
+    status: '',
+    reason: '',
+    topic: '',
+    partition: undefined,
+    failed_from: '',
+    failed_to: '',
+    keyword: '',
+  })
 }
 
 /** 详情抽屉。 */
@@ -289,6 +310,7 @@ async function confirmDispose(): Promise<void> {
   }
   const action = dialog.action
   dialog.visible = false
+  ElMessage.success(message('msg.admin.common.done'))
   await view.refresh()
   if (action === 'replay') {
     // 重放处置成功后后端必带任务 ID（契约 `DlqDisposeResult.replay_task_id`）
@@ -320,7 +342,6 @@ function reasonText(value: string): string {
 
 <template>
   <section class="admin-page" data-test="page-dlq">
-    <h1>{{ message('msg.admin.dlq.title') }}</h1>
     <el-tabs v-model="tab" data-test="dlq-tabs">
       <el-tab-pane :label="message('msg.admin.dlq.deadLetters')" name="dlq">
         <read-only-list
@@ -330,6 +351,7 @@ function reasonText(value: string): string {
           :page="view.page.value"
           :page-size="view.pageSize.value"
           :total="view.total.value"
+          :skeleton="view.firstLoad.value"
           @refresh="view.refresh"
           @update:page="view.setPage"
         >
@@ -349,12 +371,13 @@ function reasonText(value: string): string {
               </el-select>
               <el-input v-model="topic" :placeholder="message('msg.admin.dlq.topic')" clearable style="width: 160px" data-test="dlq-topic" />
               <el-input-number v-model="partition" :min="0" :controls="false" :placeholder="message('msg.admin.dlq.partition')" style="width: 110px" data-test="dlq-partition" />
-              <el-date-picker v-model="failedFrom" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" :placeholder="message('msg.admin.dlq.failedFrom')" style="width: 190px" />
-              <el-date-picker v-model="failedTo" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" :placeholder="message('msg.admin.dlq.failedTo')" style="width: 190px" />
+              <el-date-picker v-model="failedFrom" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" :placeholder="message('msg.admin.dlq.failedFrom')" style="width: 190px" data-test="dlq-failed-from" />
+              <el-date-picker v-model="failedTo" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" :placeholder="message('msg.admin.dlq.failedTo')" style="width: 190px" data-test="dlq-failed-to" />
               <el-input v-model="keyword" :placeholder="message('msg.admin.dlq.keyword')" clearable style="width: 200px" data-test="dlq-keyword" />
               <el-button type="primary" data-test="dlq-query" @click="apply">{{ message('msg.admin.common.query') }}</el-button>
               <el-button data-test="dlq-reset" @click="reset">{{ message('msg.admin.common.reset') }}</el-button>
             </div>
+            <p v-if="timeError !== ''" class="dlq-dialog__error" data-test="dlq-time-error">{{ timeError }}</p>
           </template>
           <el-table :data="view.rows.value" size="small" border data-test="dlq-dead-table">
             <el-table-column :label="'log_id'" min-width="150">
@@ -375,7 +398,9 @@ function reasonText(value: string): string {
                 <el-tag :type="STATUS_TAG[row.status] ?? 'info'" size="small">{{ statusText(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="failed_at" :label="message('msg.admin.dlq.failedAt')" min-width="170" />
+            <el-table-column :label="message('msg.admin.dlq.failedAt')" min-width="170">
+              <template #default="{ row }">{{ toLocalText((row as DlqItem).failed_at) }}</template>
+            </el-table-column>
             <el-table-column prop="trace_id" :label="'trace_id'" min-width="130" />
             <el-table-column v-if="canManage" :label="message('msg.admin.common.actions')" min-width="210" fixed="right">
               <template #default="{ row }">
@@ -406,6 +431,7 @@ function reasonText(value: string): string {
           :highlight-task="highlightTask"
           :refresh-token="replayRefreshToken"
           :focus-task-id="replayFocusTaskId"
+          :active="tab === 'replay'"
           @created="onReplayCreated"
         />
       </el-tab-pane>
@@ -423,11 +449,11 @@ function reasonText(value: string): string {
           <el-descriptions-item :label="message('msg.admin.messages.offset')">{{ detail.row.offset }}</el-descriptions-item>
           <el-descriptions-item :label="message('msg.admin.dlq.reason')">{{ reasonText(detail.row.reason) }}</el-descriptions-item>
           <el-descriptions-item :label="message('msg.admin.dlq.attempts')">{{ detail.row.attempts }}</el-descriptions-item>
-          <el-descriptions-item :label="message('msg.admin.dlq.failedAt')">{{ detail.row.failed_at }}</el-descriptions-item>
+          <el-descriptions-item :label="message('msg.admin.dlq.failedAt')">{{ toLocalText(detail.row.failed_at) }}</el-descriptions-item>
           <el-descriptions-item :label="message('msg.admin.dlq.status')">{{ statusText(detail.row.status) }}</el-descriptions-item>
           <el-descriptions-item :label="message('msg.admin.dlq.replayTask')">{{ detail.row.replay_task_id ?? '—' }}</el-descriptions-item>
           <el-descriptions-item :label="message('msg.admin.dlq.dispositionReason')">{{ detail.row.disposition_reason ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item :label="message('msg.admin.dlq.disposedAt')">{{ detail.row.disposed_at ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="message('msg.admin.dlq.disposedAt')">{{ toLocalText(detail.row.disposed_at ?? null) }}</el-descriptions-item>
         </el-descriptions>
 
         <template v-if="relatedTaskId !== ''">

@@ -6,7 +6,7 @@
  */
 
 import { ElOption, ElSelect } from 'element-plus'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { message } from '../i18n/messages'
 import { fetchTopics, type TopicItem } from '../services/admin-service'
@@ -33,6 +33,26 @@ const emit = defineEmits<{
 /** 候选项。 */
 const options = ref<TopicItem[]>([])
 const loading = ref(false)
+/** 候选加载失败（不阻断手填主题名）。 */
+const failed = ref(false)
+
+/**
+ * 复合候选键（`命名空间/主题名`）：同名主题跨命名空间也能区分。
+ *
+ * @param item 主题行。
+ * @returns 候选键。
+ */
+function candidateKey(item: TopicItem): string {
+  return `${item.namespace}/${item.name}`
+}
+
+/** 当前选中项对应的复合键（找不到时回落原始主题名）。 */
+const selectedKey = computed(() => {
+  const match = options.value.find(
+    (item) => item.name === props.modelValue && (props.namespace === '' || item.namespace === props.namespace),
+  )
+  return match === undefined ? props.modelValue : candidateKey(match)
+})
 
 /**
  * 远程搜索主题。
@@ -41,6 +61,7 @@ const loading = ref(false)
  */
 async function search(keyword: string): Promise<void> {
   loading.value = true
+  failed.value = false
   try {
     const page = await fetchTopics({
       namespace: props.namespace === '' ? undefined : props.namespace,
@@ -51,22 +72,27 @@ async function search(keyword: string): Promise<void> {
     options.value = page.items ?? []
   } catch {
     options.value = []
+    failed.value = true
   } finally {
     loading.value = false
   }
 }
 
 /**
- * 选中主题：回传名称与命名空间（自动带出）。
+ * 选中主题：拆回复合键，回传主题名与命名空间（自动带出）。
  *
- * @param value 主题名。
+ * @param value 复合键（`命名空间/主题名`）。
  */
 function onChange(value: string): void {
-  emit('update:modelValue', value)
-  const selected = options.value.find((item) => item.name === value)
-  if (selected !== undefined) {
-    emit('select', { name: selected.name, namespace: selected.namespace })
+  const slash = value.indexOf('/')
+  if (slash < 0) {
+    emit('update:modelValue', value)
+    return
   }
+  const namespace = value.slice(0, slash)
+  const name = value.slice(slash + 1)
+  emit('update:modelValue', name)
+  emit('select', { name, namespace })
 }
 
 watch(
@@ -89,7 +115,7 @@ watch(
 
 <template>
   <el-select
-    :model-value="modelValue"
+    :model-value="selectedKey"
     size="small"
     :disabled="disabled"
     filterable
@@ -102,14 +128,17 @@ watch(
   >
     <el-option
       v-for="item in options"
-      :key="`${item.namespace}/${item.name}`"
+      :key="candidateKey(item)"
       :label="item.name"
-      :value="item.name"
+      :value="candidateKey(item)"
     >
       <span>{{ item.name }}</span>
       <span class="acl-topic-option__namespace">{{ item.namespace }}</span>
     </el-option>
   </el-select>
+  <p v-if="failed" class="acl-topic-error" data-test="acl-topic-error">
+    {{ message('msg.admin.acls.topicsUnavailable') }}
+  </p>
 </template>
 
 <style scoped>
@@ -117,5 +146,10 @@ watch(
   float: right;
   color: var(--bms-color-text-secondary);
   font-size: 11px;
+}
+.acl-topic-error {
+  margin: var(--bms-space-1) 0 0;
+  color: var(--bms-color-danger);
+  font-size: 12px;
 }
 </style>

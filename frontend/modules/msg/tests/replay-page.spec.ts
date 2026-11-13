@@ -39,6 +39,7 @@ import {
   validateReplayForm,
   type ReplayForm,
 } from '../src/services/replay-format'
+import { toUtcParam } from '../src/services/time-format'
 
 /** 运行中的任务（含影响视图）。 */
 const RUNNING = {
@@ -254,7 +255,7 @@ describe('重放条件格式化（纯函数）', () => {
       offset_from: 10,
       offset_to: null,
       time_from: null,
-      time_to: '2026-11-09T10:00:00',
+      time_to: toUtcParam('2026-11-09T10:00:00'),
       key: 'k1',
       rate_per_second: 200,
     })
@@ -270,7 +271,12 @@ describe('重放条件格式化（纯函数）', () => {
         partitions: '',
         rate: 100,
       }),
-    ).toMatchObject({ time_from: '2026-11-01T00:00:00', time_to: null, key: null, partitions: null })
+    ).toMatchObject({
+      time_from: toUtcParam('2026-11-01T00:00:00'),
+      time_to: null,
+      key: null,
+      partitions: null,
+    })
   })
 })
 

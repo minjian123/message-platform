@@ -5,6 +5,8 @@
  * 错误码键形如 `error.<后端业务码>`，未命中回落 `error.fallback`。
  */
 
+import { hostLocale } from '../runtime'
+
 /** 文案目录：键 → [中文, 英文]。 */
 const CATALOG: Record<string, readonly [string, string]> = {
   // 05-2 既有「消息配额」文案（原样保留，不改字）。
@@ -41,6 +43,7 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.nav.messages': ['消息查询', 'Message search'],
   'msg.admin.nav.delayed': ['延迟消息', 'Delayed messages'],
   'msg.admin.nav.dlq': ['死信与重放', 'Dead letters & replay'],
+  'msg.admin.nav.connections': ['平台连接', 'Connections'],
   'msg.admin.common.refresh': ['重新加载', 'Reload'],
   'msg.admin.common.back': ['返回', 'Back'],
   'msg.admin.common.detail': ['查看详情', 'Details'],
@@ -48,6 +51,14 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.common.reset': ['重置', 'Reset'],
   'msg.admin.common.grafana': ['查看 Grafana', 'Open Grafana'],
   'msg.admin.common.placeholder': ['—', '—'],
+  'msg.admin.common.done': ['操作成功', 'Done'],
+  'msg.admin.common.noChange': ['未做修改', 'No changes'],
+  'msg.admin.common.invalidTime': ['时间格式不正确', 'Invalid time format'],
+  'msg.admin.common.durationDays': ['{n} 天', '{n} days'],
+  'msg.admin.common.durationHours': ['{n} 小时', '{n} hours'],
+  'msg.admin.common.durationMinutes': ['{n} 分钟', '{n} minutes'],
+  'msg.admin.common.durationSeconds': ['{n} 秒', '{n} seconds'],
+  'msg.admin.common.lastUpdated': ['上次更新：{t}', 'Last updated: {t}'],
   'msg.admin.common.later.write': ['写操作归 06-2，本页不提供', 'Write operations belong to 06-2'],
   'msg.admin.common.later.dispose': ['处置交互归 06-5，本页不提供', 'Disposition belongs to 06-5'],
 
@@ -64,9 +75,20 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.topics.create.title': ['新建主题', 'Create topic'],
   'msg.admin.topics.create.name': ['主题名', 'Topic name'],
   'msg.admin.topics.create.partitions': ['分区数', 'Partitions'],
-  'msg.admin.topics.create.retentionMs': ['保留期（毫秒）', 'Retention (ms)'],
+  'msg.admin.topics.create.retentionMs': ['保留期（天）', 'Retention (days)'],
   'msg.admin.topics.create.retentionBytes': ['容量上限（字节）', 'Capacity (bytes)'],
   'msg.admin.topics.create.unlimited': ['0 = 不限', '0 = unlimited'],
+  'msg.admin.topics.create.namespaceRequired': ['请选择命名空间', 'Select a namespace'],
+  'msg.admin.topics.create.nameInvalid': [
+    '主题名须为小写字母、数字或 . - _，长度 1~200',
+    'Topic name must use lowercase letters, digits or . - _, length 1-200',
+  ],
+  'msg.admin.topics.create.partitionsInvalid': ['分区数须在 1~1024', 'Partitions must be 1-1024'],
+  'msg.admin.topics.create.retentionInvalid': ['保留期不得少于 1 天', 'Retention must be at least 1 day'],
+  'msg.admin.topicState.enabled': ['启用', 'Enabled'],
+  'msg.admin.topicState.active': ['正常', 'Active'],
+  'msg.admin.topicState.disabled': ['停用', 'Disabled'],
+  'msg.admin.topicState.deleting': ['删除中', 'Deleting'],
   'msg.admin.topics.expand.title': ['扩分区', 'Expand partitions'],
   'msg.admin.topics.expand.current': ['当前分区数', 'Current partitions'],
   'msg.admin.topics.expand.target': ['目标分区数', 'Target partitions'],
@@ -102,6 +124,8 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.topics.cleanup.step.metadata': ['主题与分区行', 'Topic & partition rows'],
   'msg.admin.topics.cleanup.done': ['已完成', 'Done'],
   'msg.admin.topics.cleanup.pending': ['待执行', 'Pending'],
+  'msg.admin.topics.cleanup.startedAt': ['开始时间', 'Started at'],
+  'msg.admin.topics.cleanup.paused': ['进度刷新已暂停，请手动重试', 'Progress refresh paused; retry manually'],
 
   // 删除影响范围行（与后端 `DeleteImpact` 五项同名）。
   'msg.admin.impact.partitions': ['分区数', 'Partitions'],
@@ -131,10 +155,14 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.quotas.origin': ['来源', 'Origin'],
   'msg.admin.quotas.softExceedsHard': ['软限不得大于硬限', 'Soft limit must not exceed hard limit'],
   'msg.admin.quotas.saved': ['配额已生效', 'Quota applied'],
+  'msg.admin.quotas.integer': ['须为整数', 'Must be an integer'],
+  'msg.admin.quotas.negative': ['不得为负数', 'Must not be negative'],
+  'msg.admin.quotas.readonly': ['无「msg:manage」写权限，仅只读', 'Read-only: missing msg:manage'],
   'msg.admin.quotas.empty': ['该作用域暂无配额数据', 'No quota data for this scope'],
 
   // 租户用量（06-8）：独立页与租户记录页「消息用量」页签共用。
   'msg.admin.usage.title': ['租户用量', 'Tenant usage'],
+  'msg.admin.usage.regionTitle': ['消息用量', 'Message usage'],
   'msg.admin.usage.subtitle': ['当前租户的消息平台用量总量', 'Message platform usage of the current tenant'],
   'msg.admin.usage.note': ['口径说明', 'Definitions'],
   'msg.usage.caption.topicCount': ['含停用主题', 'Includes disabled topics'],
@@ -226,6 +254,7 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.acls.error.350027': ['无目标主题的管理权限', 'No manage permission on the target topic'],
   'msg.admin.acls.noChange': ['无变化', 'No change'],
   'msg.admin.acls.empty': ['暂无主题授权规则', 'No topic ACL rules'],
+  'msg.admin.acls.topicsUnavailable': ['主题候选加载失败，可直接手填主题名', 'Failed to load topics; type the topic name manually'],
   'state.denied.manage': ['无「msg:manage」管理权限', 'Missing msg:manage permission'],
 
   // 四态与错误码映射（键集合与后端码同源）。
@@ -325,11 +354,11 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.messages.offsetFrom': ['起始 offset', 'Offset from'],
   'msg.admin.messages.offsetTo': ['结束 offset', 'Offset to'],
   'msg.admin.messages.key': ['分区键', 'Key'],
-  'msg.admin.messages.timeFrom': ['起始时间（UTC）', 'Time from (UTC)'],
-  'msg.admin.messages.timeTo': ['结束时间（UTC）', 'Time to (UTC)'],
+  'msg.admin.messages.timeFrom': ['起始时间', 'Time from'],
+  'msg.admin.messages.timeTo': ['结束时间', 'Time to'],
   'msg.admin.messages.logId': ['log_id', 'log_id'],
   'msg.admin.messages.offset': ['offset', 'offset'],
-  'msg.admin.messages.publishedAt': ['发布时间（UTC）', 'Published at (UTC)'],
+  'msg.admin.messages.publishedAt': ['发布时间', 'Published at'],
   'msg.admin.messages.payloadLen': ['载荷长度', 'Payload size'],
   'msg.admin.messages.sha256': ['SHA-256 摘要', 'SHA-256 digest'],
   'msg.admin.messages.headers': ['自定义头', 'Headers'],
@@ -352,6 +381,11 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.delayed.deliverAt': ['到期时间', 'Deliver at'],
   'msg.admin.delayed.remainingMs': ['剩余时间', 'Remaining'],
   'msg.admin.delayed.readonly': ['只读：不提供改期与取消', 'Read-only: no reschedule or cancel'],
+  'msg.admin.delayed.topicFilter': ['主题过滤', 'Topic filter'],
+  'msg.admin.delayed.partitionFilter': ['分区过滤', 'Partition filter'],
+  'msg.admin.delayed.levelFilter': ['档位过滤', 'Level filter'],
+  'msg.admin.delayed.all': ['全部', 'All'],
+  'msg.admin.delayed.percent': ['占比', 'Share'],
 
   // 死信与重放（06-5：查询 + 详情 + 重放 / 忽略 / 归档）。
   'msg.admin.dlq.title': ['死信与重放', 'Dead letters & replay'],
@@ -363,7 +397,7 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.dlq.partition': ['分区', 'Partition'],
   'msg.admin.dlq.reason': ['原因', 'Reason'],
   'msg.admin.dlq.attempts': ['重试次数', 'Attempts'],
-  'msg.admin.dlq.failedAt': ['失败时间（UTC）', 'Failed at (UTC)'],
+  'msg.admin.dlq.failedAt': ['失败时间', 'Failed at'],
   'msg.admin.dlq.failedFrom': ['失败时间起', 'Failed from'],
   'msg.admin.dlq.failedTo': ['失败时间止', 'Failed to'],
   'msg.admin.dlq.keyword': ['log_id / message_id', 'log_id / message_id'],
@@ -382,7 +416,7 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.dlq.detailFailed': ['详情加载失败，请稍后重试', 'Failed to load detail'],
   'msg.admin.dlq.replayTask': ['重放任务 ID', 'Replay task ID'],
   'msg.admin.dlq.dispositionReason': ['处置原因', 'Disposition reason'],
-  'msg.admin.dlq.disposedAt': ['处置时间（UTC）', 'Disposed at (UTC)'],
+  'msg.admin.dlq.disposedAt': ['处置时间', 'Disposed at'],
   'msg.admin.dlq.failureDetail': ['失败上下文', 'Failure context'],
   'msg.admin.dlq.archiveWarning': ['归档后该死信从活跃列表隐藏；原始消息仍在日志保留期内可查，操作会写入审计链', 'Archived entries are hidden from the active list; the original message remains queryable during retention'],
   'msg.admin.dlq.rate': ['重放速率（条/秒）', 'Replay rate (msg/s)'],
@@ -399,8 +433,8 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.replay.topic': ['主题', 'Topic'],
   'msg.admin.replay.offsetFrom': ['offset 起（含）', 'Offset from (incl.)'],
   'msg.admin.replay.offsetTo': ['offset 止（不含）', 'Offset to (excl.)'],
-  'msg.admin.replay.timeFrom': ['时间起（含，UTC）', 'Time from (incl., UTC)'],
-  'msg.admin.replay.timeTo': ['时间止（不含，UTC）', 'Time to (excl., UTC)'],
+  'msg.admin.replay.timeFrom': ['时间起（含）', 'Time from (incl.)'],
+  'msg.admin.replay.timeTo': ['时间止（不含）', 'Time to (excl.)'],
   'msg.admin.replay.key': ['分区键', 'Partition key'],
   'msg.admin.replay.keyHint': ['精确匹配，留空不过滤', 'Exact match; empty means no filter'],
   'msg.admin.replay.partitions': ['分区', 'Partitions'],
@@ -473,6 +507,28 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'msg.admin.replay.invalidRange': ['区间非法：起始须小于结束', 'Invalid range: start must be before end'],
   'msg.admin.replay.invalidPartitions': ['分区只能填数字并以逗号分隔', 'Partitions must be numbers separated by commas'],
   'msg.admin.replay.off': ['关闭', 'Close'],
+
+  // 连接列表（06-1-4 端点 + 06-2-3 页面）。
+  'msg.admin.connections.title': ['平台连接', 'Connections'],
+  'msg.admin.connections.singleInstance': [
+    '单实例视图：只反映当前实例登记的连接；跨实例聚合待 02-8-4',
+    'Single-instance view: only connections on this instance; cross-instance aggregation pending 02-8-4',
+  ],
+  'msg.admin.connections.id': ['连接 ID', 'Connection ID'],
+  'msg.admin.connections.remote': ['客户端网段', 'Client subnet'],
+  'msg.admin.connections.httpVersion': ['HTTP 版本', 'HTTP version'],
+  'msg.admin.connections.scheme': ['协议', 'Scheme'],
+  'msg.admin.connections.openedAt': ['建立时间', 'Opened at'],
+  'msg.admin.connections.lastSeenAt': ['最后请求', 'Last request'],
+  'msg.admin.connections.lastHeartbeatAt': ['最后心跳', 'Last heartbeat'],
+  'msg.admin.connections.streams': ['长驻流', 'Streams'],
+  'msg.admin.connections.requests': ['请求数', 'Requests'],
+  'msg.admin.connections.state': ['状态', 'State'],
+  'msg.admin.connections.empty': ['当前无连接', 'No connections'],
+  'msg.admin.connections.state.active': ['活跃', 'Active'],
+  'msg.admin.connections.state.idle': ['空闲', 'Idle'],
+  'msg.admin.connections.state.draining': ['排水', 'Draining'],
+  'msg.admin.connections.state.stale': ['已过期', 'Stale'],
 }
 
 /** 中文文案包（键 `msg:zh-cn`）。 */
@@ -486,13 +542,14 @@ export const MSG_MESSAGES_EN: Record<string, string> = Object.fromEntries(
 )
 
 /**
- * 取当前语言文案（缺省中文；未命中键原样返回）。
+ * 取当前语言文案（缺省取宿主语言；未命中键原样返回）。
  *
  * @param key 文案键。
- * @param locale 语言标识。
+ * @param locale 语言标识（显式传参优先，供纯函数与用例固定语言）。
  * @returns 文案。
  */
-export function message(key: string, locale: string = 'zh-cn'): string {
-  const pack = locale.toLowerCase().startsWith('en') ? MSG_MESSAGES_EN : MSG_MESSAGES_ZH_CN
+export function message(key: string, locale?: string): string {
+  const tag = locale ?? hostLocale()
+  const pack = tag.toLowerCase().startsWith('en') ? MSG_MESSAGES_EN : MSG_MESSAGES_ZH_CN
   return pack[key] ?? key
 }

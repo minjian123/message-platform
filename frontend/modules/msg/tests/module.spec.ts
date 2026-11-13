@@ -13,10 +13,10 @@ describe('msg 模块定义（Kiwi 2454）', () => {
     expect(msgModule.manifest.contractVersion).toBe(MODULE_CONTRACT_VERSION)
   })
 
-  it('登记十二条管理模块路由、一张概览卡片与两条租户记录页只读页签、文案包（06-8 扩展）', async () => {
+  it('登记十四条管理模块路由、一张概览卡片与两条租户记录页只读页签、文案包（06-8 扩展）', async () => {
     const registration = await msgModule.setup({} as never)
-    expect(registration.routes ?? []).toHaveLength(12)
-    expect((registration.routes ?? []).filter((route) => route.meta?.menu !== false)).toHaveLength(10)
+    expect(registration.routes ?? []).toHaveLength(14)
+    expect((registration.routes ?? []).filter((route) => route.meta?.menu !== false)).toHaveLength(11)
     expect((registration.cards ?? []) as unknown[]).toHaveLength(1)
     const regions = registration.regions ?? []
     expect(regions).toHaveLength(2)

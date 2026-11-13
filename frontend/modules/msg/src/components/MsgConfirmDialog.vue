@@ -28,6 +28,8 @@ interface Props {
   confirmText?: string
   /** 取消按钮文案（缺省取通用「取消」）。 */
   cancelText?: string
+  /** 失败文案（已解析；空串不渲染）。渲染在弹窗内部，避免被遮罩挡住。 */
+  error?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -37,6 +39,7 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
   confirmText: '',
   cancelText: '',
+  error: '',
 })
 
 const emit = defineEmits<{
@@ -92,6 +95,7 @@ function confirm(): void {
     </el-table>
     <!-- 调用方追加的输入区（如「目标位点」）；弹窗本身不承载表单状态。 -->
     <div class="confirm-extra" data-test="confirm-extra"><slot /></div>
+    <p v-if="error !== ''" class="confirm-error" data-test="confirm-error">{{ error }}</p>
     <template #footer>
       <el-button :disabled="loading" data-test="confirm-cancel" @click="close">{{ cancelLabel }}</el-button>
       <el-button
@@ -114,5 +118,10 @@ function confirm(): void {
 }
 .confirm-extra {
   margin-top: var(--bms-space-2);
+}
+.confirm-error {
+  margin: var(--bms-space-2) 0 0;
+  color: var(--bms-color-danger);
+  font-size: 12px;
 }
 </style>

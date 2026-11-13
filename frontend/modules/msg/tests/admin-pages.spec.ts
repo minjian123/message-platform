@@ -297,8 +297,6 @@ describe('只读列表页（Kiwi 2464）', () => {
     await wrapper.find('[data-test="messages-offset-from"]').setValue('10')
     await wrapper.find('[data-test="messages-offset-to"]').setValue('20')
     await wrapper.find('[data-test="messages-key"]').setValue('order-1')
-    await wrapper.find('[data-test="messages-time-from"]').setValue('2026-11-09T00:00:00Z')
-    await wrapper.find('[data-test="messages-time-to"]').setValue('2026-11-10T00:00:00Z')
     await wrapper.find('[data-test="messages-log-id"]').setValue('log-1')
     await wrapper.find('[data-test="messages-query"]').trigger('click')
     await settle()

@@ -15,17 +15,16 @@ const namespace = ref('')
 const topic = ref('')
 const { go } = useAdminRoute()
 
-/** 应用筛选。 */
+/** 应用筛选（一次提交全部条件）。 */
 function apply(): void {
-  view.setFilter('namespace', namespace.value)
-  view.setFilter('topic', topic.value)
+  view.setFilters({ namespace: namespace.value.trim(), topic: topic.value.trim() })
 }
 
-/** 重置筛选。 */
+/** 重置筛选（先清表单，再一次性提交空条件）。 */
 function reset(): void {
   namespace.value = ''
   topic.value = ''
-  view.reset()
+  view.setFilters({ namespace: '', topic: '' })
 }
 
 /**
@@ -41,7 +40,6 @@ function openDetail(row: unknown): void {
 
 <template>
   <section class="admin-page" data-test="page-groups">
-    <h1>{{ message('msg.admin.groups.title') }}</h1>
     <p class="admin-page__hint">{{ message('msg.admin.groups.laterReset') }}</p>
     <read-only-list
       :title="message('msg.admin.groups.title')"
@@ -50,6 +48,7 @@ function openDetail(row: unknown): void {
       :page="view.page.value"
       :page-size="view.pageSize.value"
       :total="view.total.value"
+      :skeleton="view.firstLoad.value"
       @refresh="view.refresh"
       @update:page="view.setPage"
     >

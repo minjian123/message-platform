@@ -32,9 +32,9 @@ describe('AclTopicSelect（Kiwi 2470）', () => {
     await flushPromises()
     await flushPromises()
     expect(scopeGet).toHaveBeenCalledWith('/admin/topics', { namespace: 'msg', page: 1, size: 20 })
-    expect(wrapper.findAllComponents(ElOption).map((item) => item.props('value'))).toEqual(['order.created'])
+    expect(wrapper.findAllComponents(ElOption).map((item) => item.props('value'))).toEqual(['msg/order.created'])
 
-    wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 'order.created')
+    wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 'msg/order.created')
     expect(wrapper.emitted('select')?.[0]).toEqual([{ name: 'order.created', namespace: 'msg' }])
 
     wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 'missing.topic')
@@ -66,7 +66,7 @@ describe('AclTopicSelect（Kiwi 2470）', () => {
     })
     await flushPromises()
     await wrapper.setProps({ modelValue: 'manual.topic' })
-    expect(wrapper.findAllComponents(ElOption).map((item) => item.props('value'))).toContain('manual.topic')
+    expect(wrapper.findAllComponents(ElOption).map((item) => item.props('value'))).toContain('msg/manual.topic')
     wrapper.unmount()
   })
 

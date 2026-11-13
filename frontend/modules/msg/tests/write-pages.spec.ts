@@ -198,6 +198,7 @@ describe('主题列表：新建主题（Kiwi 2466）', () => {
   it('提交失败：展示错误码文案且弹窗保留', async () => {
     await mountPage(TopicsPage)
     await click('[data-test="topics-create"]')
+    await input('[data-test="create-name"]', 'order.paid')
     api.post.mockResolvedValue({ code: 350008, message: 'dup', data: null })
     await click('[data-test="create-submit"]')
     expect(q('[data-test="create-error"]')?.textContent).toContain('同名主题已存在')
@@ -234,14 +235,15 @@ describe('主题详情：写操作与清理进度（Kiwi 2466）', () => {
     expect(q('[data-test="expand-error"]')?.textContent).toContain('非法')
   })
 
-  it('改保留期：PATCH 携带当前回填值，失败展示错误', async () => {
-    await mountPage(TopicDetailPage)
+  it('改保留期：PATCH 携带变更后的值，失败展示错误', async () => {
+    const page = await mountPage(TopicDetailPage)
     await click('[data-test="topic-retention"]')
+    await setNumber(page, 0, 172_800_000)
     api.patch.mockResolvedValue({ code: 350028, message: 'bad', data: null })
     await click('[data-test="retention-submit"]')
     const [path, body] = api.patch.mock.calls[0] as [string, Record<string, unknown>]
     expect(path).toBe('/admin/topics/42')
-    expect(body).toEqual({ retention_ms: 86_400_000, retention_bytes: 0 })
+    expect(body).toEqual({ retention_ms: 172_800_000, retention_bytes: 0 })
     expect(q('[data-test="retention-error"]')?.textContent).toContain('删除')
   })
 
@@ -286,7 +288,7 @@ describe('主题详情：写操作与清理进度（Kiwi 2466）', () => {
     expect(q('[data-test="delete-error"]')?.textContent).toContain('删除')
   })
 
-  it('影响预检失败：仍可打开确认（不阻断），行表为空', async () => {
+  it('影响预检失败：仍可打开确认（不阻断），提示估算不可用', async () => {
     api.get.mockImplementation(async (path: string) => {
       if (path === '/admin/topics/42/delete-impact') {
         throw new Error('down')
@@ -298,7 +300,7 @@ describe('主题详情：写操作与清理进度（Kiwi 2466）', () => {
     })
     await mountPage(TopicDetailPage)
     await click('[data-test="topic-delete"]')
-    expect(q('[data-test="confirm-impact"]')).toBeNull()
+    expect(q('[data-test="confirm-impact"]')?.textContent).toContain('影响估算暂不可用')
     expect(q('[data-test="confirm-warning"]')).not.toBeNull()
   })
 
@@ -544,8 +546,9 @@ describe('主题详情：表单 / 弹窗关闭与空参数（Kiwi 2466）', () =
   })
 
   it('改保留期成功：PATCH 后关闭弹窗并刷新详情', async () => {
-    await mountPage(TopicDetailPage)
+    const page = await mountPage(TopicDetailPage)
     await click('[data-test="topic-retention"]')
+    await setNumber(page, 0, 172_800_000)
     api.patch.mockResolvedValue({ code: 0, message: 'ok', data: TOPIC })
     await click('[data-test="retention-submit"]')
     expect(hidden('[data-test="topic-retention-dialog"]')).toBe(true)
@@ -636,13 +639,14 @@ describe('主题详情：深链缺 topicId 时的写操作与轮询（Kiwi 2466�
       }
       return { code: 0, message: 'ok', data: { items: [PARTITION], total: 1 } }
     })
-    await mountPage(TopicDetailPage)
+    const page = await mountPage(TopicDetailPage)
     api.post.mockResolvedValue({ code: 0, message: 'ok', data: TOPIC })
     await click('[data-test="topic-expand"]')
     await click('[data-test="expand-submit"]')
     expect(api.post.mock.calls[0][0]).toBe('/admin/topics//partitions')
     api.patch.mockResolvedValue({ code: 0, message: 'ok', data: TOPIC })
     await click('[data-test="topic-retention"]')
+    await setNumber(page, 1, 172_800_000)
     await click('[data-test="retention-submit"]')
     expect(api.patch.mock.calls[0][0]).toBe('/admin/topics/')
     api.del.mockResolvedValue({ code: 0, message: 'ok', data: {} })

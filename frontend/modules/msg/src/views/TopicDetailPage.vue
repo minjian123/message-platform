@@ -10,6 +10,7 @@ import {
   ElForm,
   ElFormItem,
   ElInputNumber,
+  ElMessage,
   ElTable,
   ElTableColumn,
 } from 'element-plus'
@@ -36,6 +37,7 @@ import {
   type PartitionItem,
   type TopicDetail,
 } from '../services/admin-service'
+import { durationText, toLocalText } from '../services/time-format'
 
 /** 清理步骤键（与后端 `CLEANUP_STEPS` 同序）。 */
 const CLEANUP_STEPS: readonly string[] = ['messages', 'delay', 'offsets', 'groups', 'dlq', 'runtime', 'metadata']
@@ -63,8 +65,19 @@ const expandVisible = ref(false)
 const retentionVisible = ref(false)
 const deleteVisible = ref(false)
 const impact = ref<DeleteImpact | null>(null)
+/** 影响预检失败（弹窗内提示「影响估算不可用」）。 */
+const impactError = ref(false)
 const retentionForm = reactive({ retentionMs: 0, retentionBytes: 0 })
 const expandForm = reactive({ target: 1 })
+
+/** 保留期两项是否有变更（未变更禁用保存；详情未到时按无变更处理）。 */
+const retentionDirty = computed(() => {
+  const current = detail.value
+  return (
+    retentionForm.retentionMs !== (current?.retention_ms ?? retentionForm.retentionMs) ||
+    retentionForm.retentionBytes !== (current?.retention_bytes ?? retentionForm.retentionBytes)
+  )
+})
 
 /** 扩分区动作。 */
 const expandAction = useMsgWriteAction({
@@ -83,11 +96,19 @@ const deleteAction = useMsgWriteAction({
   requiresConfirm: true,
   runner: () => deleteTopic(params.topicId ?? ''),
 })
-/** 删除确认的影响范围行。 */
+/** 删除确认的影响范围行（预检失败时给「估算不可用」提示行）。 */
 const deleteRows = computed<ImpactRow[]>(() => {
   const data = impact.value
   if (data === null) {
-    return []
+    return impactError.value
+      ? [
+          {
+            label: message('msg.admin.topics.delete.impactUnavailable'),
+            value: message('msg.admin.common.placeholder'),
+            tone: 'danger',
+          },
+        ]
+      : []
   }
   return [
     { label: message('msg.admin.impact.partitions'), value: String(data.partition_count) },
@@ -98,7 +119,11 @@ const deleteRows = computed<ImpactRow[]>(() => {
   ]
 })
 
-let timer: ReturnType<typeof setInterval> | undefined
+let timer: ReturnType<typeof setTimeout> | undefined
+/** 轮询连续失败次数（≥3 暂停，避免失败风暴）。 */
+let pollFailures = 0
+/** 是否停止轮询（自递归的终止位）。 */
+let pollStopped = true
 
 /**
  * 可空字段展示（含空数组），统一显示占位符。
@@ -116,10 +141,21 @@ function display(value: unknown): string {
   return String(value)
 }
 
+/**
+ * 主题状态文案（未知枚举原样返回）。
+ *
+ * @param status 状态枚举。
+ * @returns 文案。
+ */
+function statusText(status: string): string {
+  return message(`msg.admin.topicState.${status}`)
+}
+
 /** 停止进度轮询（幂等）。 */
 function stopPolling(): void {
+  pollStopped = true
   if (timer !== undefined) {
-    clearInterval(timer)
+    clearTimeout(timer)
     timer = undefined
   }
 }
@@ -144,33 +180,50 @@ function applyDetail(data: TopicDetail | null): void {
     return
   }
   stopPolling()
-  view.setFilter('namespace', data.namespace)
-  view.setFilter('topic', data.name)
+  view.setFilters({ namespace: data.namespace, topic: data.name })
   view.setActive(true)
 }
 
-/** 启动进度轮询（`deleting` 状态；主题行消失或状态变化即停）。 */
+/** 启动进度轮询（`deleting` 状态；请求完成后才排下一次，慢响应不堆叠）。 */
 function startPolling(): void {
-  if (timer !== undefined) {
+  if (!pollStopped) {
     return
   }
-  timer = setInterval(() => {
+  pollStopped = false
+  pollFailures = 0
+  schedulePoll()
+}
+
+/** 排下一次轮询。 */
+function schedulePoll(): void {
+  if (pollStopped) {
+    return
+  }
+  timer = setTimeout(() => {
     void pollOnce()
   }, CLEANUP_POLL_INTERVAL_MS)
 }
 
-/** 轮询一次清理进度。 */
+/** 轮询一次清理进度（失败累计 3 次即暂停并提示）。 */
 async function pollOnce(): Promise<void> {
   try {
     const data = await fetchTopicDetail(params.topicId ?? '')
+    pollFailures = 0
     applyDetail(data)
   } catch (error) {
     if (errorCodeOf(error) === 350001) {
       applyDetail(null)
       return
     }
-    detailError.value = message(errorKeyOf(errorCodeOf(error)))
+    pollFailures += 1
+    detailError.value =
+      pollFailures >= 3 ? message('msg.admin.topics.cleanup.paused') : message(errorKeyOf(errorCodeOf(error)))
+    if (pollFailures >= 3) {
+      stopPolling()
+      return
+    }
   }
+  schedulePoll()
 }
 
 /** 载入主题元数据与分区明细。 */
@@ -196,32 +249,36 @@ function openRetention(): void {
   retentionVisible.value = true
 }
 
-/** 打开删除确认（先取影响范围，失败也允许继续）。 */
+/** 打开删除确认（先取影响范围；失败在弹窗内提示，仍允许继续）。 */
 async function openDelete(): Promise<void> {
   deleteAction.reset()
   impact.value = null
+  impactError.value = false
   deleteVisible.value = true
   try {
     impact.value = await fetchDeleteImpact(params.topicId ?? '')
   } catch {
     impact.value = null
+    impactError.value = true
   }
 }
 
-/** 提交扩分区：成功后收起并刷新。 */
+/** 提交扩分区：成功后收起、提示并刷新。 */
 async function submitExpand(): Promise<void> {
   await expandAction.run()
   if (expandAction.status.value === 'done') {
     expandVisible.value = false
+    ElMessage.success(message('msg.admin.common.done'))
     await load()
   }
 }
 
-/** 提交改保留期：成功后收起并刷新。 */
+/** 提交改保留期：成功后收起、提示并刷新（无变更时按钮已禁用）。 */
 async function submitRetention(): Promise<void> {
   await retentionAction.run()
   if (retentionAction.status.value === 'done') {
     retentionVisible.value = false
+    ElMessage.success(message('msg.admin.common.done'))
     await load()
   }
 }
@@ -257,7 +314,7 @@ onUnmounted(stopPolling)
 <template>
   <section class="admin-page" data-test="page-topic-detail">
     <div class="admin-page__head">
-      <h1>{{ detail?.name ?? message('msg.admin.topics.detail') }}</h1>
+      <span />
       <div v-if="canManage && detail !== null && !deleting" class="admin-page__actions">
         <el-button data-test="topic-expand" @click="openExpand">{{ message('msg.admin.topics.expand.title') }}</el-button>
         <el-button data-test="topic-retention" @click="openRetention">
@@ -295,11 +352,29 @@ onUnmounted(stopPolling)
     <el-descriptions v-if="detail !== null" :column="3" border size="small" data-test="topic-detail-meta">
       <el-descriptions-item :label="message('msg.admin.topics.namespace')">{{ detail.namespace }}</el-descriptions-item>
       <el-descriptions-item :label="message('msg.admin.topics.partitionCount')">{{ detail.partition_count }}</el-descriptions-item>
-      <el-descriptions-item :label="message('msg.admin.topics.status')">{{ detail.status }}</el-descriptions-item>
-      <el-descriptions-item :label="message('msg.admin.topics.retention')">{{ detail.retention_ms }}</el-descriptions-item>
+      <el-descriptions-item :label="message('msg.admin.topics.status')">{{ statusText(detail.status) }}</el-descriptions-item>
+      <el-descriptions-item :label="message('msg.admin.topics.retention')">
+        <span :title="String(detail.retention_ms)">{{ durationText(detail.retention_ms) }}</span>
+      </el-descriptions-item>
       <el-descriptions-item :label="message('msg.admin.topics.cleanupPolicy')">{{ detail.cleanup_policy }}</el-descriptions-item>
-      <el-descriptions-item :label="message('msg.admin.topics.createdAt')">{{ detail.created_at }}</el-descriptions-item>
+      <el-descriptions-item :label="message('msg.admin.topics.createdAt')">{{ toLocalText(detail.created_at) }}</el-descriptions-item>
     </el-descriptions>
+
+    <section v-if="deleting" data-test="topic-cleanup-metrics">
+      <el-descriptions :column="3" border size="small">
+        <el-descriptions-item :label="message('msg.admin.topics.cleanup.attempts')">
+          {{ detail?.cleanup?.attempts ?? 0 }}
+        </el-descriptions-item>
+        <el-descriptions-item :label="message('msg.admin.topics.cleanup.startedAt')">
+          {{ toLocalText(detail?.cleanup?.started_at ?? null) }}
+        </el-descriptions-item>
+        <el-descriptions-item :label="message('msg.admin.topics.cleanup.lastError')">
+          <span :class="detail?.cleanup?.last_error ? 'admin-page__error' : ''">
+            {{ detail?.cleanup?.last_error ?? message('msg.admin.common.placeholder') }}
+          </span>
+        </el-descriptions-item>
+      </el-descriptions>
+    </section>
 
     <el-table
       v-if="deleting"
@@ -319,6 +394,7 @@ onUnmounted(stopPolling)
       :text-key="view.textKey.value"
       :paginated="false"
       :back="true"
+      :skeleton="view.firstLoad.value"
       @refresh="load"
       @back="go('/msg/topics')"
     >
@@ -403,6 +479,9 @@ onUnmounted(stopPolling)
         </el-form-item>
       </el-form>
       <el-alert type="info" :closable="false" show-icon :title="message('msg.admin.topics.retention.effect')" />
+      <p v-if="!retentionDirty" class="admin-page__hint" data-test="retention-no-change">
+        {{ message('msg.admin.common.noChange') }}
+      </p>
       <p v-if="retentionAction.errorKey.value !== ''" class="admin-page__error" data-test="retention-error">
         {{ message(retentionAction.errorKey.value) }}
       </p>
@@ -417,7 +496,7 @@ onUnmounted(stopPolling)
         <el-button
           type="primary"
           :loading="retentionAction.status.value === 'running'"
-          :disabled="retentionAction.status.value === 'running'"
+          :disabled="retentionAction.status.value === 'running' || !retentionDirty"
           data-test="retention-submit"
           @click="submitRetention"
         >
@@ -436,10 +515,11 @@ onUnmounted(stopPolling)
       :confirm-text="message('msg.admin.topics.delete.title')"
       data-test="topic-delete-dialog"
       @confirm="confirmDelete"
-    />
-    <p v-if="deleteAction.errorKey.value !== ''" class="admin-page__error" data-test="delete-error">
-      {{ message(deleteAction.errorKey.value) }}
-    </p>
+    >
+      <p v-if="deleteAction.errorKey.value !== ''" class="admin-page__error" data-test="delete-error">
+        {{ message(deleteAction.errorKey.value) }}
+      </p>
+    </msg-confirm-dialog>
   </section>
 </template>
 
