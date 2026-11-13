@@ -108,7 +108,7 @@ def _sampler(
     interval_seconds: float = 15.0,
 ) -> tuple[MetricsSampler, MetricsSnapshotStore]:
     """构造采样器（真实内存库 + 真实租户源）。"""
-    from tests.conftest import FakeTenantSource
+    from tests_support.tenant import FakeTenantSource
 
     snapshots = MetricsSnapshotStore()
     sampler = MetricsSampler(

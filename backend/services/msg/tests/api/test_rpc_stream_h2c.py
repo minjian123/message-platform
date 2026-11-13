@@ -1,8 +1,12 @@
-"""真机 h2c 帧流（任务 04-3-1；Kiwi 2437）：连续推送、EOF 收尾、窗口阻断、同连接复用。
+"""真机 h2c 帧流（任务 04-3-1；Kiwi 2437）：连续推送、EOF 收尾、慢读者不丢不乱、同连接复用。
 
-为什么必须真起服务器：ASGI 直调没有连接概念——帧流「逐块到达」「窗口耗尽后写出被挡住」「同一条连接
-上再发一元调用」这三件事都验不了。做法沿用 03-1 / 04-2：`serve_service` 起在空闲端口，
-`httpx.AsyncClient(http2=True, http1=False)` 走 **h2c prior knowledge**（只给 `http2=True` 仍协商 HTTP/1.1）。
+为什么必须真起服务器：ASGI 直调没有连接概念——帧流「逐块到达」「同一条连接上再发一元调用」这两件事都
+验不了。做法沿用 03-1 / 04-2：`serve_service` 起在空闲端口，`httpx.AsyncClient(http2=True, http1=False)`
+走 **h2c prior knowledge**（只给 `http2=True` 仍协商 HTTP/1.1）。
+
+**慢读者的判定口径**：本文件只验**功能不变量**（恢复读取后帧序连续、条数不丢、`end` 标记正确）。停读期间
+服务端是否真的被「挡在窗口 / 内核缓冲上」取决于内核收发缓冲大小（Linux 自动调优可达数 MiB），属压测 / 容量
+口径，不作断言；应用层「已产出未写出」的上限由 `test_backpressure_pauses_producer`（注入 `tuning`）确定性覆盖。
 
 **取消的端到端验收归 04-3-2**：客户端侧 `RpcStream.aclose()` → `RST_STREAM` 那条路径要生产 `RpcClient`
 参与，本文件只用 `httpx` 读帧（它不发 RST），故只验「服务端不被慢消费者拖死」与「收尾干净」。
@@ -161,10 +165,10 @@ async def test_stream_frames_over_h2c(app: FastAPI) -> None:
             assert bytes(read_stream(unary.content)[0].frame.payload) == b"after"
 
 
-async def test_slow_reader_stalls_producer(app: FastAPI) -> None:
-    """客户端不读 → 写出被窗口 / 缓冲挡住 → 处理器停止产出；恢复读取后帧序仍然连续。"""
+async def test_slow_reader_stream_stays_ordered_and_complete(app: FastAPI) -> None:
+    """慢读者：停读 200ms 后恢复，帧序连续、条数不丢、`end` 标记正确（是否真阻塞只观测不断言）。"""
     produced: list[int] = []
-    total = 400
+    total = 40
     chunk = b"y" * 1024
 
     async def bulk(call: RpcCall) -> AsyncIterator[RpcReply]:
@@ -187,8 +191,9 @@ async def test_slow_reader_stalls_producer(app: FastAPI) -> None:
                 stalled = len(produced)
                 rest = b"".join([piece async for piece in chunks])
 
-            print(f"慢消费者实测：客户端停读 200ms 时已产出 {stalled}/{total} 帧")
-            assert stalled < total, f"客户端不读却已产出 {stalled}/{total} 帧，背压没生效"
+            # 观测值：停读期间产出到第几帧取决于内核收发缓冲（Linux 自动调优可达数 MiB），属压测口径；
+            # 应用层「已产出未写出」上限见 `test_backpressure_pauses_producer`（注入 tuning）。
+            print(f"慢消费者观测：客户端停读 200ms 时已产出 {stalled}/{total} 帧")
             entries = read_stream(first + rest)
             assert [entry.seq for entry in entries] == list(range(total))
             assert entries[-1].end is True
