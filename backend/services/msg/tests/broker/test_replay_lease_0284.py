@@ -12,7 +12,6 @@ from bms_core.db.session import DbSession
 from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
 from bms_core.msgclient.payload import DEFAULT_CONTENT_TYPE
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.conftest import ManualClock
 
 from bms_msg.broker.log import InMemoryMessageStore
 from bms_msg.broker.replay import ReplayAuditor, ReplayRunner, ReplayService, UowFactory
@@ -22,6 +21,7 @@ from bms_msg.models.topic import MsgTopic
 from bms_msg.repositories.replay import ReplayTaskRepository
 from bms_msg.schemas.replay import ReplayRequest
 from bms_msg.tenant.context import CurrentTenant
+from tests_support.clock import ManualClock
 
 pytestmark = pytest.mark.kiwi_id(2497)
 

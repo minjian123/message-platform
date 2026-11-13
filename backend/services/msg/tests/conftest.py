@@ -15,7 +15,6 @@
 import importlib
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
@@ -50,6 +49,7 @@ from bms_msg.schemas.topic import TopicCreateRequest
 from bms_msg.services.replay_impact import ReplayImpactInspector
 from bms_msg.services.topic import TopicService
 from bms_msg.tenant.context import CurrentTenant
+from tests_support.clock import ManualClock
 
 TENANT_ID = 7001
 """测试租户主键（雪花）。"""
@@ -278,30 +278,6 @@ def make_request() -> MakeRequest:
         return TopicCreateRequest.model_validate(dict(payload.items()))
 
     return _make
-
-
-class ManualClock:
-    """可手动推进的时钟（模拟可见性超时，用例不 sleep）。"""
-
-    def __init__(self) -> None:
-        """初始化（固定起点 2026-01-01T00:00:00Z）。"""
-        self._now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        """当前时间。
-
-        Returns:
-            datetime: 当前（可推进的）UTC 时间。
-        """
-        return self._now
-
-    def advance(self, milliseconds: int) -> None:
-        """推进时钟。
-
-        Args:
-            milliseconds: 推进的毫秒数。
-        """
-        self._now += timedelta(milliseconds=milliseconds)
 
 
 @pytest.fixture

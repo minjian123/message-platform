@@ -223,7 +223,7 @@ describe('授予抽屉（Kiwi 2470）', () => {
     })
   })
 
-  it('主体类型切换清空主体；单行时删除无效；超过上限提示', async () => {
+  it('主体类型切换清空主体；单行时删除无效', async () => {
     const wrapper = await mountDrawer('create')
     wrapper.findComponent(AclPrincipalSelect).vm.$emit('update:modelValue', '7001')
     const typeSelect = selectByTest(wrapper, 'acl-grant-principal-type')
@@ -235,7 +235,12 @@ describe('授予抽屉（Kiwi 2470）', () => {
     q('[data-test="acl-grant-remove"]')?.click()
     await settle()
     expect(document.body.querySelectorAll('[data-test="acl-grant-remove"]')).toHaveLength(1)
+  })
 
+  // 超时放宽理由：本用例要连点 49 次「加行」，每行渲染两个 Element Plus 下拉，单次重排成本高；
+  // CI 上 37 个 worker 并行抢 CPU（实测整份放大约 3.3 倍），默认 30s 会踩线（msg#1614 实测 30.9s）。
+  it('超过上限提示', { timeout: 90_000 }, async () => {
+    await mountDrawer('create')
     for (let index = 1; index < 50; index += 1) {
       q('[data-test="acl-grant-add"]')?.click()
     }
