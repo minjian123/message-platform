@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
+from typing import cast
 
 from bms_core.core.capability import BaseAsyncResource
 from bms_core.core.concurrent import ConcurrentStableFrozenList
@@ -162,9 +163,12 @@ class InternalReplicationServer:
             OSError: 端口被占用 / 地址不可用。
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Windows 专有选项：Linux 类型存根里没有该属性（直接取会让 pyright 在 Linux 上报错），
+        # 故按「可选常量」取；缺失即回落 `SO_REUSEADDR`，两个平台行为与原来一致。
+        exclusive = cast("int | None", getattr(socket, "SO_EXCLUSIVEADDRUSE", None))
         try:
-            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # pragma: no cover - Windows 专属分支
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            if exclusive is not None:  # pragma: no cover - Windows 专属分支（Linux 无该常量）
+                sock.setsockopt(socket.SOL_SOCKET, exclusive, 1)
             else:  # pragma: no cover - 非 Windows 分支
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((self._host, self._port))
