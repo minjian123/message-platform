@@ -349,6 +349,13 @@ class DelayRecord(BaseValueObject):
     attempts: int = 0
     """转投失败次数（只计数与告警，**不作为丢弃依据**）。"""
 
+    next_attempt_at: datetime | None = None
+    """下次重试时刻（UTC；`None` = 尚未失败，按 `deliver_at` 判定）。
+
+    与 `deliver_at` 分离：前者是业务到期时刻（视图 / 保留期 / 审计口径），后者只是重试节奏；
+    失败退避不改写 `deliver_at`，重启后仍按本字段续退避（02-6-1 / F3）。
+    """
+
     content_type: str = DEFAULT_CONTENT_TYPE
     """消息体内容类型（03-3：到期转投时原样带入日志记录）。"""
 
@@ -730,7 +737,9 @@ class DelayInspector:
 
 
 def _remaining_ms(*, record: DelayRecord, now: datetime) -> int:
-    """剩余时间（毫秒；已到期未转投为 0，不返回负数——视图不承担转投职责）。
+    """剩余时间（毫秒；已到期未转投为 0，不返回负数）。
+
+    退避期取 `next_attempt_at`（为空取 `deliver_at`），避免「显示剩余 0 却仍在退避」误导排障。
 
     Args:
         record: 延迟记录。
@@ -739,16 +748,18 @@ def _remaining_ms(*, record: DelayRecord, now: datetime) -> int:
     Returns:
         int: 剩余毫秒数（>= 0）。
     """
-    return max(0, int((record.deliver_at - now).total_seconds() * 1000))
+    target = record.next_attempt_at or record.deliver_at
+    return max(0, int((target - now).total_seconds() * 1000))
 
 
-def with_attempt(record: DelayRecord) -> DelayRecord:
+def with_attempt(record: DelayRecord, *, next_attempt_at: datetime | None = None) -> DelayRecord:
     """返回 `attempts + 1` 的新记录（转投失败时整条替换：只计数，不丢弃）。
 
     Args:
         record: 原记录。
+        next_attempt_at: 下次重试时刻；`None` 表示沿用调用方后续设定的判据。
 
     Returns:
         DelayRecord: 计数加一后的记录。
     """
-    return replace(record, attempts=record.attempts + 1)
+    return replace(record, attempts=record.attempts + 1, next_attempt_at=next_attempt_at)

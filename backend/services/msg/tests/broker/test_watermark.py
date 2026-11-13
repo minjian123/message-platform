@@ -16,7 +16,7 @@
 import base64
 import errno
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -662,15 +662,16 @@ async def test_delay_transfer_failure_logs_reason_with_window_suppression(
 
     monkeypatch.setattr(messages, "append", _boom)
     clock = _Clock()
-    now = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
-    wheel = DelayWheel(now=lambda: now)
+    now_box = [datetime(2026, 11, 5, 12, 0, tzinfo=UTC)]
+    wheel = DelayWheel(now=lambda: now_box[0])
     scheduler = DelayScheduler(
         store=delay_store,
         messages=messages,
         wheel=wheel,
-        now=lambda: now,
+        now=lambda: now_box[0],
         clock=clock,
         failure_log_window_ms=1_000,
+        jitter=lambda low, high: low,
     )
     record = DelayRecord(
         log_id="l-1",
@@ -685,13 +686,15 @@ async def test_delay_transfer_failure_logs_reason_with_window_suppression(
         payload=b"x",
         headers=ConcurrentStableDict(),
         trace=EMPTY_TRACE,
-        published_at=now,
-        deliver_at=now,
+        published_at=now_box[0],
+        deliver_at=now_box[0],
     )
     await delay_store.enqueue(record)
     wheel.place(record)
 
     await scheduler.run_once()
+    # 02-6-1：首次失败后进入 0.5~1s 半抖动退避；推进到上限才会再次失败。
+    now_box[0] += timedelta(seconds=1)
     await scheduler.run_once()
 
     assert recorder.names() == ["delay_deliver_failed"]
@@ -700,6 +703,7 @@ async def test_delay_transfer_failure_logs_reason_with_window_suppression(
     assert len(await delay_store.list_all()) == 1, "转投失败必须保留记录（不丢）"
 
     clock.advance(1_500)
+    now_box[0] += timedelta(seconds=1)
     await scheduler.run_once()
     assert recorder.names() == ["delay_deliver_failed", "delay_deliver_failed"]
     assert (await delay_store.list_all())[0].attempts == 3

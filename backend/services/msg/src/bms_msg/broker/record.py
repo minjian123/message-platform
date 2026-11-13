@@ -169,6 +169,12 @@ class DelayStamp(BaseValueObject):
     attempts: int = 0
     """转投失败次数（只计数与告警，**不作为丢弃依据**）。"""
 
+    next_attempt_at_us: int | None = None
+    """下次重试时刻（epoch 微秒）；`None` = 按 `deliver_at` 判定。
+
+    只增不删的新键：旧记录不写该键、旧解码器按 `.get()` 缺省忽略；不升格式版本。
+    """
+
     namespace: str = ""
     """命名空间展示名（主题停用 / 删除后仍能报出「哪条延迟消息没能投出去」）。"""
 
@@ -334,7 +340,7 @@ def _pack_header(header: RecordHeader) -> bytes:
     Raises:
         ValueError: 头超过 `MAX_RECORD_HEADER_BYTES`。
     """
-    raw: dict[str, Any] = {
+    raw: dict[str, Any] = {  # bare-collections:allow（msgpack.packb 需要内置 dict 作为编码入参）
         "format_version": header.format_version,
         "topic_id": _pack_id(header.topic_id),
         "partition_no": header.partition_no,
@@ -431,7 +437,7 @@ def _pack_delay(stamp: DelayStamp) -> dict[str, Any]:
     Returns:
         dict[str, Any]: 子 map。
     """
-    return {
+    raw: dict[str, Any] = {
         "kind": stamp.kind,
         "deliver_at": stamp.deliver_at_us,
         "delay_level": stamp.delay_level,
@@ -439,6 +445,10 @@ def _pack_delay(stamp: DelayStamp) -> dict[str, Any]:
         "namespace": stamp.namespace,
         "topic": stamp.topic,
     }
+    if stamp.next_attempt_at_us is not None:
+        # 只增不删：旧记录不写该键，字节与 02-7 完全一致；旧解码器按缺省忽略。
+        raw["next_attempt_at"] = stamp.next_attempt_at_us
+    return raw
 
 
 def _decode_delay(value: object) -> DelayStamp | None:
@@ -460,6 +470,7 @@ def _decode_delay(value: object) -> DelayStamp | None:
         deliver_at_us=int(data.get("deliver_at", 0)),
         delay_level=str(data.get("delay_level", "")),
         attempts=int(data.get("attempts", 0)),
+        next_attempt_at_us=_optional_int(data.get("next_attempt_at")),
         namespace=str(data.get("namespace", "")),
         topic=str(data.get("topic", "")),
     )
@@ -504,6 +515,20 @@ def _optional_str(value: object) -> str | None:
         str | None: 字符串原值；其他类型返回 None。
     """
     return value if isinstance(value, str) else None
+
+
+def _optional_int(value: object) -> int | None:
+    """取可选整数（非整数 / 布尔视为缺失，不抛错）。
+
+    Args:
+        value: 解出的值。
+
+    Returns:
+        int | None: 整数原值；其他类型返回 None。
+    """
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
 
 
 def _split(buf: bytes, *, verify_crc: bool) -> tuple[RecordHeader, bytes, int]:

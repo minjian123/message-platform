@@ -28,19 +28,26 @@ from bms_core.schemas.base import (
     CONTRACT_STABLE_LIST,
     BaseSchema,
 )
-from pydantic import Field, PrivateAttr, field_serializer
+from pydantic import Field, PrivateAttr, field_serializer, field_validator, model_validator
 
 from bms_msg.core.config import (
     ACKS_AT_LEAST_ONCE,
     ACKS_FIRE_AND_FORGET,
     ACKS_PUBLISH_LOCAL,
     DEFAULT_FETCH_MESSAGES,
+    HEADER_ENTRY_OVERHEAD_BYTES,
     MAX_FETCH_MESSAGES,
+    MAX_HEADER_COUNT,
+    MAX_HEADER_KEY_LENGTH,
+    MAX_HEADER_TOTAL_BYTES,
+    MAX_HEADER_VALUE_LENGTH,
     MESSAGE_KEY_MAX_LENGTH,
+    PAYLOAD_BASE64_MAX_LENGTH,
     SUBSCRIBE_MAX_WAIT_LIMIT_MS,
     SUBSCRIBE_MAX_WAIT_MS,
 )
 from bms_msg.core.trace import TRACE_FIELD_MAX_LENGTH
+from bms_msg.errors import MsgPayloadTooLargeError
 from bms_msg.schemas.fields import CONSUMER_ID_FIELD, GROUP_FIELD, NAMESPACE_FIELD, PARTITION_FIELD, TOPIC_FIELD
 
 __all__ = [
@@ -131,7 +138,11 @@ class PublishRequest(BaseSchema):
     namespace: str = _NAMESPACE_FIELD
     topic: str = _TOPIC_FIELD
     key: str | None = Field(default=None, max_length=MESSAGE_KEY_MAX_LENGTH, description="分区键（同 key 恒同分区）")
-    payload: str = Field(default="", description="消息体（base64 编码；空串表示空消息体）")
+    payload: str = Field(
+        default="",
+        max_length=PAYLOAD_BASE64_MAX_LENGTH,
+        description="消息体（base64 编码；空串表示空消息体；解码后不超过 1 MiB）",
+    )
     headers: Annotated[ConcurrentStableDict[str, str], CONTRACT_COLLECTION] = Field(
         default_factory=CONTRACT_STABLE_DICT, description="结构化头（trace / 业务标记）"
     )
@@ -165,7 +176,53 @@ class PublishRequest(BaseSchema):
     )
 
     _raw_payload: bytes | None = PrivateAttr(default=None)
-    """原始字节通道（帧路径专用；不进 JSON Schema、不进 `model_dump()`）。"""
+    """原始字节通道（帧路径原始字节，或 JSON 路径已解码字节；不进 JSON Schema、不进 `model_dump()`）。"""
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _reject_oversized_payload(cls, value: object) -> object:
+        """按 base64 字符上限提前拒绝超 1 MiB 的载荷（保持 `350006` / 413）。
+
+        `Field(max_length=...)` 只作契约声明与兜底；前置校验器给出产品码，
+        与 03-2 既有的 `350006` 口径一致（不退化为 `10001`）。
+
+        Args:
+            value: 字段原值。
+
+        Returns:
+            object: 原值（合法时）。
+
+        Raises:
+            MsgPayloadTooLargeError: base64 长度超过 1 MiB 对应上限（350006 / 413）。
+        """
+        if isinstance(value, str) and len(value) > PAYLOAD_BASE64_MAX_LENGTH:
+            raise MsgPayloadTooLargeError(
+                f"消息体超过上限 {PAYLOAD_BASE64_MAX_LENGTH} 个 base64 字符（实际 {len(value)}）"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_headers(self) -> PublishRequest:
+        """校验结构化头四重上限（对数 / 单键 / 单值 / 总量；超限 `10001`）。
+
+        Returns:
+            PublishRequest: 自身（合法时）。
+
+        Raises:
+            ValueError: 任一维度超限（由契约校验收敛为 `10001`）。
+        """
+        if len(self.headers) > MAX_HEADER_COUNT:
+            raise ValueError(f"结构化头对数超过上限 {MAX_HEADER_COUNT}：{len(self.headers)}")
+        total = 0
+        for key, value in self.headers.items():
+            if len(key) > MAX_HEADER_KEY_LENGTH:
+                raise ValueError(f"结构化头单键超过上限 {MAX_HEADER_KEY_LENGTH}：{key!r}")
+            if len(value) > MAX_HEADER_VALUE_LENGTH:
+                raise ValueError(f"结构化头单值超过上限 {MAX_HEADER_VALUE_LENGTH}：{key!r}")
+            total += len(key.encode("utf-8")) + len(value.encode("utf-8")) + HEADER_ENTRY_OVERHEAD_BYTES
+        if total > MAX_HEADER_TOTAL_BYTES:
+            raise ValueError(f"结构化头总量超过上限 {MAX_HEADER_TOTAL_BYTES} 字节：{total}")
+        return self
 
     @property
     def raw_payload(self) -> bytes | None:
@@ -177,7 +234,7 @@ class PublishRequest(BaseSchema):
         return self._raw_payload
 
     def set_raw_payload(self, payload: bytes) -> None:
-        """设置原始消息体字节（仅帧闸门使用；不改变 `payload` 字段）。
+        """设置原始消息体字节（帧闸门原样写入，或 JSON 入口解码后缓存）。
 
         Args:
             payload: 消息体原始字节。

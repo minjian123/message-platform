@@ -4,7 +4,7 @@
   主题 / 分区 / 配额等模块**只经它取租户**，不得自行解析（详细设计 §3.3）。
 - `enabled_namespaces()`：服务目录中已登记且启用的 `module_key` 快照。目录视图是进程内常量
   （无 IO），管理面与数据面同进程可读，因此不需要装配期落 `app.state`（详细设计 §7 风险 3 的结论）。
-- `ensure_namespace()`：命名空间判定的**单点**（非法即 `350010`），依赖出口与消费守卫共用。
+- `validate_namespace()`：命名空间判定的**单点**（形态 + allowlist，非法即 `350010`），依赖出口与消费守卫共用。
 """
 
 from dataclasses import dataclass
@@ -14,12 +14,13 @@ from bms_core.core.objects import BaseValueObject
 from bms_core.db.tenant import TenantContext
 from bms_core.services.module_registry import ModuleStatus, service_catalog_view
 
+from bms_msg.core.config import NAMESPACE_PATTERN
 from bms_msg.errors import MsgNamespaceInvalidError
 
 __all__ = [
     "CurrentTenant",
     "enabled_namespaces",
-    "ensure_namespace",
+    "validate_namespace",
 ]
 
 
@@ -34,19 +35,25 @@ def enabled_namespaces() -> ConcurrentStableFrozenSet[str]:
     )
 
 
-def ensure_namespace(namespace: str | None, allowlist: ConcurrentStableFrozenSet[str]) -> None:
-    """校验命名空间属已登记且启用的 `module_key`（msg 不自造模块）。
+def validate_namespace(namespace: str | None, allowlist: ConcurrentStableFrozenSet[str]) -> None:
+    """校验命名空间形态与可用性（`350010` 的唯一判定点）。
+
+    形态先行、allowlist 后判：形态是请求契约前提，先报「形态非法」比「未登记」更可定位；
+    `None` 表示调用方未指定范围，只做租户校验（跳过本步）。
 
     Args:
-        namespace: 命名空间；`None` 表示调用方未指定范围，只做租户校验（跳过本步）。
+        namespace: 命名空间；`None` 表示调用方未指定范围。
         allowlist: 可用命名空间集合（`enabled_namespaces()`）。
 
     Raises:
-        MsgNamespaceInvalidError: 未登记 / 未启用（`350010`）。
+        MsgNamespaceInvalidError: 形态非法，或未登记 / 未启用（`350010`）。
     """
-    if namespace is None or namespace in allowlist:
+    if namespace is None:
         return
-    raise MsgNamespaceInvalidError(f"命名空间未登记或未启用（module_key 口径）：{namespace}")
+    if not NAMESPACE_PATTERN.match(namespace):
+        raise MsgNamespaceInvalidError(f"命名空间形态非法：{namespace}")
+    if namespace not in allowlist:
+        raise MsgNamespaceInvalidError(f"命名空间未登记或未启用（module_key 口径）：{namespace}")
 
 
 @dataclass(frozen=True)
@@ -102,12 +109,12 @@ class CurrentTenant(BaseValueObject):
         return self.tenant.status
 
     def ensure_namespace(self, namespace: str | None) -> None:
-        """校验命名空间（口径同 `ensure_namespace()`，单点复用）。
+        """校验命名空间（口径同 `validate_namespace()`，单点复用）。
 
         Args:
             namespace: 命名空间（`None` 跳过校验）。
 
         Raises:
-            MsgNamespaceInvalidError: 未登记 / 未启用（`350010`）。
+            MsgNamespaceInvalidError: 形态非法或未登记 / 未启用（`350010`）。
         """
-        ensure_namespace(namespace, self.namespace_allowlist)
+        validate_namespace(namespace, self.namespace_allowlist)

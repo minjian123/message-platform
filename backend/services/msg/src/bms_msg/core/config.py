@@ -8,10 +8,13 @@ import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from bms_core.core.concurrent import ConcurrentStableFrozenList
+
 # 07B 06_01 步 1：RPC 协议常量整体上移 bms_core.msgclient.constants（单一事实源在基座）。
 # 用显式赋值转发（而非 `from ... import`），既让 `from bms_msg.core.config import RPC_*` 零改动，
 # 也不会被 ruff 当作未使用的 re-export import 删掉。
 from bms_core.msgclient import constants as _rpc_constants
+from bms_core.msgclient.frame import MAX_FRAME_PAYLOAD_BYTES
 
 RATE_LIMIT_RPC_PER_SECOND = _rpc_constants.RATE_LIMIT_RPC_PER_SECOND
 RPC_CALLER_HEADER = _rpc_constants.RPC_CALLER_HEADER
@@ -75,6 +78,27 @@ GROUP_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
 
 MESSAGE_KEY_MAX_LENGTH = 256
 """分区键最大长度（超长即契约层拒绝，避免把路由键当业务大字段用）。"""
+
+PAYLOAD_BASE64_MAX_LENGTH = (MAX_FRAME_PAYLOAD_BYTES + 2) // 3 * 4
+"""1 MiB 消息体对应的 base64 字符上限（含 padding 余量；契约层提前拒绝超限请求）。"""
+
+MAX_PUBLISH_BODY_BYTES = PAYLOAD_BASE64_MAX_LENGTH + 64 * 1024
+"""发布 JSON 请求体早闸上限（base64 载荷 + headers / trace / JSON 结构余量）。"""
+
+MAX_HEADER_COUNT = 32
+"""结构化头对数上限。"""
+
+MAX_HEADER_KEY_LENGTH = 64
+"""结构化头单键字符上限。"""
+
+MAX_HEADER_VALUE_LENGTH = 1024
+"""结构化头单值字符上限。"""
+
+MAX_HEADER_TOTAL_BYTES = 8 * 1024
+"""结构化头键值 UTF-8 字节和上限（含每条固定结构开销）。"""
+
+HEADER_ENTRY_OVERHEAD_BYTES = 8
+"""每条结构化头在总量估算中的固定结构开销（长度前缀 / 分隔）。"""
 
 DEFAULT_VISIBILITY_TIMEOUT_MS = 30_000
 """可见性超时：投递后 30s 内未 ack 则该消息可被重投（详细设计 §6.3）。"""
@@ -305,6 +329,9 @@ METRICS_TOPIC_KEY_LIMIT = 500
 
 METRICS_SAMPLE_INTERVAL_SECONDS = 15.0
 """指标后台采样周期（秒）：与 Prometheus 缺省抓取间隔同频；不新增业务配置项（06-3-1）。"""
+
+METRICS_SAMPLE_FAILURE_LOG_WINDOW_SECONDS = 60.0
+"""采样单主题失败日志的抑制窗口（秒）：同键窗口内只记一条，恢复记一条 info（02-6-1）。"""
 
 TOPIC_CLEANUP_SCAN_INTERVAL_SECONDS = 30.0
 """删主题清理的周期扫描间隔（秒）：兜底「首轮未跑完 / 进程重启 / 上一轮失败」，受理时另有即时 kick（06-2）。"""
@@ -791,6 +818,13 @@ DELAY_FAILURE_LOG_WINDOW_MS = 1_000
 """延迟转投失败日志的抑制窗口（毫秒）：缺省一个推进 tick。
 
 高水位期间转投每 tick 都会失败，不抑制会在几秒内刷出成千上万行同样原因。
+"""
+
+DELAY_RETRY_BACKOFF_MS = ConcurrentStableFrozenList((1_000, 2_000, 5_000, 10_000, 30_000, 60_000))
+"""延迟转投失败的退避序列（毫秒；按失败次数索引，末项封顶）。
+
+退避只影响「下一次重试时刻」，不改变 `deliver_at` 的业务语义；实际等待另加半抖动
+（`base/2 + random(0, base/2)`），避免同刻失败的大批记录同步重试（02-6-1）。
 """
 
 # ---------------------------------------------------------------------------

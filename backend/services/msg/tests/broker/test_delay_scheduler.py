@@ -529,6 +529,8 @@ async def test_transfer_failure_keeps_record_and_retries(
     assert [(record.log_id, record.attempts) for record in kept] == [("l1", 1)]
     assert await message_store.leo(topic_id=1, partition_no=0) == 0
 
+    # 02-6-1：失败后进入半抖动退避（首次 0.5~1s），推进到上限后再重试。
+    advance(1_000)
     assert await scheduler.run_once() == 1
     assert list(await delay_store.list_all()) == []
     assert await message_store.leo(topic_id=1, partition_no=0) == 1

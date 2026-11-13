@@ -3665,7 +3665,7 @@ export interface components {
             parent_span_id?: string | null;
             /**
              * Payload
-             * @description 消息体（base64 编码；空串表示空消息体）
+             * @description 消息体（base64 编码；空串表示空消息体；解码后不超过 1 MiB）
              * @default
              */
             payload: string;

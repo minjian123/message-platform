@@ -913,8 +913,13 @@ class FileDelayStore(DelayStore):
         Returns:
             bool: True 表示本轮不落盘（只更新内存）。
         """
-        if replace(record, attempts=0) != replace(existing.record, attempts=0):
-            # 除 attempts 之外的字段变了（改期 / 换档）：立即落盘，节流只管「纯计数」
+        if replace(record, attempts=0, next_attempt_at=None) != replace(
+            existing.record, attempts=0, next_attempt_at=None
+        ):
+            # 除重试元数据之外的字段变了（改期 / 换档）：立即落盘，节流只管「纯计数」
+            return False
+        if record.next_attempt_at != existing.record.next_attempt_at:
+            # 退避时刻变化必须落盘：重启后靠它继续退避（下一次失败间隔已拉长，写放大可控）
             return False
         if record.attempts <= existing.flushed_attempts:
             return False
@@ -1044,6 +1049,7 @@ def _put_header(record: DelayRecord) -> RecordHeader:
             deliver_at_us=to_epoch_us(record.deliver_at),
             delay_level=record.delay_level,
             attempts=record.attempts,
+            next_attempt_at_us=(to_epoch_us(record.next_attempt_at) if record.next_attempt_at is not None else None),
             namespace=record.namespace,
             topic=record.topic,
         ),
@@ -1105,6 +1111,7 @@ def _to_record(header: RecordHeader, payload: bytes, *, stamp: DelayStamp) -> De
         published_at=from_epoch_us(header.published_at_us),
         deliver_at=from_epoch_us(stamp.deliver_at_us),
         attempts=stamp.attempts,
+        next_attempt_at=(from_epoch_us(stamp.next_attempt_at_us) if stamp.next_attempt_at_us is not None else None),
         content_type=header.content_type,
         compression=header.compression,
         uncompressed_len=header.uncompressed_len,

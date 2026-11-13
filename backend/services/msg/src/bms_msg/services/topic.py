@@ -26,11 +26,9 @@ from bms_msg.core.config import (
     MAX_RETENTION_BYTES,
     MAX_RETENTION_MS,
     MIN_PARTITION_COUNT,
-    NAMESPACE_PATTERN,
     TOPIC_NAME_PATTERN,
 )
 from bms_msg.errors import (
-    MsgNamespaceInvalidError,
     MsgPartitionCountInvalidError,
     MsgTopicExistsError,
     MsgTopicNotFoundError,
@@ -486,8 +484,6 @@ class TopicService:
         Raises:
             MsgNamespaceInvalidError: 形态不符或未登记 / 未启用（350010）。
         """
-        if not NAMESPACE_PATTERN.match(namespace):
-            raise MsgNamespaceInvalidError(f"命名空间形态非法：{namespace}")
         tenant.ensure_namespace(namespace)
 
     def _ensure_topic_name(self, name: str) -> None:

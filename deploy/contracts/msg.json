@@ -3431,7 +3431,8 @@
           },
           "payload": {
             "default": "",
-            "description": "消息体（base64 编码；空串表示空消息体）",
+            "description": "消息体（base64 编码；空串表示空消息体；解码后不超过 1 MiB）",
+            "maxLength": 1398104,
             "title": "Payload",
             "type": "string"
           },

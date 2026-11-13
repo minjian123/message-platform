@@ -21,6 +21,7 @@
 """
 
 import asyncio
+import random
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -36,6 +37,7 @@ from bms_msg.core.config import (
     DELAY_BATCH_LIMIT,
     DELAY_FAILURE_LOG_WINDOW_MS,
     DELAY_MAX_CATCHUP_SECONDS,
+    DELAY_RETRY_BACKOFF_MS,
     DELAY_TICK_MS,
     MS_PER_SECOND,
 )
@@ -86,6 +88,18 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _due_at(record: DelayRecord) -> datetime:
+    """取记录的「下一次可尝试时刻」：退避中取 `next_attempt_at`，否则取 `deliver_at`。
+
+    Args:
+        record: 延迟记录。
+
+    Returns:
+        datetime: 下一次可尝试时刻（UTC）。
+    """
+    return record.next_attempt_at or record.deliver_at
+
+
 class DelayWheel:
     """分层分桶时间轮（纯内存索引：装填 O(1)，推进按秒位取桶）。
 
@@ -115,7 +129,7 @@ class DelayWheel:
         Returns:
             str: `L0` / `L1` / `L2`。
         """
-        remaining = record.deliver_at - self._now()
+        remaining = _due_at(record) - self._now()
         if remaining < timedelta(seconds=_SECOND_SLOTS):
             return DELAY_LAYER_SECOND
         if remaining < timedelta(seconds=_MINUTE_SLOTS * _SECONDS_PER_MINUTE):
@@ -128,11 +142,12 @@ class DelayWheel:
         Args:
             record: 延迟记录。
         """
-        if record.deliver_at <= self._now():
+        due_at = _due_at(record)
+        if due_at <= self._now():
             self._overdue.add(record)
             return
         layer = self.layer_of(record)
-        second = int(record.deliver_at.timestamp())
+        second = int(due_at.timestamp())
         if layer == DELAY_LAYER_SECOND:
             self._seconds.setdefault(second % _SECOND_SLOTS, ConcurrentStableList()).add(record)
         elif layer == DELAY_LAYER_MINUTE:
@@ -288,6 +303,7 @@ class DelayScheduler:
         clock: Callable[[], float] | None = None,
         durable: DurabilityPoint | None = None,
         availability: TenantAvailability | None = None,
+        jitter: Callable[[float, float], float] | None = None,
     ) -> None:
         """初始化（不启动任务：由 `ensure_started()` 决定）。
 
@@ -302,6 +318,7 @@ class DelayScheduler:
             clock: 单调毫秒时钟（抑制窗口判据；用例注入以确定性控制窗口边界）。
             durable: 日志耐久点（02-7；None 表示不显式刷盘，用于内存实现与用例）。
             availability: 租户可用性检查（None 表示不判；生产传基座租户守卫适配器）。
+            jitter: 半抖动函数（参数为下界 / 上界；缺省 `random.uniform`，用例注入确定性函数）。
         """
         self._store = store
         self._messages = messages
@@ -313,6 +330,7 @@ class DelayScheduler:
         self._clock = clock if clock is not None else _monotonic_ms
         self._durable = durable
         self._availability = availability
+        self._jitter = jitter if jitter is not None else random.uniform
         self._failure_logged: dict[tuple[int, int, str], float] = {}
         self._inactive_logged: ConcurrentStableDict[int, float] = ConcurrentStableDict()
         self._task: asyncio.Task[None] | None = None
@@ -345,8 +363,9 @@ class DelayScheduler:
         candidates = self._wheel.take_due(now)
         delivered = 0
         for record in candidates:
-            if record.deliver_at > now:
-                # 未到期（分桶只缩候选集）：重新装填，剩余时间更小，通常落进更细的层。
+            due_at = _due_at(record)
+            if due_at > now:
+                # 未到可尝试时刻（分桶只缩候选集）：重新装填，剩余时间更小，通常落进更细的层。
                 self._wheel.place(record)
                 continue
             if delivered >= self._batch_limit:
@@ -421,10 +440,11 @@ class DelayScheduler:
         return True
 
     async def _defer(self, record: DelayRecord, exc: Exception) -> bool:
-        """转投失败处置：记录保留、`attempts + 1`、记日志、下一轮重试（不丢弃）。
+        """转投失败处置：记录保留、`attempts + 1`、按退避设置下次重试、记日志（不丢弃）。
 
-        **日志带原因并按窗口抑制**（02-6）：没有 `reason` 时「磁盘满」与「主题停用」只能靠猜；
-        而高水位期间每 tick 都会失败，不抑制会在几秒内刷出成千上万行同样的内容。
+        **退避与日志抑制**（02-6-1 / F3）：失败后写 `next_attempt_at`（1/2/5/10/30/60s 封顶 +
+        半抖动），时间轮按它判到期；`deliver_at` 业务语义不变。日志仍带原因并按窗口抑制：
+        没有 `reason` 时「磁盘满」与「主题停用」只能靠猜；高水位期间不抑制会刷屏。
         抑制键是 `(主题, 分区, 原因)`——不同原因各记一条，不会被别的失败掩住。
 
         Args:
@@ -434,11 +454,37 @@ class DelayScheduler:
         Returns:
             bool: 恒 False（未投出）。
         """
-        retried = with_attempt(record)
+        attempts = record.attempts + 1
+        retried = with_attempt(record, next_attempt_at=self._next_attempt_at(attempts))
         self._log_failure(retried, exc)
         await self._store.enqueue(retried)
         self._wheel.place(retried)
         return False
+
+    def _retry_delay_ms(self, attempts: int) -> float:
+        """按失败次数取基础退避（毫秒）。
+
+        Args:
+            attempts: 加一后的失败次数（>=1）。
+
+        Returns:
+            float: 基础退避毫秒（末项封顶）。
+        """
+        index = min(max(attempts - 1, 0), len(DELAY_RETRY_BACKOFF_MS) - 1)
+        return float(DELAY_RETRY_BACKOFF_MS[index])
+
+    def _next_attempt_at(self, attempts: int) -> datetime:
+        """计算下次重试时刻（基础退避 + 半抖动）。
+
+        Args:
+            attempts: 加一后的失败次数（>=1）。
+
+        Returns:
+            datetime: 下次重试时刻（UTC）。
+        """
+        base = self._retry_delay_ms(attempts)
+        wait = base / 2 + self._jitter(0.0, base / 2)
+        return self._now() + timedelta(milliseconds=wait)
 
     def _log_inactive(self, record: DelayRecord) -> None:
         """按窗口记一次「租户不可用、延迟转投暂停」日志（防每 tick 刷屏）。

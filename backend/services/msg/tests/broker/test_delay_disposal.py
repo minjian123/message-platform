@@ -277,6 +277,7 @@ async def test_discard_restore_failure_is_logged(clock: Callable[[], datetime], 
 
 async def test_transfer_failure_log_is_suppressed_within_window(
     clock: Callable[[], datetime],
+    advance: Callable[[int], None],
     delay_store: InMemoryDelayStore,
     delay_wheel: DelayWheel,
 ) -> None:
@@ -288,12 +289,15 @@ async def test_transfer_failure_log_is_suppressed_within_window(
         now=clock,
         clock=lambda: 1_000.0,
         failure_log_window_ms=60_000,
+        jitter=lambda low, high: low,
     )
     record = _record(clock, span_ms=0)
     await delay_store.enqueue(record)
     delay_wheel.place(record)
 
     assert await scheduler.run_once() == 0
+    # 02-6-1：失败后进入半抖动退避（初始 attempts=3 → 基础 10s、半抖动下界 5s）。
+    advance(5_000)
     assert await scheduler.run_once() == 0
     kept = await delay_store.list_for_tenant(tenant_id=TENANT_ID)
     assert [item.attempts for item in kept] == [5]

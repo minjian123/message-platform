@@ -27,6 +27,7 @@ from bms_msg.broker.replay import UowFactory
 from bms_msg.broker.watermark import StorageWatermark
 from bms_msg.core.config import (
     INGRESS_COUNTER_RETAIN_SECONDS,
+    METRICS_SAMPLE_FAILURE_LOG_WINDOW_SECONDS,
     METRICS_SAMPLE_INTERVAL_SECONDS,
 )
 from bms_msg.metrics.lag import MetricsSnapshotStore, topic_key
@@ -90,6 +91,8 @@ class MetricsSampler(BaseFrameworkObject):
         self._last_sample_at: float | None = None
         self._last_messages_by_tenant: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         self._ingress_deltas: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+        self._topic_keys: ConcurrentStableDict[int, str] = ConcurrentStableDict()
+        self._sample_failure_logged: ConcurrentStableDict[str, float] = ConcurrentStableDict()
 
     @property
     def running(self) -> bool:
@@ -311,57 +314,162 @@ class MetricsSampler(BaseFrameworkObject):
     async def _sample_lag(self) -> ConcurrentStableDict[str, int]:
         """按 `(tenant, topic)` 汇总积压（所有组、所有分区求和）。
 
+        **按主题隔离**（02-6-1 / B21）：单个未绑定主题 / 单条坏记录只影响自己的快照键；
+        失败键保留上一轮值（不归零），其余主题照常更新。主题已被删除（查不到行）时不恢复旧键，
+        避免快照永久残留。
+
         Returns:
             ConcurrentStableDict[str, int]: 快照键 → 积压条数。
         """
-        result: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         records = await self._groups.list_all()
+        previous = self._snapshots.snapshot.lag
         async with self._uow_factory() as uow:
+            result = ConcurrentStableDict[str, int]()
             session = uow.session
             if session is None:  # pragma: no cover - DbUnitOfWork 恒有会话
                 return result
             topics = TopicRepository(session)
+            values: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+            seen: ConcurrentStableDict[str, bool] = ConcurrentStableDict()
+            failed: ConcurrentStableDict[str, bool] = ConcurrentStableDict()
             for record in records:
-                topic = await topics.get_by_id_unscoped(record.topic_id)
-                if topic is None:
-                    continue
-                committed_total = 0
-                leo_total = 0
-                for partition_no in range(int(topic.partition_count)):
-                    committed_total += await self._offsets.get(
-                        group=record.group,
-                        topic_id=record.topic_id,
-                        partition_no=partition_no,
-                    )
-                    leo_total += await self._messages.leo(topic_id=record.topic_id, partition_no=partition_no)
-                code = await self._tenant_code(topic.tenant_id)
-                key = topic_key(tenant=code, topic=topic.name)
-                result.set(key, result.get(key, 0) + max(leo_total - committed_total, 0))
-        return result
+                topic_id = int(record.topic_id)
+                key = self._topic_keys.get(topic_id)
+                try:
+                    topic = await topics.get_by_id_unscoped(topic_id)
+                    if topic is None:
+                        self._topic_keys.pop(topic_id, None)
+                        continue
+                    code = await self._tenant_code(topic.tenant_id)
+                    key = topic_key(tenant=code, topic=topic.name)
+                    self._topic_keys.set(topic_id, key)
+                    committed_total = 0
+                    leo_total = 0
+                    for partition_no in range(int(topic.partition_count)):
+                        committed_total += await self._offsets.get(
+                            group=record.group,
+                            topic_id=topic_id,
+                            partition_no=partition_no,
+                        )
+                        leo_total += await self._messages.leo(topic_id=topic_id, partition_no=partition_no)
+                    values.set(key, values.get(key, 0) + max(leo_total - committed_total, 0))
+                    seen.set(key, True)
+                    self._clear_sample_failure("lag", key)
+                except Exception as exc:
+                    if key is None:
+                        self._log_sample_failure("lag", f"topic:{topic_id}", exc)
+                        continue
+                    seen.set(key, True)
+                    failed.set(key, True)
+                    self._log_sample_failure("lag", key, exc)
+            for key in seen:
+                if key in failed:
+                    if key in previous:
+                        result.set(key, previous[key])
+                else:
+                    result.set(key, values.get(key, 0))
+            return result
 
     async def _sample_dlq(self) -> ConcurrentStableDict[str, int]:
         """按 `(tenant, topic)` 统计当前死信存量。
 
+        与积压同一隔离口径：单条死信解析失败只影响该主题键，失败键保留上一轮值。
+
         Returns:
             ConcurrentStableDict[str, int]: 快照键 → 死信条数。
         """
-        result: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         letters = await self._dead_letters.list_all()
+        previous = self._snapshots.snapshot.dlq
         async with self._uow_factory() as uow:
+            result = ConcurrentStableDict[str, int]()
             session = uow.session
             if session is None:  # pragma: no cover - DbUnitOfWork 恒有会话
                 return result
             topics = TopicRepository(session)
+            values: ConcurrentStableDict[str, int] = ConcurrentStableDict()
+            seen: ConcurrentStableDict[str, bool] = ConcurrentStableDict()
+            failed: ConcurrentStableDict[str, bool] = ConcurrentStableDict()
             for letter in letters:
                 if letter.status not in DLQ_ACTIVE_STATUSES:
                     continue
-                topic = await topics.get_by_id_unscoped(letter.topic_id)
-                if topic is None:
-                    continue
-                code = await self._tenant_code(topic.tenant_id)
-                key = topic_key(tenant=code, topic=topic.name)
-                result.set(key, result.get(key, 0) + 1)
-        return result
+                topic_id = int(letter.topic_id)
+                key = self._topic_keys.get(topic_id)
+                try:
+                    topic = await topics.get_by_id_unscoped(topic_id)
+                    if topic is None:
+                        self._topic_keys.pop(topic_id, None)
+                        continue
+                    code = await self._tenant_code(topic.tenant_id)
+                    key = topic_key(tenant=code, topic=topic.name)
+                    self._topic_keys.set(topic_id, key)
+                    values.set(key, values.get(key, 0) + 1)
+                    seen.set(key, True)
+                    self._clear_sample_failure("dlq", key)
+                except Exception as exc:
+                    key = key or await self._letter_key(letter)
+                    if key is None:
+                        self._log_sample_failure("dlq", f"topic:{topic_id}", exc)
+                        continue
+                    seen.set(key, True)
+                    failed.set(key, True)
+                    self._log_sample_failure("dlq", key, exc)
+            for key in seen:
+                if key in failed:
+                    if key in previous:
+                        result.set(key, previous[key])
+                else:
+                    result.set(key, values.get(key, 0))
+            return result
+
+    async def _letter_key(self, letter: object) -> str | None:
+        """死信行反查失败时的键回退（用行内快照字段，不再查主题表）。
+
+        Args:
+            letter: 死信行（含 `tenant_id` / `topic`）。
+
+        Returns:
+            str | None: 快照键；字段缺失时 None。
+        """
+        tenant_id = getattr(letter, "tenant_id", None)
+        topic = getattr(letter, "topic", None)
+        if tenant_id is None or not topic:
+            return None
+        code = await self._tenant_code(int(tenant_id))
+        return topic_key(tenant=code, topic=str(topic))
+
+    def _log_sample_failure(self, dimension: str, key: str, exc: Exception) -> None:
+        """按 60s 窗口记一条采样失败日志（同维度同键只一条）。
+
+        Args:
+            dimension: 维度（`lag` / `dlq`）。
+            key: 快照键或 `topic:{id}`。
+            exc: 失败原因。
+        """
+        marker = f"{dimension}:{key}"
+        now = time.monotonic()
+        last = self._sample_failure_logged.get(marker)
+        if last is not None and now - last < METRICS_SAMPLE_FAILURE_LOG_WINDOW_SECONDS:
+            return
+        self._sample_failure_logged.set(marker, now)
+        _LOGGER.warning(
+            "msg_metrics_sample_failed",
+            dimension=dimension,
+            key=key,
+            error=type(exc).__name__,
+        )
+
+    def _clear_sample_failure(self, dimension: str, key: str) -> None:
+        """成功采样后清失败标记并记一条恢复日志（无失败标记时空转）。
+
+        Args:
+            dimension: 维度（`lag` / `dlq`）。
+            key: 快照键。
+        """
+        marker = f"{dimension}:{key}"
+        if marker not in self._sample_failure_logged:
+            return
+        self._sample_failure_logged.pop(marker, None)
+        _LOGGER.info("msg_metrics_sample_recovered", dimension=dimension, key=key)
 
     async def _sample_replay(self) -> tuple[ConcurrentStableDict[str, int], int, int]:
         """按状态统计重放任务数，并汇总累计重放条数与失败任务数。

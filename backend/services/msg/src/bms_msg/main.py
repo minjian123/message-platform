@@ -63,6 +63,7 @@ from bms_msg.acl.port import MsgTopicAclFactory
 from bms_msg.api.access_audit import AccessAnomalyAuditMiddleware
 from bms_msg.api.frame.gate import register_frame_handlers
 from bms_msg.api.internal.app import create_internal_app
+from bms_msg.api.publish_body_limit import PublishBodyLimitMiddleware
 from bms_msg.api.router import api_router, frame_router
 from bms_msg.audit.trail import ACTION_CLASSES
 from bms_msg.broker.auto_election import AutoElectionConfig, AutoElectionMetrics, AutoElectionWatchdog
@@ -541,6 +542,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
         # 05-4：访问异常拒绝审计。最后注册即最外层，能看到租户中间件提前拒绝的响应；
         # 只补基座未记录的 401 / 403 / 429，不改变原响应。
         app.add_middleware(AccessAnomalyAuditMiddleware, settings=settings.audit_log)
+        # 02-6-1：发布 JSON 请求体早闸。最后注册即最外层，在租户解析与 body 读取之前拒绝超大请求。
+        app.add_middleware(PublishBodyLimitMiddleware)
 
     @staticmethod
     def _install_metrics(app: FastAPI, settings: Settings) -> None:

@@ -5,7 +5,7 @@
 
 - 规则只拿得到已通过基座前四步的 `ResolvedScope`，不解析租户、不查服务目录状态、
   不自建缓存；取值来自 `scope.module_key`（即 msg 的 `namespace`）。
-- 判定复用 `tenant/context.py::ensure_namespace` 单点，失败码保持 `350010`。
+- 判定复用 `tenant/context.py::validate_namespace` 单点，失败码保持 `350010`。
 - 声明即契约：`extension_requirements()` 声明必需，缺失即拒启；未声明的规则零调用。
 - 实现经 `BasePluggable` 导入期自动成为候选；**不再显式 `register_plugin`**
   （自动候选与显式登记同名会撞名拒建注册表）。
@@ -14,7 +14,7 @@
 from bms_core.resource_scope import ResolvedScope
 from bms_core.resource_scope.rules import BaseScopeRule
 
-from bms_msg.tenant.context import enabled_namespaces, ensure_namespace
+from bms_msg.tenant.context import enabled_namespaces, validate_namespace
 
 __all__ = ["MSG_NAMESPACE_RULE", "MsgNamespaceRule"]
 
@@ -36,4 +36,4 @@ class MsgNamespaceRule(BaseScopeRule):
         Raises:
             MsgNamespaceInvalidError: 未登记 / 未启用（`350010` / 400）。
         """
-        ensure_namespace(scope.module_key, enabled_namespaces())
+        validate_namespace(scope.module_key, enabled_namespaces())

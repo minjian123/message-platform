@@ -834,6 +834,9 @@ def decode_payload(payload: str) -> bytes:
 def resolve_payload(request: PublishRequest) -> bytes:
     """取发布请求的消息体字节（帧路径直通、JSON 路径 base64 解码，上限同一处判）。
 
+    私有 bytes 通道可能来自帧闸门（原始字节），也可能来自 JSON 入口的首次解码缓存；
+    有缓存即直接复用，避免「配额算一次、投递再解一次」。
+
     Args:
         request: 发布请求。
 

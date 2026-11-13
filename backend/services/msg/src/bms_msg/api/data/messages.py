@@ -69,7 +69,7 @@ from bms_msg.broker.backpressure import BackpressureTuning, InflightUsage, RateL
 from bms_msg.broker.coordinator import GroupCoordinator
 from bms_msg.broker.deadletter import DeadLetterQueue
 from bms_msg.broker.delay import DelayService, DelayStore
-from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState
+from bms_msg.broker.delivery import Delivery, DeliveryService, DeliveryState, resolve_payload
 from bms_msg.broker.file_store import PartitionDirectory
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageStore, StoredMessage
@@ -527,18 +527,28 @@ async def _ensure_quota_rate(
 
 
 def _payload_bytes(request: PublishRequest) -> int:
-    """取本次发布的消息体字节数（帧走原始字节，JSON 走 base64 估算）。
+    """取本次发布的消息体字节数（解码一次并缓存，后续投递 / 延迟转投复用）。
+
+    帧路径直接取原始字节；JSON 路径首次调用时解码 base64 并写回请求的私有 bytes 通道，
+    之后 `resolve_payload` 命中缓存、不再二次解码。非法 base64 → `10001`，超 1 MiB → `350006`
+    与既有载荷判据同源。
 
     Args:
         request: 发布请求。
 
     Returns:
-        int: 字节数。
+        int: 解码后字节数。
+
+    Raises:
+        ParamError: 非法 base64（10001）。
+        MsgPayloadTooLargeError: 超过 1 MiB 上限（350006 / 413）。
     """
     raw = request.raw_payload
     if raw is not None:
         return len(raw)
-    return len(request.payload) * 3 // 4
+    resolved = resolve_payload(request)
+    request.set_raw_payload(resolved)
+    return len(resolved)
 
 
 async def _ensure_storage_quota(
