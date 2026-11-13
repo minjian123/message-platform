@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import cast
 
@@ -11,13 +13,17 @@ from bms_core.core.concurrent import (
     ConcurrentStableFrozenList,
     ConcurrentStableList,
 )
+from bms_core.db.unit_of_work import DbUnitOfWork, UnitOfWork
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from bms_msg.broker.election import LeaderSwitchError, SwitchResult
 from bms_msg.broker.replication import ReplicationSnapshot
+from bms_msg.models.partition import MsgPartition
 from bms_msg.models.partition_migration import PLAN_STATUS_SUCCEEDED
 from bms_msg.services.migration_ledger import InMemoryMigrationLedger
 from bms_msg.services.partition_assignment import PartitionAssigner, PartitionAssignmentConfig
 from bms_msg.services.partition_migration import (
+    DbMigrationTopology,
     MigrationPartition,
     MigrationStepError,
     MigrationTopology,
@@ -970,3 +976,42 @@ async def test_apply_item_ignores_terminal_status() -> None:
     )
 
     assert len(topology.writes) == 0
+
+
+async def test_db_topology_write_assignment_commits(db_session: AsyncSession) -> None:
+    """平台库拓扑：副本集 CAS 写必须提交（否则迁移 apply 改不动 `replicas`）。"""
+    session = db_session
+    session.add(
+        MsgPartition(
+            topic_id=9,
+            partition_no=0,
+            leader="msg-1",
+            replicas=ConcurrentStableList(("msg-1", "msg-2", "msg-3")),
+        )
+    )
+    await session.commit()
+
+    committed = 0
+
+    class _SpyUow(DbUnitOfWork):
+        """统计提交次数的会话工作单元。"""
+
+        async def commit(self) -> None:
+            """记录一次提交后交给真实会话。"""
+            nonlocal committed
+            committed += 1
+            await super().commit()
+
+    @asynccontextmanager
+    async def _uow() -> AsyncGenerator[UnitOfWork]:
+        yield _SpyUow(session)
+
+    topology = DbMigrationTopology(uow_factory=_uow)
+    assert await topology.write_assignment(
+        topic_id=9,
+        partition_no=0,
+        replicas=ConcurrentStableFrozenList(("msg-1", "msg-2")),
+        leader="msg-1",
+        expected_version=1,
+    )
+    assert committed == 1

@@ -351,6 +351,7 @@ class DbMigrationTopology(MigrationTopology):
             session = cast("DbSession", uow.session)
             result = await session.execute(statement)
             await session.flush()
+            await uow.commit()
         return int(cast("CursorResult[object]", result).rowcount or 0) > 0
 
 
