@@ -124,24 +124,17 @@ cmd = ["{python}", "-m", "engkit", "base", "bare-collections"]
 label = "基座：check_snowflake_ids（裸 BigInteger 雪花 ID 列 / schema 残留）"
 cmd = ["{python}", "-m", "engkit", "base", "snowflake-ids"]
 
-# ---- 部署资产：编排 / 镜像 / 凭据模板（07-1-1）----
+# ---- 部署资产：编排 / 镜像 / 集群覆盖层（02-8、07-1-1）----
 # 为什么是 always 步而不是靠选测：选测按 import 关系选文件，只改 `deploy/compose/msg.yml` 或
 # `deploy/Dockerfile` 时选不到 `services/msg/tests/deploy/`；不钉住就会出现「编排改了、断言没跑」。
-# 窄目录（1 个测试文件）远低于 `[guard].dir_test_threshold`，不触重命令守卫；未设
+# 窄目录（7 个测试文件）远低于 `[guard].dir_test_threshold`，不触重命令守卫；未设
 # `MSG_COVERAGE_DATA` 时覆盖率插件静默不采，不污染后续覆盖率步骤的数据。
 [[preflight.steps]]
-label = "部署：编排与镜像资产断言（端口 / 网络 / 双卷 / 停机 / 镜像契约）"
+label = "部署：编排与镜像资产断言（端口 / 网络 / 双卷 / 停机 / 镜像契约 / 集群覆盖层）"
 cmd = ["uv", "run", "pytest", "services/msg/tests/deploy", "-q"]
 cwd = "backend"
 
-# ---- 配置与凭据（07-2）：全仓凭据扫描 + 四层配置断言 ----
-# always 步：只改 deploy/.env.example、msg.yml 或配置文本时选测选不到，必须每次提交都判。
-[[preflight.steps]]
-label = "配置：四层配置与凭据扫描（C1~C6）"
-cmd = ["uv", "run", "python", "-m", "ops.check_credentials"]
-cwd = "backend"
-
-# [rules.env_example] 早已登记模板与必填键，但未接预检 → 规则空转；此处补登记。
+# [rules.env_example] 登记模板与必填键，未接预检即规则空转；此处补登记。
 [[preflight.steps]]
 label = "配置：环境变量模板键位（engkit base env-example）"
 cmd = ["{python}", "-m", "engkit", "base", "env-example"]
@@ -203,12 +196,6 @@ required_keys = [
   "MSG_STORAGE_WARN_RATIO",
   "MSG_STORAGE_REJECT_RATIO",
   "MSG_STORAGE_SAMPLE_TTL_MS",
-  "MSG_RECOVERY_WORK_DIR",
-  "MSG_RECOVERY_STOP_CMD",
-  "MSG_RECOVERY_START_CMD",
-  "MSG_RECOVERY_METADATA_CMD",
-  "MSG_RECOVERY_READY_URL",
-  "MSG_RECOVERY_TIMEOUT_SEC",
 ]
 
 [rules.docs_status]

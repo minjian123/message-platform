@@ -14,7 +14,6 @@ GATEWAY = REPO_ROOT / "deploy" / "compose" / "msg-cluster.gateway.yml"
 DRILL = REPO_ROOT / "deploy" / "compose" / "msg-drill.override.yml"
 ENV_EXAMPLE = REPO_ROOT / "deploy" / ".env.example"
 DOCKERFILE = REPO_ROOT / "deploy" / "Dockerfile"
-CLUSTER_ENV = REPO_ROOT / "deploy" / "drill" / "cluster.env.example"
 
 
 def test_compose_keeps_single_instance_default() -> None:
@@ -62,7 +61,6 @@ def test_env_example_and_dockerfile_expose_new_keys() -> None:
     """模板：每实例卷与内部通道键位齐备；镜像声明 8001。"""
     env_text = ENV_EXAMPLE.read_text(encoding="utf-8")
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    cluster_env = CLUSTER_ENV.read_text(encoding="utf-8")
 
     for index in (1, 2, 3):
         assert f"MSG_DATA_HOST_DIR_{index}=" in env_text
@@ -75,5 +73,3 @@ def test_env_example_and_dockerfile_expose_new_keys() -> None:
     ):
         assert key in env_text
     assert "EXPOSE 8001" in dockerfile
-    for key in ("MSG_CLUSTER_DRILL_SSH_TARGET=", "MSG_CLUSTER_DRILL_WORK_DIR=", "MSG_CLUSTER_DRILL_PROJECT="):
-        assert key in cluster_env

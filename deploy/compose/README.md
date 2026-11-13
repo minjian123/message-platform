@@ -112,18 +112,7 @@ docker compose -f compose/msg.yml exec msg ls /var/lib/msg/data /var/lib/msg/off
 
 ## 8. 部署自检
 
-在**构建上下文的本机仓**（`backend/` 目录，需仓内虚拟环境）执行——判据是声明 / 契约 / 配置 / 镜像 / 编排文本，
-镜像内不含 `ops/`（运行镜像只装服务与基座），故不在容器内跑：
-
-```bash
-# 声明装载 / 七段齐备 / 唯一性 / 服务行同值 / 路由口径 / 探针接线（退出码 0 通过、1 违规）
-python -m ops.check_deployment
-
-# 四层配置 / 六类敏感项 / 凭据形态 / 两份 .env 纪律 / 生产禁用项（C1~C6，退出码 0 通过、1 违规）
-python -m ops.check_credentials
-
-# 平台侧识别情况另查：产品 / 服务行 / 产品路由登记行与网关生成件（见部署记录）
-```
+原部署自检命令（`ops.check_deployment`）与凭据扫描（`ops.check_credentials`）已随 07 域整体剥离删除，本节暂不提供离线自检入口；编排与镜像的结构断言仍由 `backend/services/msg/tests/deploy/test_compose_assets.py` 在预检中执行。平台侧识别情况另查：产品 / 服务行 / 产品路由登记行与网关生成件（见部署记录）。
 
 ## 9. 排障速查
 
@@ -143,4 +132,4 @@ python -m ops.check_credentials
 - **三实例**：`docker compose -f compose/msg.yml --profile cluster up -d msg-1 msg-2 msg-3`（显式列服务，避免连带启动默认 `msg`）；每实例独立 `data` / `offsets` 卷，容器内 8000 + 8001（内部复制仅平台网络）。
 - **生产网关**：叠加 `-f compose/msg-cluster.gateway.yml` 给三实例加别名 `msg`，网关上游 `msg:8000` 口径不变；drill 不启用该层。
 - **回退单实例**：先 `ops.rebalance` 收敛副本集 / 切主，再停三实例、`up -d` 起 `msg`；分配结果留在 `msg_partition.replicas`。
-- **集群演练**：见 `deploy/drill/README.md`「多实例场景」节；记录落工作区根 `tmp/msg/cluster-drill/`，不污染平台数据。
+- **集群演练**：原 `deploy/drill` 演练脚本与场景单源已随 07 域整体剥离删除；`msg-drill.override.yml` 仅保留编排形态（隔离容器名与回环端口），演练能力待重建。

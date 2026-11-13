@@ -266,7 +266,7 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             app: 应用实例（供 `api/deps.py` 读取）。
             settings: 应用配置（审计发件箱实现选择取自 `[outbox_store]`）。
         """
-        # 07-2：启动期配置断言（与离线 ops.check_credentials 的 C5 共用同一纯函数）。
+        # 07-2：启动期配置断言（原离线凭据扫描 C5 已随部署域剥离，现存唯一入口）。
         # 只判分层结果与生产禁用项，不判密钥是否存在——缺密钥由基座在使用时失效关闭。
         validate_config_invariants(flatten_settings(settings), os.environ.get("BMS_ENV") or settings.app.env)
         waiter = DeliveryWaiter()
