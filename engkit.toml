@@ -1,8 +1,8 @@
 # msg 仓工程化工具包配置（唯一：文档根 / 工程清单 / 选测规则 / 预检步骤 / 拦截口径）
 # 口径见 engkit 文档《工程化工具包说明》§4 字段表。
 #
-# 8B_00 设计阶段：ops / 契约 / 域布局等门禁步骤在实现阶段启用（当前以注释保留），
-# 避免空仓预检因缺少 ops 包而误红。
+# 8B_00 设计阶段已收口；当前后端契约快照、基座护栏、部署资产断言均已启用，
+# 仅 `ops.check_modules` / `ops.event_contracts` 仍以注释保留（随对应能力交付再开）。
 
 [repo]
 name = "msg"
@@ -77,7 +77,7 @@ cmd = ["uv", "run", "pyright"]
 cwd = "backend"
 
 # ---- 契约：公开契约零漂移（03-1 起；改动端点后必须 `python -m ops.contract_snapshot export`）----
-# 用 `{python}` 而非 `uv run`：本仓无 `uv.lock` 与仓内 `.venv`，`uv run` 会在预检里临时解析依赖。
+# 用 `{python}` 而非 `uv run`：`uv run` 在预检里会重新解析依赖；本仓已有 `uv.lock`，但预检用仓内解释器更稳。
 [[preflight.steps]]
 label = "契约：contract_snapshot check（公开契约零漂移）"
 cmd = ["{python}", "-m", "ops.contract_snapshot", "check"]

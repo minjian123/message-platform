@@ -1,0 +1,237 @@
+# MSG 消息平台仓库流水线（00-2）
+# 触发口径（2026-11-13 拍板，与 bms / mdm / engkit 同口径）：**推送不触发流水线**——日常验证以推送前的
+#   本地预检为准；CI 只作按需的全量 / 集成验证，**手工触发即全量**（GitLab 界面 Run pipeline 或
+#   `POST /projects/<id>/pipeline`；bms 仓 `scripts/tools/ci/trigger.py` 可按仓复用）。
+#   因此推送**无需**加 `-o ci.skip`。
+# 门禁：门禁冒烟 / ruff / pyright（strict）/ pytest + 覆盖率（engkit 采集口径）/ 公开契约零漂移 /
+#       部署资产断言 / 基座护栏 / 文档（链接与锚点、文档口径）/ 前端（契约类型零漂移、类型检查、
+#       lint、用例、构建体积预算与产物面隔离）。
+# **不含镜像**：部署能力（07 域）已于 2026-11-13 整体剥离，镜像构建与 Registry 推送随部署能力重建时
+#       另立任务；本流水线只验不发布。
+# 注意：`bms文档` 为工作区软链，CI 只 clone msg 时不可用，故 docs-links 先按工作区布局补软链。
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+
+stages:
+  - lint
+  - test
+
+default:
+  tags: [bms]
+  image: python:3.14-slim
+  interruptible: true
+
+variables:
+  # 内网加速源（与 bms / mdm 侧 CI 同口径）；uv 以 copy 硬链接模式装入工作区 venv（跨挂载点安全）
+  PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+  UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+  UV_LINK_MODE: copy
+  # 流水线级串行闸门（与 bms / mdm 同键）：mjbk 上仅一台 runner，多仓共用，默认并行会互相抢资源
+  CI_QUEUE_LOCK: ci-queue-lock
+  CI_QUEUE_STALE_SECONDS: "7200"
+
+# ---- 流水线级串行闸门 ----
+# 口径与实现见 bms / mdm 仓 `.gitlab-ci.yml` 同名小节：同名锁容器即互斥量；`.pre` 取锁 / 等待，
+# `.post` 释放；持锁超 `CI_QUEUE_STALE_SECONDS` 视为陈旧可接管；异常残留时以 `CI_QUEUE_FORCE=1` 强制接管。
+ci-queue-acquire:
+  stage: .pre
+  image: docker:27-cli
+  script:
+    - |
+      set -u
+      STALE="${CI_QUEUE_STALE_SECONDS:-7200}"
+      LOCK="${CI_QUEUE_LOCK:-ci-queue-lock}"
+      ME="${CI_PROJECT_PATH}#${CI_PIPELINE_ID}"
+      owner() { docker inspect -f '{{index .Config.Labels "ci-queue.owner"}}' "$LOCK" 2>/dev/null || echo ''; }
+      stamp() { docker inspect -f '{{index .Config.Labels "ci-queue.at"}}' "$LOCK" 2>/dev/null || echo 0; }
+      if [ "${CI_QUEUE_FORCE:-}" = "1" ]; then
+        echo "[ci-queue] CI_QUEUE_FORCE=1 ⇒ 强制接管上一把锁（人工兜底）"
+        docker rm -f "$LOCK" >/dev/null 2>&1 || true
+      fi
+      while :; do
+        if docker inspect "$LOCK" >/dev/null 2>&1; then
+          OWNER="$(owner)"
+          AGE=$(( $(date +%s) - $(stamp) ))
+          if [ "$AGE" -ge "$STALE" ]; then
+            echo "[ci-queue] 锁陈旧（owner=${OWNER}，持锁 ${AGE}s ≥ ${STALE}s）⇒ 接管"
+            docker rm -f "$LOCK" >/dev/null 2>&1 || true
+            continue
+          fi
+          echo "[ci-queue] 等待上一条流水线结束：owner=${OWNER}（持锁 ${AGE}s）"
+          sleep 15
+          continue
+        fi
+        if docker create --name "$LOCK" \
+          --label "ci-queue.owner=$ME" --label "ci-queue.at=$(date +%s)" \
+          python:3.14-slim true >/dev/null 2>&1; then
+          echo "[ci-queue] 已获得流水线锁：$ME"
+          break
+        fi
+        sleep 5
+      done
+
+ci-queue-release:
+  stage: .post
+  when: always
+  interruptible: false
+  image: docker:27-cli
+  script:
+    - |
+      LOCK="${CI_QUEUE_LOCK:-ci-queue-lock}"
+      ME="${CI_PROJECT_PATH}#${CI_PIPELINE_ID}"
+      OWNER="$(docker inspect -f '{{index .Config.Labels "ci-queue.owner"}}' "$LOCK" 2>/dev/null || echo '')"
+      if [ "$OWNER" = "$ME" ]; then
+        docker rm -f "$LOCK" >/dev/null 2>&1 || true
+        echo "[ci-queue] 已释放流水线锁：$ME"
+      else
+        echo "[ci-queue] 锁不属于本流水线（owner=${OWNER:-无}），跳过释放"
+      fi
+
+# ---- 门禁冒烟：所有流水线无条件必跑 ----
+gate-smoke:
+  stage: lint
+  script:
+    - python --version
+    - python -c "import sys; assert sys.version_info >= (3, 14), 'Python < 3.14'"
+    - echo "gate ok"
+
+# ---- 后端门禁（backend/ 工作区）----
+# 依赖安装：`bms-core` 为路径依赖，`uv sync --frozen` 按 `../../bms/backend/libs/bms_core` 装基座 →
+# 后端 job 必须先克隆 bms 到 `../bms`；基座 ref 由变量 `BMS_REF` 指定（缺省 main = 每次取 bms 远端头，
+# 日常零维护；`latest-tag` 取最新 `vX.Y.Z` 标签；也可给分支 / tag / SHA 钉版本）。
+# `engkit` 亦为路径依赖，且 ruff 规则基线在 `engkit/toolchain/ruff-base.toml`（文件路径），故两条路径都要有。
+
+.backend-setup: &backend-setup
+  # python:3.14-slim 不含 git，而两个 setup 脚本都要 git 克隆；`nodejs` + `libatomic1` 供 pyright 使用
+  - sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+  - apt-get update && apt-get install -y --no-install-recommends git ca-certificates nodejs libatomic1
+  - pip install --no-cache-dir uv
+  - . scripts/tools/ci/bms_setup.sh
+  - . scripts/tools/ci/engkit_setup.sh
+  - cd backend
+  - uv sync --frozen
+
+backend-lint:
+  stage: lint
+  script:
+    - *backend-setup
+    - uv run ruff check .
+    - uv run ruff format --check .
+
+backend-typecheck:
+  stage: lint
+  script:
+    - *backend-setup
+    - uv run pyright
+
+backend-test:
+  stage: test
+  variables:
+    BMS_ENV: test
+    # 覆盖率采集口径：与本地预检同源——`engkit.coverage_plugin` 按 `MSG_COVERAGE_DATA` 落盘
+    # （xdist worker 各落 `<基址>.<pid>`），再由 `engkit coverage` 合并判定，不用 `pytest --cov`。
+    MSG_COVERAGE_DATA: $CI_PROJECT_DIR/backend/.cache/coverage/.coverage
+    MSG_COVERAGE_SOURCE: bms_msg,services,ops
+  script:
+    - *backend-setup
+    # 测试库隔离：runner 工作区跨作业 / 跨流水线复用，清掉上一轮残留
+    - rm -rf "$CI_PROJECT_DIR/backend/.cache/test" "$CI_PROJECT_DIR/backend/.cache/coverage"
+    - find "$CI_PROJECT_DIR" -name '*.db' -not -path '*/.git/*' -delete
+    - find "$CI_PROJECT_DIR" -name '*.db-journal' -not -path '*/.git/*' -delete
+    # 覆盖率硬门禁：行 + 分支 100%（口径见《AI开发规范》「覆盖率要求」节）
+    - uv run pytest
+    - >-
+      uv run engkit coverage
+      --root "$CI_PROJECT_DIR"
+      --data-file "$MSG_COVERAGE_DATA"
+      --out "$CI_PROJECT_DIR/coverage.json"
+      --module bms_msg --module services --module ops
+      --fail-under 100
+  coverage: '/percent=(\d+(?:\.\d+)?)/'
+  artifacts:
+    when: always
+    paths: [coverage.json]
+    expire_in: 30 days
+
+# ---- 契约与基座护栏 ----
+# 公开契约零漂移、部署资产断言、基座继承链 / 集合 / 雪花 ID / 环境模板。`ops` 包在 backend 顶层。
+backend-modules:
+  stage: test
+  script:
+    - *backend-setup
+    - uv run python -m ops.contract_snapshot check
+    - cd "$CI_PROJECT_DIR"
+    - uv run --project backend python -m engkit base backend-base
+    - uv run --project backend python -m engkit base frontend-base
+    - uv run --project backend python -m engkit base bare-collections
+    - uv run --project backend python -m engkit base snowflake-ids
+    - uv run --project backend python -m engkit base env-example
+
+# ---- 文档门禁（跨仓工程化工具包 engkit）----
+# 口径：相对链接与锚点必须自洽；进度类字段只允许落在阶段计划。
+# CI 只 clone msg 时 `bms文档` 软链不存在，按本地工作区布局补软链再查。
+docs-links:
+  stage: lint
+  script:
+    - *backend-setup
+    - ln -sfn ../bms/bms文档 "$CI_PROJECT_DIR/bms文档"
+    - uv run engkit links --root ..
+
+docs-scope:
+  stage: lint
+  script:
+    - *backend-setup
+    - uv run engkit docs-scope --root ..
+
+# ---- 前端门禁（frontend/ 工作区）----
+# 构建前提（跨仓）：平台基座包（`@bms/core` / `@bms/ui_ep` / `@bms/api_types`）经 `link:` 引工作区
+# **bms 克隆**；msg 的 pnpm workspace **不把 bms 包纳入成员**（避免反向污染 bms 构建），故先装 bms
+# 工作区依赖，再装 msg 工作区依赖。
+
+.frontend-setup: &frontend-setup
+  - corepack enable
+  - node --version
+  - . scripts/tools/ci/bms_setup.sh
+  - cd "$CI_PROJECT_DIR/../bms" && pnpm install --frozen-lockfile
+  - cd "$CI_PROJECT_DIR/frontend" && pnpm install --frozen-lockfile
+
+frontend-lint:
+  stage: lint
+  image: node:24
+  script:
+    - *frontend-setup
+    - pnpm run msg:lint
+    - pnpm run msg:typecheck
+
+frontend-test:
+  stage: test
+  image: node:24
+  script:
+    - *frontend-setup
+    # 契约类型零漂移（生成物 ↔ 产品契约快照逐字节比对）
+    - pnpm run api-types:check
+    - pnpm --filter @msg/module_msg run test:cov
+  artifacts:
+    when: always
+    paths: [frontend/modules/msg/coverage/]
+    expire_in: 30 days
+
+frontend-build:
+  stage: test
+  image: node:24
+  script:
+    - *frontend-setup
+    - pnpm run msg:build
+    # 体积预算（复用平台 module-metrics 单一计量）
+    - pnpm run msg:budget
+    # 产物面隔离扫描（平台护栏同判据）
+    - pnpm run msg:guard
+  artifacts:
+    when: on_success
+    paths:
+      - frontend/modules/msg/dist/
+      - frontend/modules/msg/package.json
+    expire_in: 30 days
