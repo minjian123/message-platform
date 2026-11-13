@@ -397,6 +397,7 @@ class DbMigrationLedger(MigrationLedger):
                 )
                 created += 1
             await session.flush()
+            await uow.commit()
         return created
 
     async def _existing_keys(self, session: DbSession, plan_id: str) -> ConcurrentStableDict[tuple[int, int], bool]:
@@ -661,6 +662,7 @@ class DbMigrationLedger(MigrationLedger):
                 delete(MsgPartitionMigration).where(MsgPartitionMigration.plan_id == plan_id)
             )
             await session.flush()
+            await uow.commit()
         return int(cast("CursorResult[object]", result).rowcount or 0)
 
     async def _cas(
@@ -690,6 +692,7 @@ class DbMigrationLedger(MigrationLedger):
             session = cast("DbSession", uow.session)
             result = await session.execute(statement)
             await session.flush()
+            await uow.commit()
         updated = int(cast("CursorResult[object]", result).rowcount or 0) > 0
         if not updated:
             _LOGGER.warning("msg_partition_migration_cas_miss", item_id=item_id, expected=list(expected))

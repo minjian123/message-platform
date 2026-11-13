@@ -197,3 +197,40 @@ async def test_db_ledger_empty_create_returns_zero(db_session: AsyncSession) -> 
 
     ledger = DbMigrationLedger(uow_factory=_uow)
     assert await ledger.create(ConcurrentStableList()) == 0
+
+
+async def test_db_ledger_write_paths_commit(db_session: AsyncSession) -> None:
+    """平台库台账：建 / 改 / 删三条写路径都必须提交。
+
+    提交是跨进程可见的前提——CLI 每次 `plan` / `apply` 是独立进程，只 `flush` 不提交会在
+    会话关闭时回滚，`apply` 读不到计划（真机复跑暴露的缺陷）。
+    """
+    committed = 0
+
+    class _SpyUow(DbUnitOfWork):
+        """统计提交次数的会话工作单元。"""
+
+        async def commit(self) -> None:
+            """记录一次提交后交给真实会话。"""
+            nonlocal committed
+            committed += 1
+            await super().commit()
+
+    session = db_session
+
+    @asynccontextmanager
+    async def _uow() -> AsyncGenerator[UnitOfWork]:
+        yield _SpyUow(session)
+
+    ledger = DbMigrationLedger(uow_factory=_uow)
+    assert await ledger.create(ConcurrentStableList([_item()])) == 1
+    assert committed == 1
+
+    from datetime import UTC, datetime
+
+    row = (await ledger.load(PLAN))[0]
+    assert await ledger.mark_running(item_id=row.id, operator="t", reason="r", started_at=datetime.now(UTC))
+    assert committed == 2
+
+    assert await ledger.delete_plan(PLAN) == 1
+    assert committed == 3
