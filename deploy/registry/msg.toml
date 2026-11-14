@@ -331,14 +331,14 @@ description = "生产限流（租户 / 主题速率超出配额）；客户端�
 
 # 存储水位拒绝（02-6）：与 350005 限流、350015 延迟区满分立——盘满必须停止发布并介入清理，
 # 退避重试无用；故取 507（Insufficient Storage）而不是 429 / 503。
-# 帧形态按系统层返回（layer=system、retryable=true：清理后即可恢复）。
+# 帧形态按系统层返回（layer=system、retryable=true：只表示清理 / 扩容完成后可恢复，完成前退避不会成功）。
 [[errcodes]]
 code = 350022
 domain = "msg"
 http_status = 507
 message_key = "msg.error.storage_watermark_exceeded"
 severity = "error"
-description = "存储水位拒绝（卷使用率超拒绝阈值，或消息数据卷不可用）；须清理过期段或扩容后重试"
+description = "存储水位拒绝（卷使用率超拒绝阈值，或消息数据卷不可用）；retryable=true 仅表示清理 / 扩容完成后可恢复，完成前退避不会成功，应停止高频发布并告警"
 
 # ---- RPC（任务 04-1 / 04-2 / 04-3-1）----
 # 四个码分工：350023 方法未注册（改参无用，应查对端能力）、350004 预算耗尽（超时=结果未知，
