@@ -71,7 +71,11 @@ def test_export_contains_rpc_contract(tmp_path: Path) -> None:
     rpc = frame["rpc"]
     assert rpc["frame_type"] == 48
     assert rpc["request_required"] == ["request_id"]
-    assert rpc["errors"] == {"method_not_found": 350023, "deadline_exceeded": 350004}
+    assert rpc["errors"] == {
+        "method_not_found": 350023,
+        "deadline_exceeded": 350004,
+        "handler_timeout": 350034,
+    }
     # 04-2：预算段只写算法与字段（不写死每跳毫秒数），并有响应回传字段。
     assert rpc["deadline"] == {
         "header": "deadline_ms",

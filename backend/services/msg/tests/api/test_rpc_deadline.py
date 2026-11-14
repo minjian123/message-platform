@@ -347,7 +347,9 @@ async def test_downstream_stops_at_its_own_budget(db_session: AsyncSession, tena
     _registry(top).register("hop", "relay", relay)
 
     async with AsyncClient(transport=ASGITransport(app=top), base_url=BASE_URL, headers=DEMO_HEADERS) as client:
-        response = await client.post("/rpc/hop/relay", json={"deadline_ms": 300})
+        # 上游预算放宽到 2000ms：CI 慢机上 relay 自身的预检 / 鉴权会吃掉上百毫秒，
+        # 300ms 时下游预算可能已归零、handler 压根不启动（2026-11-14 CI 实测 KeyError: 'started'）。
+        response = await client.post("/rpc/hop/relay", json={"deadline_ms": 2000})
 
     assert response.status_code == 504
     assert response.json()["code"] == 350004
