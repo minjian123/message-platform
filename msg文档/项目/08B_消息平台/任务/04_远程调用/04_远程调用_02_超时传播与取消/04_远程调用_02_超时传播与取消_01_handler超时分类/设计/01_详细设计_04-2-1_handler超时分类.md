@@ -33,7 +33,7 @@
 | 4 | 指标标签 | **新增 `handler_timeout`**（`msg_rpc{outcome}` 五态） | 超时类问题在指标上可分辨 |
 | 5 | 异常转换落点 | **service 层就地转换** | HTTP 与帧两形态同源，避免装配路径分叉（CI 已因跨路径分叉踩过坑） |
 | 6 | `data` 字段 | **与 `350004` 同构 + `source=handler`** | 客户端复用「结果未知」处理，现场多一层归因 |
-| 7 | 用例落点 | **扩 `tests/api/test_rpc_deadline.py`**（已含「自抛不被误报」用例） | 同主题同文件，不新增文件 |
+| 7 | 用例落点 | **独立用例文件** `tests/api/test_rpc_handler_timeout_0421.py` | 原定扩 `test_rpc_deadline.py`，但该文件带模块级 `kiwi_id(2434)`，新用例会被双重标注；按「一条用例一个编号」改为独立文件（2026-11-14 对齐） |
 
 ## 3. 接口与字段 <a id="contract"></a>
 
@@ -91,7 +91,7 @@ rpc/service.py::_execute_with_deadline
 | --- | --- |
 | `msg_rpc{outcome}` | 新增 `handler_timeout`；其余四态不变 |
 | 日志 | `_log_outcome("handler_timeout", ..., code=350034)`，与 `deadline_exceeded` 并列 |
-| 文档 | 06-3 指标清单与 `protocol/contract.py` 的 outcome 闭集同步 |
+| 文档 | 06-3 指标清单只声明标签名（`msg_rpc_calls_total{method,outcome}`）、未枚举取值，无需改动；取值口径见本设计 §5 与 04-2-1 测试记录 |
 
 ## 6. 契约与登记 <a id="registry"></a>
 
@@ -107,7 +107,7 @@ rpc/service.py::_execute_with_deadline
 
 ## 7. 测试设计与验收映射 <a id="tests"></a>
 
-| # | 用例（`services/msg/tests/api/test_rpc_deadline.py`） | 断言 |
+| # | 用例（`services/msg/tests/api/test_rpc_handler_timeout_0421.py`） | 断言 |
 | --- | --- | --- |
 | 1 | 升级 `test_handler_own_timeout_is_not_misreported` | `invoke_rpc` 抛 `MsgRpcHandlerTimeoutError`；`code == 350034`；`data` 四字段齐全且 `source == "handler"`、`outcome == "unknown"` |
 | 2 | 新增端点用例 | `POST /rpc/budget/boom` → 504、`code == 350034`、`data.outcome == "unknown"`、`data.source == "handler"` |
@@ -138,3 +138,4 @@ rpc/service.py::_execute_with_deadline
 | 日期 | 变更 |
 | --- | --- |
 | 2026-11-14 | 立项与定稿：新增 `350034`，business / 不重试；service 层转换；`data` 同构 + `source`；指标五态；用例扩 `test_rpc_deadline.py` |
+| 2026-11-14 | 实施期偏差：用例改独立文件（模块级 `kiwi_id(2434)` 会导致双重标注）；`test_rpc_deadline.py` 的既有断言同步升级为 `MsgRpcHandlerTimeoutError` |
