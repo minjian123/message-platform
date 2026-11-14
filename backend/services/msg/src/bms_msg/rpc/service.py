@@ -44,13 +44,21 @@ from bms_msg.errors import (
     MsgPayloadTooLargeError,
     MsgRateLimitedError,
     MsgRpcDeadlineExceededError,
+    MsgRpcHandlerTimeoutError,
     MsgRpcInProgressError,
     MsgRpcMethodNotFoundError,
 )
 from bms_msg.rpc.idempotency import IdempotencyContext
 from bms_msg.rpc.registry import RpcCall, RpcHandler, RpcRegistry, RpcReply, RpcStreamHandler
 
-__all__ = ["DisconnectProbe", "exhausted_error", "invoke_rpc", "prepare_handler", "prepare_stream_handler"]
+__all__ = [
+    "DisconnectProbe",
+    "exhausted_error",
+    "handler_timeout_error",
+    "invoke_rpc",
+    "prepare_handler",
+    "prepare_stream_handler",
+]
 
 _LOGGER = get_logger("bms_msg.rpc")
 
@@ -110,6 +118,22 @@ def exhausted_error(deadline: Deadline) -> MsgRpcDeadlineExceededError:
     return MsgRpcDeadlineExceededError(
         f"RPC 预算耗尽（deadline_ms={deadline.budget_ms}，已用 {deadline.spent_ms()}）",
         data=_deadline_detail(deadline),
+    )
+
+
+def handler_timeout_error(deadline: Deadline) -> MsgRpcHandlerTimeoutError:
+    """构造 handler 自抛超时异常（04-2-1：与预算耗尽分开归因）。
+
+    Args:
+        deadline: 预算视图（此时通常仍有剩余）。
+
+    Returns:
+        MsgRpcHandlerTimeoutError: 待抛出的 `350034`。
+    """
+    return MsgRpcHandlerTimeoutError(
+        f"RPC handler 超时（下游处理超时，deadline_ms={deadline.budget_ms}，"
+        f"已用 {deadline.spent_ms()}、剩余 {deadline.remaining_ms()}）",
+        data={**_deadline_detail(deadline), "source": "handler"},
     )
 
 
@@ -247,7 +271,7 @@ def _log_outcome(
     """记一条 `msg_rpc` 事件（四态唯一出口，两形态共用）。
 
     Args:
-        outcome: `ok` / `business_error` / `deadline_exceeded` / `cancelled`。
+        outcome: `ok` / `business_error` / `deadline_exceeded` / `handler_timeout` / `cancelled`。
         service: 服务标识。
         method: 方法名。
         request_id: 请求标识（帧形态有；JSON 形态无）。
@@ -308,7 +332,7 @@ async def _run_handler(
 
     Raises:
         MsgRpcDeadlineExceededError: 预算到点（`350004`）。
-        TimeoutError: handler 自己抛的超时（原样上抛，不吞）。
+        MsgRpcHandlerTimeoutError: handler 自抛超时（`350034`；下游处理超时）。
         asyncio.CancelledError: 请求被取消 / 客户端断开（原样上抛，不写响应）。
     """
     task = asyncio.ensure_future(handler(call))
@@ -324,7 +348,9 @@ async def _run_handler(
                     raise asyncio.CancelledError
     except TimeoutError as exc:
         if not timeout.expired():
-            raise
+            # handler 自己抛的超时（调下游超时）：先收尾任务，再转一等错误码（04-2-1）
+            await _cancel_and_wait(task)
+            raise handler_timeout_error(deadline) from exc
         await _cancel_and_wait(task)
         raise exhausted_error(deadline) from exc
     finally:
@@ -417,6 +443,16 @@ async def _invoke_once(
             request_id=request_id,
             deadline=deadline,
             code=int(MsgErrorCode.RPC_DEADLINE_EXCEEDED),
+        )
+        raise
+    except MsgRpcHandlerTimeoutError:
+        _log_outcome(
+            "handler_timeout",
+            service=service,
+            method=method,
+            request_id=request_id,
+            deadline=deadline,
+            code=int(MsgErrorCode.RPC_HANDLER_TIMEOUT),
         )
         raise
     except asyncio.CancelledError:

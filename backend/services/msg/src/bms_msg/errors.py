@@ -249,6 +249,14 @@ class MsgErrorCode(IntEnum):
     应先用 `data.leader` / `data.epoch` 刷新元数据，再改投新 leader；不是「确定未写入」。
     """
 
+    RPC_HANDLER_TIMEOUT = 350034
+    """RPC handler 自抛超时（处理中调下游超时，非本跳预算耗尽）：504 / business / 不重试。
+
+    与 `350004` 分工：`350004` 是本跳预算到点（没时间了、连同 handler 一起被取消）；本码是
+    handler 自己等下游等到超时并抛出（本跳预算通常仍有剩余）。两者对调用方同为「结果未知」，
+    但归因不同——`data.source=handler` 与指标 `outcome=handler_timeout` 据此区分。
+    """
+
 
 class MsgNamespaceInvalidError(MsgError):
     """命名空间非法（350010 / 400）。"""
@@ -417,6 +425,18 @@ class MsgRpcDeadlineExceededError(MsgError):
     """
 
     code_: ClassVar[int] = MsgErrorCode.RPC_DEADLINE_EXCEEDED
+    http_status_: ClassVar[int] = 504
+
+
+class MsgRpcHandlerTimeoutError(MsgError):
+    """RPC handler 自抛超时（350034 / 504）：处理中调下游超时，非本跳预算耗尽。
+
+    `data` 四个字段：`outcome`（固定 `unknown`）、`source`（固定 `handler`）、`used_ms`、
+    `remaining_ms`——调用方既要知道「结果未知」，也要能分清「谁超时了」（04-2-1）。
+    帧形态进 error 帧的 `detail`。
+    """
+
+    code_: ClassVar[int] = MsgErrorCode.RPC_HANDLER_TIMEOUT
     http_status_: ClassVar[int] = 504
 
 

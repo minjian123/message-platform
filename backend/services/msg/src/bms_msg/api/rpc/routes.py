@@ -105,10 +105,12 @@ def _rpc_outcome(code: int) -> str:
         code: 业务错误码。
 
     Returns:
-        str: `deadline_exceeded` / `rate_limited` / `method_not_found` / `business_error`。
+        str: `deadline_exceeded` / `handler_timeout` / `rate_limited` / `method_not_found` / `business_error`。
     """
     if code == int(MsgErrorCode.RPC_DEADLINE_EXCEEDED):
         return "deadline_exceeded"
+    if code == int(MsgErrorCode.RPC_HANDLER_TIMEOUT):
+        return "handler_timeout"
     if code == int(MsgErrorCode.RATE_LIMITED):
         return "rate_limited"
     if code == int(MsgErrorCode.RPC_METHOD_NOT_FOUND):
@@ -119,6 +121,7 @@ def _rpc_outcome(code: int) -> str:
 RPC_ERROR_CODES = ConcurrentStableList(
     [
         int(MsgErrorCode.RPC_DEADLINE_EXCEEDED),
+        int(MsgErrorCode.RPC_HANDLER_TIMEOUT),
         int(MsgErrorCode.RATE_LIMITED),
         int(MsgErrorCode.PAYLOAD_TOO_LARGE),
         int(MsgErrorCode.TENANT_SUSPENDED),

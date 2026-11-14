@@ -30,7 +30,7 @@ from bms_msg.core.config import (
     RPC_DEFAULT_TIMEOUT_MS,
     RPC_RETURN_RESERVE_MS,
 )
-from bms_msg.errors import MsgRpcDeadlineExceededError
+from bms_msg.errors import MsgRpcDeadlineExceededError, MsgRpcHandlerTimeoutError
 from bms_msg.rpc.registry import RpcCall, RpcRegistry, RpcReply
 from bms_msg.rpc.service import invoke_rpc
 from tests_support.frame_app import build_frame_app
@@ -185,14 +185,14 @@ async def test_handler_swallowing_cancel_still_reports_deadline(client: AsyncCli
 
 
 async def test_handler_own_timeout_is_not_misreported(msg_app: FastAPI) -> None:
-    """handler 自己抛 `TimeoutError`（调下游超时）原样上抛，不伪装成预算耗尽。"""
+    """handler 自己抛 `TimeoutError`（调下游超时）不伪装成预算耗尽；04-2-1 起转一等错误码 `350034`。"""
 
     async def boom(call: RpcCall) -> RpcReply:
         raise TimeoutError("downstream slow")
 
     _registry(msg_app).register("budget", "boom", boom)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(MsgRpcHandlerTimeoutError) as excinfo:
         await invoke_rpc(
             registry=_registry(msg_app),
             limiter=msg_app.state.msg_rate_limiter,
@@ -203,6 +203,8 @@ async def test_handler_own_timeout_is_not_misreported(msg_app: FastAPI) -> None:
             headers=ConcurrentStableDict(),
             deadline=Deadline.start(5000),
         )
+
+    assert excinfo.value.code == 350034
 
 
 async def test_exhausted_requests_do_not_consume_quota(msg_app: FastAPI) -> None:

@@ -186,7 +186,7 @@ class TrafficMetrics(BaseFrameworkObject):
 
         Args:
             method: 注册表内的固定方法名（禁止用户输入）。
-            outcome: 结果（`ok` / `business_error` / `deadline_exceeded` / `cancelled` / `error`）。
+            outcome: 结果（`ok` / `business_error` / `deadline_exceeded` / `handler_timeout` / `cancelled` / `error`）。
             duration_ms: 服务端处理耗时（毫秒）。
         """
         self.record_counter("msg_rpc_calls_total", labels=self._labels(("method", method), ("outcome", outcome)))

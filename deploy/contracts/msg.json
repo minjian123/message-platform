@@ -12258,6 +12258,7 @@
         ],
         "x-error-codes": [
           350004,
+          350034,
           350005,
           350006,
           350011,
@@ -12724,6 +12725,7 @@
       },
       "errors": {
         "deadline_exceeded": 350004,
+        "handler_timeout": 350034,
         "method_not_found": 350023
       },
       "frame_type": 48,

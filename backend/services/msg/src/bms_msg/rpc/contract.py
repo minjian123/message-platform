@@ -207,6 +207,7 @@ def rpc_contract() -> ConcurrentStableDict[str, Any]:
                         {
                             "method_not_found": int(MsgErrorCode.RPC_METHOD_NOT_FOUND),
                             "deadline_exceeded": int(MsgErrorCode.RPC_DEADLINE_EXCEEDED),
+                            "handler_timeout": int(MsgErrorCode.RPC_HANDLER_TIMEOUT),
                         }
                     ),
                     "methods": _methods(),

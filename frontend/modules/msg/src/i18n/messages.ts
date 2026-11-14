@@ -295,6 +295,7 @@ const CATALOG: Record<string, readonly [string, string]> = {
   'error.350011': ['租户停用窗口：只读请求放行', 'Tenant suspended: read-only requests allowed'],
   'error.350012': ['租户注销窗口：只读请求放行', 'Tenant being purged: read-only requests allowed'],
   'error.350013': ['消费组不存在', 'Consumer group not found'],
+  'error.350034': ['下游处理超时（结果未知，请按幂等键确认后再决定是否重试）', 'Downstream handler timed out (result unknown)'],
   'error.350016': ['重放任务不存在或不属于当前租户', 'Replay task not found'],
   'error.350017': ['任务当前状态不允许该操作，请刷新后重试', 'Task state does not allow this action'],
   'error.350027': ['无目标主题的授权（该操作被拒绝）', 'Topic authorization denied for this action'],
