@@ -1,0 +1,18 @@
+{
+  "product": "msg",
+  "contractsDir": "deploy/contracts",
+  "outDir": "src",
+  "indexFile": "index.ts",
+  "header": {
+    "title": "产品契约生成类型：{name}",
+    "generator": "frontend/packages/api-types/scripts/generate.mjs",
+    "sourceNote": "产品契约快照",
+    "regenerateCmd": "pnpm run api-types:gen"
+  },
+  "index": {
+    "title": "产品契约生成类型汇总（由 scripts/generate.mjs 生成，勿手改）。",
+    "notes": [],
+    "exportTemplate": "export type * as {name} from './{name}'"
+  },
+  "inputs": ["deploy/contracts/", "frontend/packages/api-types/"]
+}

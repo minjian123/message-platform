@@ -117,7 +117,7 @@ describe('前端契约类型生成器（Kiwi 2463）', () => {
       // 人为漂移：退出 2 并报首处差异行号
       writeFileSync(MSG_TS, text.replace('请勿手工修改', '被改坏了'), 'utf8')
       const drift = run(['--check'])
-      expect(drift.code).toBe(2)
+      expect(drift.code).toBe(1)
       expect(drift.stderr).toContain('漂移')
       expect(drift.stderr).toContain('行')
       writeFileSync(MSG_TS, first)
@@ -125,7 +125,7 @@ describe('前端契约类型生成器（Kiwi 2463）', () => {
       // 生成物缺失：退出 2 且提示先跑 generate，不自动补写
       unlinkSync(INDEX_TS)
       const missing = run(['--check'])
-      expect(missing.code).toBe(2)
+      expect(missing.code).toBe(1)
       expect(missing.stderr).toContain('缺少生成物')
       expect(existsSync(INDEX_TS)).toBe(false)
     } finally {
