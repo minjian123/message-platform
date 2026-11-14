@@ -1340,9 +1340,8 @@ export interface paths {
          * @description 订阅一条分区（帧流形态，`application/x-msg-frame`）。
          *
          *     与 `GET /msg/subscribe` **同一套语义**（权限码 / 预检 / 背压 / 结束条件全同），差别只在承载：
-         *     参数在帧 header、响应是连续帧。帧不可解析 / 类型不符 / 缺必填头 → `200` + 单帧 `error`（协议内失败）；
-         *     预检失败同理（尚未进流，用 error 帧而**不是** JSON，客户端只按帧解析）。
-         *     单连接长驻流超上限仍返回 350021（由连接守卫按帧形态给出）。
+         *     参数在帧 header、响应是连续帧。建立期失败一律 `200` + 单帧 `error`（帧不可解析 / 类型不符 / 缺必填头 /
+         *     预检失败 / **单连接长驻流超限 `350021`**），客户端只按帧解析（03-5-1）。
          */
         post: operations["subscribe_frames_msg_subscribe_post"];
         delete?: never;

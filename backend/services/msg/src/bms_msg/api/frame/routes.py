@@ -114,6 +114,7 @@ from bms_msg.errors import (
     MsgError,
     MsgErrorCode,
     MsgFrameInvalidError,
+    MsgStreamLimitExceededError,
     MsgTenantNotFoundError,
 )
 from bms_msg.schemas.message import ConsumeRequest, MessageItem
@@ -974,20 +975,15 @@ async def subscribe_frames(
     """订阅一条分区（帧流形态，`application/x-msg-frame`）。
 
     与 `GET /msg/subscribe` **同一套语义**（权限码 / 预检 / 背压 / 结束条件全同），差别只在承载：
-    参数在帧 header、响应是连续帧。帧不可解析 / 类型不符 / 缺必填头 → `200` + 单帧 `error`（协议内失败）；
-    预检失败同理（尚未进流，用 error 帧而**不是** JSON，客户端只按帧解析）。
-    单连接长驻流超上限仍返回 350021（由连接守卫按帧形态给出）。
+    参数在帧 header、响应是连续帧。建立期失败一律 `200` + 单帧 `error`（帧不可解析 / 类型不符 / 缺必填头 /
+    预检失败 / **单连接长驻流超限 `350021`**），客户端只按帧解析（03-5-1）。
     """
     body = await request.body()
     try:
         request_id, query = _frame_subscribe_query(body, tenant)
     except BizError as exc:
         mapped = apply_error_mapper(exc)
-        return StreamingResponse(
-            _single_frame(error_frame(code=mapped.code, message=mapped.message or str(mapped))),
-            media_type=FRAME_MEDIA_TYPE,
-            headers=_STREAM_HEADERS,
-        )
+        return _subscribe_error_frame(code=mapped.code, message=mapped.message or str(mapped))
     connection_key = cast("str", request.state.connection_key)
     try:
         await acl.authorize(
@@ -998,12 +994,23 @@ async def subscribe_frames(
         )
     except BizError as exc:
         mapped = apply_error_mapper(exc)
-        return StreamingResponse(
-            _single_frame(error_frame(code=mapped.code, message=mapped.message or str(mapped), request_id=request_id)),
-            media_type=FRAME_MEDIA_TYPE,
-            headers=_STREAM_HEADERS,
+        return _subscribe_error_frame(code=mapped.code, message=mapped.message or str(mapped), request_id=request_id)
+    try:
+        connections.open_stream(connection_key, limit=connection_tuning.max_streams_per_connection)
+    except MsgStreamLimitExceededError as exc:
+        # 名额已满：先给出用量再失败（失败不占名额，`open_stream` 先判后加）
+        record = connections.get(connection_key)
+        detail = (
+            {
+                "max_streams": connection_tuning.max_streams_per_connection,
+                "active_streams": record.streams,
+            }
+            if record is not None
+            else None  # pragma: no cover - 记录被并发清扫（防御分支）
         )
-    connections.open_stream(connection_key, limit=connection_tuning.max_streams_per_connection)
+        return _subscribe_error_frame(
+            code=exc.code, message=exc.message or str(exc), request_id=request_id, detail=detail
+        )
     try:
         topic_id, partition_no = await _preflight(
             request=query,
@@ -1018,11 +1025,7 @@ async def subscribe_frames(
         )
     except MsgError as exc:
         connections.close_stream(connection_key)
-        return StreamingResponse(
-            _single_frame(error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id)),
-            media_type=FRAME_MEDIA_TYPE,
-            headers=_STREAM_HEADERS,
-        )
+        return _subscribe_error_frame(code=exc.code, message=exc.message or str(exc), request_id=request_id)
     except BaseException:
         connections.close_stream(connection_key)
         raise
@@ -1050,6 +1053,41 @@ async def subscribe_frames(
             topic_id=topic_id,
             partition_no=partition_no,
             replication=replication,
+        ),
+        media_type=FRAME_MEDIA_TYPE,
+        headers=_STREAM_HEADERS,
+    )
+
+
+def _subscribe_error_frame(
+    *,
+    code: int,
+    message: str,
+    request_id: str | None = None,
+    detail: object | None = None,
+    retry_after_ms: int | None = None,
+) -> StreamingResponse:
+    """帧订阅的建立期失败统一回单帧 error（03-5-1：客户端只按帧解析，不辨认 JSON）。
+
+    Args:
+        code: 产品码 / 平台码。
+        message: 可读提示。
+        request_id: 请求标识（帧不可解析时为空）。
+        detail: 随附数据（如名额用量）。
+        retry_after_ms: 建议重试间隔（毫秒）。
+
+    Returns:
+        StreamingResponse: 只含一帧 error 的响应。
+    """
+    return StreamingResponse(
+        _single_frame(
+            error_frame(
+                code=code,
+                message=message,
+                request_id=request_id,
+                detail=detail,
+                retry_after_ms=retry_after_ms,
+            )
         ),
         media_type=FRAME_MEDIA_TYPE,
         headers=_STREAM_HEADERS,
