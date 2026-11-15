@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -29,9 +30,12 @@ from bms_msg.audit.trail import LEADER_SWITCH_ACTION
 from bms_msg.broker.election import (
     SWITCH_STATE_IDLE,
     SWITCH_STATE_SWITCHING,
+    WATERMARK_SOURCE_POST_DEMOTE,
+    WATERMARK_SOURCE_PRECHECK,
     InProcessLeaderControlTransport,
     LeaderControlTransport,
     LeaderSwitchError,
+    LeaderSwitchMetrics,
     LeaderSwitchService,
     LeaderSwitchStore,
     SwitchApplyCommand,
@@ -474,6 +478,9 @@ def _service(
     clock: _Clock | None = None,
     fresh_ms: int = 10_000,
     grace_ms: int = 0,
+    demote_timeout_ms: int = 300,
+    demote_attempts: int = 2,
+    metrics: LeaderSwitchMetrics | None = None,
     sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> LeaderSwitchService:
     """构造切换服务（零宽限 + 注入时钟）。
@@ -486,6 +493,9 @@ def _service(
         clock: 时钟。
         fresh_ms: 最后已知 ISR 新鲜窗口。
         grace_ms: 停写宽限（毫秒）。
+        demote_timeout_ms: 降级通知单次预算（毫秒）。
+        demote_attempts: 降级通知尝试次数。
+        metrics: 切主结果计数。
         sleep: 等待函数（缺省零等待）。
 
     Returns:
@@ -498,6 +508,9 @@ def _service(
         audit=sink if sink is not None else _Sink(),
         grace_ms=grace_ms,
         follower_fresh_ms=fresh_ms,
+        demote_timeout_ms=demote_timeout_ms,
+        demote_attempts=demote_attempts,
+        metrics=metrics,
         clock=clock if clock is not None else _Clock(),
         sleep=sleep if sleep is not None else _noop,
     )
@@ -1262,3 +1275,190 @@ async def test_force_watermark_uses_max_last_known_across_replicas() -> None:
     store = _Store(state=_state(replicas=("n1", "n2", "n3", "n4")))
     result = await _service(store=store, control=control).switch_partition(_request(target="n2", force=True))
     assert result.watermark == 4
+
+
+class _DemoteControl(_Control):
+    """降级通知可编排的替身：按脚本成功 / 失败，可在降级后替换旧 leader 快照。"""
+
+    def __init__(
+        self,
+        snapshots: ConcurrentStableDict[str, ReplicationSnapshot | None],
+        *,
+        outcomes: ConcurrentStableFrozenList[bool] | None = None,
+        after_demote: ReplicationSnapshot | None = None,
+        vanish_old_after_demote: bool = False,
+        vanish_target_after_demote: bool = False,
+        delay_ms: float = 0.0,
+    ) -> None:
+        """初始化。
+
+        Args:
+            snapshots: 节点 → 快照。
+            outcomes: 每次尝试的结果脚本（缺省恒成功；越界按成功）。
+            after_demote: 降级确认后旧 leader 的快照（模拟停写前又提交了一批）。
+            vanish_old_after_demote: 降级确认后旧 leader 立即不可达（快照为 None）。
+            vanish_target_after_demote: 降级确认后目标快照不可得。
+            delay_ms: 每次通知的耗时（毫秒；用于触发超时预算）。
+        """
+        super().__init__(snapshots)
+        self.outcomes: ConcurrentStableFrozenList[bool] = (
+            outcomes if outcomes is not None else ConcurrentStableFrozenList[bool]()
+        )
+        self.after_demote = after_demote
+        self.vanish_old_after_demote = vanish_old_after_demote
+        self.vanish_target_after_demote = vanish_target_after_demote
+        self.delay_ms = delay_ms
+        self.attempts = 0
+        self.confirmed = False
+
+    async def snapshot(self, *, node_id: str, topic_id: int, partition_no: int) -> ReplicationSnapshot | None:
+        """降级确认后返回旧 leader 的最终快照。
+
+        Args:
+            node_id: 节点标识。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+
+        Returns:
+            ReplicationSnapshot | None: 快照。
+        """
+        if self.confirmed and node_id == "n1":
+            if self.vanish_old_after_demote:
+                return None
+            if self.after_demote is not None:
+                return self.after_demote
+        if self.confirmed and node_id == "n2" and self.vanish_target_after_demote:
+            return None
+        return await super().snapshot(node_id=node_id, topic_id=topic_id, partition_no=partition_no)
+
+    async def demote(
+        self,
+        *,
+        node_id: str,
+        topic_id: int,
+        partition_no: int,
+        to_leader: str,
+        to_epoch: int,
+    ) -> None:
+        """按脚本成功或失败。
+
+        Args:
+            node_id: 旧 leader。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            to_leader: 新 leader。
+            to_epoch: 新任期。
+
+        Raises:
+            RuntimeError: 脚本指定本次失败。
+        """
+        self.attempts += 1
+        if self.delay_ms > 0:
+            await asyncio.sleep(self.delay_ms / 1000)
+        if self.attempts <= len(self.outcomes) and not self.outcomes[self.attempts - 1]:
+            raise RuntimeError("降级通知失败")
+        self.confirmed = True
+        await super().demote(
+            node_id=node_id,
+            topic_id=topic_id,
+            partition_no=partition_no,
+            to_leader=to_leader,
+            to_epoch=to_epoch,
+        )
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_demote_retries_then_confirms() -> None:
+    """首次通知失败、重发成功：确认停写，水位取出降级后的最终值。"""
+    control = _DemoteControl(
+        _control().snapshots,
+        outcomes=ConcurrentStableFrozenList((False, True)),
+        after_demote=_snapshot(leader="n2", epoch=1, leo=4, hw=3, isr=("n2",), replicas=("n1", "n2")),
+    )
+    result = await _service(store=_Store(state=_state()), control=control).switch_partition(_request(target="n2"))
+    assert control.attempts == 2
+    assert result.demote_confirmed is True
+    assert result.watermark_source == WATERMARK_SOURCE_POST_DEMOTE
+    assert result.watermark == 3
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_demote_unconfirmed_is_recorded_and_audited() -> None:
+    """两次通知都失败：切换继续但标记未确认，指标与审计可查。"""
+    metrics = LeaderSwitchMetrics()
+    sink = _Sink()
+    control = _DemoteControl(_control().snapshots, outcomes=ConcurrentStableFrozenList((False, False)))
+    result = await _service(store=_Store(state=_state()), control=control, metrics=metrics, sink=sink).switch_partition(
+        _request(target="n2")
+    )
+    assert control.attempts == 2
+    assert result.demote_confirmed is False
+    assert result.watermark_source == WATERMARK_SOURCE_PRECHECK
+    assert metrics.snapshot().get("demote_unconfirmed") == 1
+    finished = ConcurrentStableList(call[1] for call in sink.calls if call[1].get("phase") == "finished")
+    assert finished[0]["demote_confirmed"] is False
+    assert finished[0]["watermark_source"] == WATERMARK_SOURCE_PRECHECK
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_watermark_moves_after_demote_confirmed() -> None:
+    """确认停写后重取水位：停写前提交的写入不落在水位外。"""
+    old = _snapshot(leader="n1", epoch=0, leo=5, hw=2, isr=("n1", "n2"), replicas=("n1", "n2"))
+    target = _snapshot(leader="n1", epoch=0, leo=7, hw=6, isr=("n1", "n2"), replicas=("n1", "n2"))
+    after = _snapshot(leader="n2", epoch=1, leo=7, hw=6, isr=("n2",), replicas=("n1", "n2"))
+    control = _DemoteControl(_control(old=old, target=target).snapshots, after_demote=after)
+    result = await _service(store=_Store(state=_state()), control=control).switch_partition(_request(target="n2"))
+    assert result.watermark == 6
+    assert result.truncated_to == 6
+    assert control.applied.to_list()[0].watermark == 6
+    assert control.applied.to_list()[0].truncate is True
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_target_behind_final_watermark_retains_tail() -> None:
+    """目标 LEO 未达最终水位：不按更高水位截断，转保留尾部。"""
+    old = _snapshot(leader="n1", epoch=0, leo=5, hw=2, isr=("n1", "n2"), replicas=("n1", "n2"))
+    target = _snapshot(leader="n1", epoch=0, leo=7, hw=6, isr=("n1", "n2"), replicas=("n1", "n2"))
+    after = _snapshot(leader="n2", epoch=1, leo=9, hw=8, isr=("n2",), replicas=("n1", "n2"))
+    control = _DemoteControl(_control(old=old, target=target).snapshots, after_demote=after)
+    result = await _service(store=_Store(state=_state()), control=control).switch_partition(_request(target="n2"))
+    assert result.watermark == 8
+    assert control.applied.to_list()[0].truncate is False
+    assert control.applied.to_list()[0].watermark == 8
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_demote_timeout_counts_as_unconfirmed() -> None:
+    """通知超出单次预算：算一次失败，两次都超时即未确认。"""
+    control = _DemoteControl(_control().snapshots, delay_ms=50)
+    result = await _service(store=_Store(state=_state()), control=control, demote_timeout_ms=5).switch_partition(
+        _request(target="n2")
+    )
+    assert control.attempts == 2
+    assert result.demote_confirmed is False
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_final_watermark_falls_back_when_old_leader_vanishes() -> None:
+    """确认停写后旧 leader 立即不可达：水位退回预检值，不按未知水位截断。"""
+    control = _DemoteControl(_control().snapshots, vanish_old_after_demote=True)
+    result = await _service(store=_Store(state=_state()), control=control).switch_partition(_request(target="n2"))
+    assert result.demote_confirmed is True
+    assert result.watermark_source == WATERMARK_SOURCE_PRECHECK
+    assert control.applied.to_list()[0].watermark == 2
+
+
+@pytest.mark.kiwi_id(2506)
+async def test_final_watermark_tolerates_missing_target_snapshot() -> None:
+    """确认停写后目标快照不可得：仍按最终水位截断（不做额外保留）。"""
+    old = _snapshot(leader="n1", epoch=0, leo=5, hw=2, isr=("n1", "n2"), replicas=("n1", "n2"))
+    target = _snapshot(leader="n1", epoch=0, leo=7, hw=6, isr=("n1", "n2"), replicas=("n1", "n2"))
+    after = _snapshot(leader="n2", epoch=1, leo=7, hw=6, isr=("n2",), replicas=("n1", "n2"))
+    control = _DemoteControl(
+        _control(old=old, target=target).snapshots,
+        after_demote=after,
+        vanish_target_after_demote=True,
+    )
+    result = await _service(store=_Store(state=_state()), control=control).switch_partition(_request(target="n2"))
+    assert result.watermark == 6
+    assert control.applied.to_list()[0].truncate is True

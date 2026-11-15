@@ -67,6 +67,21 @@ LEADER_SWITCH_RESULT_DEGRADED = "degraded"
 LEADER_SWITCH_RESULT_FAILED = "failed"
 """切主结果：预检 / CAS / 控制通道失败。"""
 
+LEADER_SWITCH_RESULT_DEMOTE_UNCONFIRMED = "demote_unconfirmed"
+"""切主结果：降级通知未确认（旧主未被确认停写，窗口内回执可能落在水位外）。"""
+
+DEMOTE_ATTEMPT_TIMEOUT_MS = 300
+"""降级通知单次尝试的超时预算（毫秒；两次总预算 600ms，短于拓扑刷新周期 1s）。"""
+
+DEMOTE_MAX_ATTEMPTS = 2
+"""降级通知最大尝试次数（首次 + 一次快速重发）。"""
+
+WATERMARK_SOURCE_PRECHECK = "precheck"
+"""水位来源：预检快照（旧主未确认停写，沿用原口径）。"""
+
+WATERMARK_SOURCE_POST_DEMOTE = "post_demote"
+"""水位来源：降级确认后重取（旧主的最终水位）。"""
+
 SWITCH_STATE_IDLE = "idle"
 """切换状态：空闲（可写）。"""
 
@@ -184,6 +199,12 @@ class SwitchResult(BaseValueObject):
     """是否已验证目标在旧 leader 的 ISR（或最后已知 ISR）内。"""
 
     duration_ms: int
+
+    demote_confirmed: bool = True
+    """旧主是否已被确认停写（False = 降级通知两次都失败，窗口内回执可能丢失）。"""
+
+    watermark_source: str = WATERMARK_SOURCE_PRECHECK
+    """水位来源：`precheck`（预检快照）/ `post_demote`（降级确认后重取）。"""
 
 
 @dataclass(frozen=True)
@@ -438,7 +459,7 @@ class LeaderSwitchMetrics(BaseFrameworkObject):
         """记一次切主结果。
 
         Args:
-            result: `truncated` / `retained` / `noop` / `degraded` / `failed`。
+            result: `truncated` / `retained` / `noop` / `degraded` / `failed` / `demote_unconfirmed`。
         """
         self._counts.set(result, self._counts.get(result, 0) + 1)
 
@@ -463,6 +484,8 @@ class LeaderSwitchService(BaseFrameworkObject):
         audit: AuditEmitter,
         grace_ms: int,
         follower_fresh_ms: int,
+        demote_timeout_ms: int = DEMOTE_ATTEMPT_TIMEOUT_MS,
+        demote_attempts: int = DEMOTE_MAX_ATTEMPTS,
         metrics: LeaderSwitchMetrics | None = None,
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
@@ -476,6 +499,8 @@ class LeaderSwitchService(BaseFrameworkObject):
             audit: 审计出口（begin fail-closed；finished fail-open）。
             grace_ms: 停写宽限（毫秒）。
             follower_fresh_ms: 最后已知 ISR 的新鲜窗口（毫秒；通常取 `lag_time_max_ms`）。
+            demote_timeout_ms: 降级通知单次尝试的超时预算（毫秒）。
+            demote_attempts: 降级通知最大尝试次数（首次 + 重发）。
             metrics: 切主结果计数（可选；None 表示不采集）。
             clock: 单调毫秒时钟（用例注入）。
             sleep: 异步等待函数（用例注入零等待）。
@@ -486,6 +511,8 @@ class LeaderSwitchService(BaseFrameworkObject):
         self._audit = audit
         self._grace_ms = int(grace_ms)
         self._follower_fresh_ms = int(follower_fresh_ms)
+        self._demote_timeout_ms = int(demote_timeout_ms)
+        self._demote_attempts = max(int(demote_attempts), 1)
         self._metrics = metrics
         self._clock = clock if clock is not None else _monotonic_ms
         self._sleep = sleep if sleep is not None else asyncio.sleep
@@ -751,21 +778,33 @@ class LeaderSwitchService(BaseFrameworkObject):
         Raises:
             LeaderSwitchError: 控制通道 / phase 2 失败（DB 停在 switching，可重试）。
         """
-        try:
-            await self._control.demote(
-                node_id=from_leader,
-                topic_id=state.topic_id,
-                partition_no=state.partition_no,
-                to_leader=target,
-                to_epoch=to_epoch,
+        demote_confirmed, demote_attempts = await self._notify_demote(
+            node_id=from_leader,
+            topic_id=state.topic_id,
+            partition_no=state.partition_no,
+            to_leader=target,
+            to_epoch=to_epoch,
+        )
+        watermark_source = WATERMARK_SOURCE_PRECHECK
+        if demote_confirmed:
+            watermark, truncate, watermark_source = await self._finalize_watermark(
+                state=state,
+                from_leader=from_leader,
+                target=target,
+                watermark=watermark,
+                truncate=truncate,
             )
-        except Exception as exc:
-            _LOGGER.warning(
-                "msg_leader_switch_demote_failed",
-                topic_id=state.topic_id,
-                partition=state.partition_no,
-                reason=type(exc).__name__,
-            )
+        _LOGGER.info(
+            "msg_leader_switch_demoted",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            from_leader=from_leader,
+            to_leader=target,
+            attempts=demote_attempts,
+            confirmed=demote_confirmed,
+            watermark=watermark,
+            watermark_source=watermark_source,
+        )
         if self._grace_ms > 0:
             await self._sleep(self._grace_ms / MS_PER_SECOND)
         command = SwitchApplyCommand(
@@ -789,7 +828,11 @@ class LeaderSwitchService(BaseFrameworkObject):
         else:
             result_text = SWITCH_RESULT_NOOP
         if self._metrics is not None:
-            self._metrics.record(result_text if isr_verified else LEADER_SWITCH_RESULT_DEGRADED)
+            if not demote_confirmed:
+                # 未确认停写是比「ISR 不可验证」更具体的风险，单独计数，不混进 degraded。
+                self._metrics.record(LEADER_SWITCH_RESULT_DEMOTE_UNCONFIRMED)
+            else:
+                self._metrics.record(result_text if isr_verified else LEADER_SWITCH_RESULT_DEGRADED)
         effective_watermark = watermark if watermark is not None else applied.to_leo
         finished = await self._store.finish_switch(
             topic_id=state.topic_id,
@@ -818,6 +861,8 @@ class LeaderSwitchService(BaseFrameworkObject):
             retained_tail=applied.retained_tail,
             isr_verified=isr_verified,
             duration_ms=duration_ms,
+            demote_confirmed=demote_confirmed,
+            watermark_source=watermark_source,
         )
         _LOGGER.info(
             "msg_leader_switch_finished",
@@ -832,9 +877,102 @@ class LeaderSwitchService(BaseFrameworkObject):
             retained_tail=result.retained_tail,
             duration_ms=result.duration_ms,
             isr_verified=result.isr_verified,
+            demote_confirmed=result.demote_confirmed,
+            watermark_source=result.watermark_source,
         )
         await self._audit_finished(state=state, request=request, result=result, result_text=result_text)
         return result
+
+    async def _notify_demote(
+        self,
+        *,
+        node_id: str,
+        topic_id: int,
+        partition_no: int,
+        to_leader: str,
+        to_epoch: int,
+    ) -> tuple[bool, int]:
+        """通知旧 leader 立即降级（带超时预算的两次尝试）。
+
+        单次尝试超预算或抛错都算失败并继续下一次；全部失败返回未确认，
+        由调用方记为降级并靠租约 / 刷新循环兜底。
+
+        Args:
+            node_id: 旧 leader 节点标识。
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            to_leader: 新 leader。
+            to_epoch: 新任期。
+
+        Returns:
+            tuple[bool, int]: 是否确认停写；实际尝试次数。
+        """
+        attempts = 0
+        for attempt in range(1, self._demote_attempts + 1):
+            attempts = attempt
+            try:
+                async with asyncio.timeout(self._demote_timeout_ms / MS_PER_SECOND):
+                    await self._control.demote(
+                        node_id=node_id,
+                        topic_id=topic_id,
+                        partition_no=partition_no,
+                        to_leader=to_leader,
+                        to_epoch=to_epoch,
+                    )
+            except Exception as exc:
+                _LOGGER.warning(
+                    "msg_leader_switch_demote_failed",
+                    topic_id=topic_id,
+                    partition=partition_no,
+                    node_id=node_id,
+                    attempt=attempt,
+                    reason=type(exc).__name__,
+                )
+                continue
+            return True, attempts
+        return False, attempts
+
+    async def _finalize_watermark(
+        self,
+        *,
+        state: SwitchPartitionState,
+        from_leader: str,
+        target: str,
+        watermark: int | None,
+        truncate: bool,
+    ) -> tuple[int | None, bool, str]:
+        """降级确认后重取旧 leader 的最终水位。
+
+        旧 leader 已确认停写，此刻的 HW 才是最终水位；预检快照到停写之间已提交的
+        写入都在最终水位内，按预检水位截断会切掉它们。目标 LEO 未达最终水位时
+        不得按更高水位截断，转「保留尾部」交恢复流程处理。
+
+        Args:
+            state: 切换前分区状态。
+            from_leader: 旧 leader（水位来源）。
+            target: 新 leader。
+            watermark: 预检水位。
+            truncate: 预检是否截断。
+
+        Returns:
+            tuple: 最终水位；是否截断；水位来源。
+        """
+        if not truncate:
+            return watermark, truncate, WATERMARK_SOURCE_PRECHECK
+        snapshot = await self._control.snapshot(
+            node_id=from_leader, topic_id=state.topic_id, partition_no=state.partition_no
+        )
+        if snapshot is None:
+            return watermark, truncate, WATERMARK_SOURCE_PRECHECK
+        final_hw = snapshot.hw
+        target_snapshot = await self._control.snapshot(
+            node_id=target, topic_id=state.topic_id, partition_no=state.partition_no
+        )
+        target_leo = target_snapshot.leo if target_snapshot is not None else None
+        effective = max(watermark or 0, final_hw)
+        if target_leo is not None and target_leo < effective:
+            return effective, False, WATERMARK_SOURCE_POST_DEMOTE
+        return effective, truncate, WATERMARK_SOURCE_POST_DEMOTE
 
     async def _pick_target(self, *, state: SwitchPartitionState, old_snapshot: ReplicationSnapshot | None) -> str:
         """在 ISR（或最后已知 ISR）内选 LEO 最大者；并列按副本集顺序。
@@ -1020,6 +1158,8 @@ class LeaderSwitchService(BaseFrameworkObject):
                         "truncated_to": result.truncated_to,
                         "retained_tail": result.retained_tail,
                         "isr_verified": result.isr_verified,
+                        "demote_confirmed": result.demote_confirmed,
+                        "watermark_source": result.watermark_source,
                         "duration_ms": result.duration_ms,
                         "operator": request.operator,
                         "reason": request.reason,
