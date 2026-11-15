@@ -123,6 +123,7 @@ async def list_partitions(
             committed=view.committed,
             lag=view.lag,
             owner=view.owner,
+            resync_state=view.resync_state,
         )
         for view in detail.items
     )

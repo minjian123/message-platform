@@ -4538,6 +4538,13 @@ export interface components {
              * @description 分区号（0 起）
              */
             partition: number;
+            /**
+             * Resync State
+             * @description 全量重建状态（五值闭集；复制关闭时恒为正常）
+             * @default in_sync
+             * @enum {string}
+             */
+            resync_state: "in_sync" | "diverged" | "resyncing" | "catching_up" | "blocked";
         };
         /**
          * MessageItem

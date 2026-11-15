@@ -50,6 +50,7 @@ __all__ = [
     "OFFSET_PURGE_ACTION",
     "OFFSET_REF_TYPE",
     "OFFSET_RESET_ACTION",
+    "PARTITION_RESYNC_ACTION",
     "QUOTA_UPDATE_ACTION",
     "REBALANCE_ACTION",
     "REPLAY_ACTION",
@@ -154,6 +155,9 @@ LEADER_SWITCH_ACTION = "msg:partition.failover"
 REBALANCE_ACTION = "msg:partition.rebalance"
 """分区副本重平衡 / 迁移（配置变更 / 敏感操作，强审计；02-8）。"""
 
+PARTITION_RESYNC_ACTION = "msg:partition.resync"
+"""分区全量重建（敏感操作，普通审计；02-11-1：写失败只告警，不阻断重建）。"""
+
 ACCESS_AUDIT_CLASS = "access"
 """访问异常类别键（非基座缺省类别，由 msg 自定义）。"""
 
@@ -191,6 +195,7 @@ ACTION_CLASSES: ConcurrentStableDict[str, AuditClass] = ConcurrentStableDict(
         MESSAGE_DELETE_ACTION: AuditClass(AUDIT_CLASS_RECORD_OPERATION, strong=True, record_level=True, label="删消息"),
         LEADER_SWITCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区切主"),
         REBALANCE_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=True, label="分区重平衡"),
+        PARTITION_RESYNC_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="分区重建"),
         ACCESS_DENIED_ACTION: AuditClass(ACCESS_AUDIT_CLASS, strong=False, label="访问异常"),
         MESSAGE_SEARCH_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="消息检索"),
         DLQ_DETAIL_ACTION: AuditClass(AUDIT_CLASS_SENSITIVE, strong=False, label="死信详情"),

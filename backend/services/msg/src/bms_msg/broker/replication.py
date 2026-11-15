@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from bms_core.core.concurrent import (
     ConcurrentStableDict,
@@ -39,6 +40,7 @@ from bms_core.core.logging import get_logger
 from bms_core.core.objects import BaseFrameworkObject, BaseValueObject
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
 
+from bms_msg.audit.trail import PARTITION_RESYNC_ACTION, AuditEmitter, emit_sensitive
 from bms_msg.broker.log import MessageHeaderView, MessageStore, SegmentMeta, StoredMessage
 from bms_msg.broker.waiter import DeliveryWaiter
 from bms_msg.core.config import (
@@ -113,6 +115,7 @@ __all__ = [
     "ReplicationMetricsSnapshot",
     "ReplicationSnapshot",
     "ReplicationView",
+    "ResyncState",
     "StaleLeaderError",
     "SwitchApplyCommand",
     "SwitchApplyResult",
@@ -125,20 +128,26 @@ _FAILURE_LOG_WINDOW_MS = 60_000
 REPLICATION_RESYNC_MAX_FAILURES = 5
 """全量重同步连续失败上限（达到即转 `blocked`，停止自动重试，只告警一次）。"""
 
-RESYNC_STATE_IN_SYNC = "in_sync"
+ResyncState = Literal["in_sync", "diverged", "resyncing", "catching_up", "blocked"]
+"""全量重建状态闭集（02-11-1；契约里同集声明，前端据此生成联合类型）。"""
+
+RESYNC_STATE_IN_SYNC: ResyncState = "in_sync"
 """重同步状态：正常（无需重建）。"""
 
-RESYNC_STATE_DIVERGED = "diverged"
+RESYNC_STATE_DIVERGED: ResyncState = "diverged"
 """重同步状态：已发现落后于 leader 起点，等退避窗口。"""
 
-RESYNC_STATE_RESYNCING = "resyncing"
+RESYNC_STATE_RESYNCING: ResyncState = "resyncing"
 """重同步状态：正在重置本地存储（此期间读一律拒绝，避免半初始化视图）。"""
 
-RESYNC_STATE_CATCHING_UP = "catching_up"
+RESYNC_STATE_CATCHING_UP: ResyncState = "catching_up"
 """重同步状态：重置完成、正在追赶。"""
 
-RESYNC_STATE_BLOCKED = "blocked"
+RESYNC_STATE_BLOCKED: ResyncState = "blocked"
 """重同步状态：连续失败达上限，交人工。"""
+
+_RESYNC_AUDIT_PATH = "/internal/msg/partition/resync"
+"""重建动作的审计路径（不是 HTTP 端点，只用于审计定位；02-11-1）。"""
 """拉取失败日志的抑制窗口（毫秒）：同一分区 60s 内只记一条。"""
 
 _REFRESH_LOAD_TIMEOUT_SEC = 2.0
@@ -402,6 +411,29 @@ class PartitionTopology(BaseValueObject):
     switch_state: str = SWITCH_STATE_IDLE
     """切换状态（`idle` / `switching`；02-5）。"""
 
+    tenant_id: int = 0
+    """主题所属租户主键（02-11-1；0 = 未知，重建审计不写）。"""
+
+    namespace: str = ""
+    """命名空间（02-11-1；重建审计作用域第二级）。"""
+
+    topic: str = ""
+    """主题名（02-11-1；重建审计作用域第三级）。"""
+
+
+def _topology_identity(topology: PartitionTopology | None) -> tuple[int, str, str]:
+    """取拓扑里的主题身份（租户主键 / 命名空间 / 主题名）。
+
+    Args:
+        topology: 分区拓扑（None = 配置兜底）。
+
+    Returns:
+        tuple[int, str, str]: 三元组；拓扑缺失时全为默认值（租户 0 表示未知，审计不写）。
+    """
+    if topology is None:
+        return 0, "", ""
+    return int(topology.tenant_id), str(topology.namespace), str(topology.topic)
+
 
 @dataclass(frozen=True)
 class PartitionAssignment(BaseValueObject):
@@ -503,6 +535,9 @@ class ReplicationSnapshot(BaseValueObject):
 
     writable: bool = False
     """本节点当前是否可写（租约内 + idle + 本节点为 leader；02-5）。"""
+
+    resync_state: ResyncState = RESYNC_STATE_IN_SYNC
+    """全量重建状态（02-11-1；五值闭集，只作观测、不参与任何判定）。"""
 
     last_known_hw: int = 0
     """最后已知的 leader HW（follower 取最近一次拉取结果；02-5 旧 leader 不可达时用于验证）。"""
@@ -836,6 +871,9 @@ class PartitionReplication:
         local_leo: int,
         hw: int,
         switch_state: str = SWITCH_STATE_IDLE,
+        tenant_id: int = 0,
+        namespace: str = "",
+        topic: str = "",
         last_known_hw: int = 0,
         last_known_isr: ConcurrentStableFrozenList[str] | None = None,
         leadership_confirmed_at: float = 0.0,
@@ -854,6 +892,9 @@ class PartitionReplication:
             local_leo: 本节点已落盘末端。
             hw: 初始高水位。
             switch_state: 已观察到的切换状态（02-5）。
+            tenant_id: 主题所属租户主键（02-11-1；0 = 未知，重建审计不写）。
+            namespace: 命名空间（02-11-1）。
+            topic: 主题名（02-11-1）。
             last_known_hw: 最后已知 leader HW（02-5）。
             last_known_isr: 最后已知 leader ISR（02-5）。
             leadership_confirmed_at: 最近一次确认 leader 身份的单调毫秒（02-5 租约起点）。
@@ -875,9 +916,13 @@ class PartitionReplication:
         self.last_reported_leader_hw = hw
         self.last_reported_leader_leo = 0
         self.switch_state = switch_state
-        self.resync_state = RESYNC_STATE_IN_SYNC
+        self.tenant_id = int(tenant_id)
+        self.namespace = namespace
+        self.topic = topic
+        self.resync_state: ResyncState = RESYNC_STATE_IN_SYNC
         self.resync_failures = 0
         self.resync_due_at = 0.0
+        self.resync_last_reason = ""
         self.last_known_hw = int(last_known_hw)
         self.last_known_isr: ConcurrentStableSet[str] = ConcurrentStableSet(
             last_known_isr if last_known_isr is not None else ()
@@ -1005,6 +1050,7 @@ class ReplicationCoordinator(ReplicationView):
         waiter: DeliveryWaiter | None = None,
         metrics: ReplicationMetrics | None = None,
         clock: Callable[[], float] | None = None,
+        audit: AuditEmitter | None = None,
     ) -> None:
         """初始化（不挂载分区、不启动后台任务）。
 
@@ -1018,6 +1064,7 @@ class ReplicationCoordinator(ReplicationView):
             waiter: 分区唤醒器（HW 推进时唤醒长轮询）。
             metrics: 复制指标采集点。
             clock: 单调毫秒时钟（用例注入以确定性驱动 ISR 判据）。
+            audit: 审计出口（02-11-1；None = 不写审计，用例与进程内复用不必装配）。
         """
         self._config = config
         self._store = store
@@ -1028,6 +1075,7 @@ class ReplicationCoordinator(ReplicationView):
         self._waiter = waiter
         self._metrics = metrics if metrics is not None else ReplicationMetrics()
         self._clock = clock if clock is not None else _monotonic_ms
+        self._audit = audit
         self._partitions: ConcurrentStableDict[ReplicaKey, PartitionReplication] = ConcurrentStableDict()
         self._attach_lock = asyncio.Lock()
         self._tasks: ConcurrentStableList[asyncio.Task[None]] = ConcurrentStableList()
@@ -1157,6 +1205,7 @@ class ReplicationCoordinator(ReplicationView):
         epoch = topology.epoch if topology is not None else 0
         partition_min = topology.min_insync_replicas if topology is not None else 0
         switch_state = topology.switch_state if topology is not None else SWITCH_STATE_IDLE
+        identity = _topology_identity(topology)
         if not self._config.enabled:
             chosen: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList((self._config.node_id,))
             role = ReplicaRole.DISABLED
@@ -1185,6 +1234,9 @@ class ReplicationCoordinator(ReplicationView):
             local_leo=leo,
             hw=hw,
             switch_state=switch_state,
+            tenant_id=identity[0],
+            namespace=identity[1],
+            topic=identity[2],
             leadership_confirmed_at=self._clock(),
             hosted=hosted,
         )
@@ -1462,6 +1514,7 @@ class ReplicationCoordinator(ReplicationView):
             epoch=state.epoch,
             leo=state.local_leo,
             hw=state.hw,
+            resync_state=state.resync_state,
             isr=state.isr_snapshot(),
             replicas=state.replicas,
             switch_state=state.switch_state,
@@ -1797,6 +1850,17 @@ class ReplicationCoordinator(ReplicationView):
                 failures=state.resync_failures,
                 detail="全量重同步连续失败达上限，转人工处理",
             )
+            await self._audit_resync(
+                state,
+                phase="blocked",
+                leader_start=leader_start,
+                params=ConcurrentStableDict(
+                    {
+                        "failures": state.resync_failures,
+                        "last_reason": state.resync_last_reason,
+                    }
+                ),
+            )
             return True
         discarded = max(state.local_leo - leader_start, 0)
         state.resync_state = RESYNC_STATE_RESYNCING
@@ -1805,6 +1869,7 @@ class ReplicationCoordinator(ReplicationView):
             await self._store.reset_to(topic_id=state.topic_id, partition_no=state.partition_no, offset=leader_start)
         except Exception as exc:
             state.resync_failures += 1
+            state.resync_last_reason = type(exc).__name__
             base = float(self._config.fetch_interval_ms)
             idle = float(self._config.idle_fetch_interval_ms)
             delay = min(base * (2 ** (state.resync_failures - 1)), max(idle * 2, base))
@@ -1837,10 +1902,70 @@ class ReplicationCoordinator(ReplicationView):
             discarded_records=discarded,
             elapsed_ms=int(self._clock() - started),
         )
+        await self._audit_resync(
+            state,
+            phase="succeeded",
+            leader_start=leader_start,
+            params=ConcurrentStableDict(
+                {
+                    "leader": state.leader,
+                    "discarded_records": discarded,
+                    "elapsed_ms": int(self._clock() - started),
+                }
+            ),
+        )
         if self._waiter is not None:
             self._waiter.notify((state.topic_id, state.partition_no))
         self._update_metrics(state)
         return True
+
+    async def _audit_resync(
+        self,
+        state: PartitionReplication,
+        *,
+        phase: str,
+        leader_start: int,
+        params: ConcurrentStableDict[str, object],
+    ) -> None:
+        """写一条分区重建审计（02-11-1；普通审计，写失败只告警，**不阻断重建**）。
+
+        Args:
+            state: 分区运行态（提供租户与主题身份）。
+            phase: 结果标签（`succeeded` / `blocked`）。
+            leader_start: leader 的日志起点。
+            params: 结果相关参数（与本方法公共参数合并）。
+        """
+        if self._audit is None:
+            return
+        if state.tenant_id <= 0 or not state.namespace or not state.topic:
+            # 拓扑行缺失（配置兜底）时拿不到租户：宁可不留痕，也不写零租户伪审计。
+            _LOGGER.warning(
+                "msg_replica_resync_audit_skipped",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                reason="missing_tenant_context",
+            )
+            return
+        payload: ConcurrentStableDict[str, object] = ConcurrentStableDict(
+            {
+                "phase": phase,
+                "topic_id": str(state.topic_id),
+                "partition": state.partition_no,
+                "leader_start": leader_start,
+            }
+        )
+        for key, value in params.items():
+            payload.set(key, value)
+        await emit_sensitive(
+            self._audit,
+            action=PARTITION_RESYNC_ACTION,
+            tenant_id=state.tenant_id,
+            params=payload,
+            method="POST",
+            path=_RESYNC_AUDIT_PATH,
+            module_key=state.namespace,
+            resource_key=state.topic,
+        )
 
     async def _truncate_diverged_tail(self, state: PartitionReplication) -> None:
         """拉取前按最后已知 leader LEO 截断本地发散尾部（旧 leader 降级后的多余记录）。
@@ -2050,6 +2175,7 @@ class ReplicationCoordinator(ReplicationView):
         elif topology.switch_state == SWITCH_STATE_IDLE:
             state.switch_observed_at = None
         state.switch_state = topology.switch_state
+        state.tenant_id, state.namespace, state.topic = _topology_identity(topology)
         if topology.epoch > state.epoch:
             state.epoch = topology.epoch
         # 02-8-3：副本集变更先收敛（卸载 / 非法分配时本轮到此为止，避免把脏 leader 应用下去）。

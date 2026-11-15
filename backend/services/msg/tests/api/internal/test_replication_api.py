@@ -288,3 +288,11 @@ async def test_demote_failure_and_apply_failure(internal_app: FastAPI) -> None:
             },
         )
         assert failed.status_code == 503
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_snapshot_exposes_resync_state(client: httpx.AsyncClient) -> None:
+    """内部快照响应带重建状态（闭集之一），老客户端缺字段时按正常处理。"""
+    snapshot = await client.get("/internal/replication/partitions/9/0/snapshot")
+    assert snapshot.status_code == 200
+    assert snapshot.json()["resync_state"] in {"in_sync", "diverged", "resyncing", "catching_up", "blocked"}

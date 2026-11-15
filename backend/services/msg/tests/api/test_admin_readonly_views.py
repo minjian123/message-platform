@@ -664,3 +664,13 @@ def test_stored_message_header_view_never_carries_payload() -> None:
     assert not hasattr(view, "payload")
     assert view.payload_len == len(b"secret")
     assert len(view.payload_sha256) == 64
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_partitions_expose_resync_state(client: AsyncClient) -> None:
+    """分区列表带重建状态：复制关闭时恒为正常，且取值落在五值闭集内。"""
+    await _create_topic(client)
+    response = await _partitions(client)
+    assert _body(response)["code"] == 0
+    values = {item["resync_state"] for item in _items(response)}
+    assert values == {"in_sync"}

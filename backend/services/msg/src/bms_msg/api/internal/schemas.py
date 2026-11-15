@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.payload import COMPRESSION_NONE, DEFAULT_CONTENT_TYPE
@@ -187,6 +187,9 @@ class SnapshotResponse(BaseModel):
     )
     last_known_at: float = Field(default=0.0, description="最后已知采集时刻（单调毫秒）")
     start_offset: int = Field(default=0, description="日志可读起点（迁移预检）")
+    resync_state: Literal["in_sync", "diverged", "resyncing", "catching_up", "blocked"] = Field(
+        default="in_sync", description="全量重建状态（五值闭集；只作观测，不参与判定）"
+    )
 
 
 class DemoteRequest(BaseModel):

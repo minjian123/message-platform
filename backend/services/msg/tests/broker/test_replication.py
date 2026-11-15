@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -25,7 +26,9 @@ from bms_core.core.concurrent import (
     ConcurrentStableList,
 )
 from bms_core.db.tenant import TenantContext
+from bms_core.events.base import EventEnvelope
 
+from bms_msg.audit.trail import PARTITION_RESYNC_ACTION
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replication import (
@@ -149,13 +152,48 @@ def _config(
     )
 
 
+class _Audit:
+    """审计出口替身（记录事件；可切换为写入失败）。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.events: ConcurrentStableList[EventEnvelope] = ConcurrentStableList()
+        self.fail = fail
+
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
+        """记录一条审计事件。
+
+        Args:
+            event: 事件信封。
+            required: 是否强审计（本替身不区分）。
+
+        Returns:
+            bool: 恒 True。
+
+        Raises:
+            RuntimeError: 构造时指定了写入失败。
+        """
+        del required
+        if self.fail:
+            raise RuntimeError("审计写入失败")
+        self.events.add(event)
+        return True
+
+
 class _Topology:
     """固定拓扑加载器（用例：显式副本集，避免依赖轮转推导）。"""
 
-    def __init__(self, *, nodes: tuple[str, ...], min_insync: int, epoch: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        nodes: tuple[str, ...],
+        min_insync: int,
+        epoch: int = 0,
+        identity: tuple[int, str, str] = (0, "", ""),
+    ) -> None:
         self.nodes = nodes
         self.min_insync = min_insync
         self.epoch = epoch
+        self.identity = identity
 
     async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology:
         """返回固定拓扑。
@@ -167,10 +205,14 @@ class _Topology:
         Returns:
             PartitionTopology: 固定副本集。
         """
+        tenant_id, namespace, topic = self.identity
         return PartitionTopology(
             replicas=ConcurrentStableFrozenList(self.nodes),
             min_insync_replicas=self.min_insync,
             epoch=self.epoch,
+            tenant_id=tenant_id,
+            namespace=namespace,
+            topic=topic,
         )
 
 
@@ -188,6 +230,8 @@ class _Cluster:
         commit_timeout_ms: int = 100,
         clock: _Clock | None = None,
         follower_store: InMemoryMessageStore | None = None,
+        identity: tuple[int, str, str] = (0, "", ""),
+        follower_audit: _Audit | None = None,
     ) -> None:
         self.clock = clock if clock is not None else _Clock()
         self.transport = InProcessReplicaTransport()
@@ -204,7 +248,7 @@ class _Cluster:
             lag_records=lag_records,
             commit_timeout_ms=commit_timeout_ms,
         )
-        topology = _Topology(nodes=nodes, min_insync=min_insync)
+        topology = _Topology(nodes=nodes, min_insync=min_insync, identity=identity)
         self.leader = ReplicationCoordinator(
             config=base,
             store=self.leader_store,
@@ -223,6 +267,7 @@ class _Cluster:
             metrics=self.follower_metrics,
             waiter=self.waiter,
             clock=self.clock,
+            audit=follower_audit,
         )
         self.transport.register(nodes[0], self.leader)
         self.transport.register(nodes[1], self.follower)
@@ -1355,3 +1400,135 @@ async def test_visible_limit_is_zero_while_resyncing() -> None:
     assert await cluster.follower.visible_limit(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 1
     state.resync_state = RESYNC_STATE_RESYNCING
     assert await cluster.follower.visible_limit(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+
+
+def _resync_audits(audit: _Audit) -> ConcurrentStableList[ConcurrentStableDict[str, object]]:
+    """取出重建审计的参数集合（按写入顺序）。
+
+    Args:
+        audit: 审计出口替身。
+
+    Returns:
+        ConcurrentStableList[ConcurrentStableDict[str, object]]: 每条事件的参数。
+    """
+    payloads: ConcurrentStableList[ConcurrentStableDict[str, object]] = ConcurrentStableList()
+    for event in audit.events:
+        assert event.payload["action"] == PARTITION_RESYNC_ACTION
+        payloads.add(cast("ConcurrentStableDict[str, object]", json.loads(str(event.payload["params"]))))
+    return payloads
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_resync_success_writes_audit_with_tenant() -> None:
+    """重建成功：一条审计落库，带租户 / 命名空间 / 主题与丢弃条数。"""
+    audit = _Audit()
+    cluster = _Cluster(identity=(1001, "ns-a", "orders"), follower_audit=audit)
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+
+    assert len(audit.events) == 1
+    event = audit.events[0]
+    assert event.tenant_id == "1001"
+    assert event.payload["module_key"] == "ns-a"
+    assert event.payload["resource_key"] == "orders"
+    payloads = _resync_audits(audit)
+    assert payloads[0]["phase"] == "succeeded"
+    assert payloads[0]["leader_start"] == 3
+    assert payloads[0]["discarded_records"] == 0
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_resync_blocked_writes_audit_once() -> None:
+    """转人工：只写一条审计（失败重试不写），带累计失败次数与最后原因。"""
+    audit = _Audit()
+    store = _FailingResetStore()
+    cluster = _Cluster(follower_store=store, identity=(1001, "ns-a", "orders"), follower_audit=audit)
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    for _ in range(REPLICATION_RESYNC_MAX_FAILURES):
+        await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+        cluster.clock.advance(60_000)
+    assert audit.events == ConcurrentStableList()
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+
+    assert state.resync_state == RESYNC_STATE_BLOCKED
+    payloads = _resync_audits(audit)
+    assert len(payloads) == 1
+    assert payloads[0]["phase"] == "blocked"
+    assert payloads[0]["failures"] == REPLICATION_RESYNC_MAX_FAILURES
+    assert payloads[0]["last_reason"] == "RuntimeError"
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_resync_skips_audit_without_tenant() -> None:
+    """拓扑身份缺失（配置兜底）：不写零租户审计，重建照常成功。"""
+    audit = _Audit()
+    cluster = _Cluster(follower_audit=audit)
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+
+    assert len(audit.events) == 0
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.resync_state == RESYNC_STATE_CATCHING_UP
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_resync_audit_failure_does_not_block() -> None:
+    """审计写入失败只告警：重建仍成功、状态仍转追赶中（普通审计不阻断）。"""
+    audit = _Audit(fail=True)
+    cluster = _Cluster(identity=(1001, "ns-a", "orders"), follower_audit=audit)
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.resync_state == RESYNC_STATE_CATCHING_UP
+    assert state.local_leo == 3
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_snapshot_carries_resync_state() -> None:
+    """运行态快照暴露重建状态：重建中 / 追赶中 / 正常三态可读。"""
+    cluster = _Cluster()
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.resync_state == RESYNC_STATE_IN_SYNC
+
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    snapshot = await cluster.follower.snapshot(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert snapshot is not None
+    assert snapshot.resync_state == RESYNC_STATE_CATCHING_UP
+
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    caught_up = await cluster.follower.snapshot(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert caught_up is not None
+    assert caught_up.resync_state == RESYNC_STATE_IN_SYNC
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_resync_without_waiter_skips_notify() -> None:
+    """未装配唤醒器时重建成功不通知（分支回归；审计出口也未装配）。"""
+    topology = _Topology(nodes=("n1", "n2"), min_insync=2, identity=(1001, "ns-a", "orders"))
+    coordinator = ReplicationCoordinator(
+        config=_config(node_id="n2", nodes=("n1", "n2"), factor=2, min_insync=2),
+        store=InMemoryMessageStore(),
+        transport=InProcessReplicaTransport(),
+        topology_loader=cast("ReplicaTopologyLoader", topology),
+        clock=_Clock(),
+    )
+    state = await coordinator.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert await coordinator.resync_if_behind(state, leader_start=3) is True
+    assert state.resync_state == RESYNC_STATE_CATCHING_UP
+    assert state.local_leo == 3

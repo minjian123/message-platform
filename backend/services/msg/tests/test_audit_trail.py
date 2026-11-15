@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 from bms_core.audit.classes import AUDIT_CLASS_RECORD_OPERATION, AUDIT_CLASS_SENSITIVE, audit_class_for
 from bms_core.core.exceptions import InternalError
+from bms_core.db.sync import DbSession
 from bms_core.events.base import EventEnvelope
 
 from bms_msg.audit.trail import (
@@ -19,6 +20,7 @@ from bms_msg.audit.trail import (
     MESSAGE_DELETE_ACTION,
     OFFSET_PURGE_ACTION,
     OFFSET_RESET_ACTION,
+    PARTITION_RESYNC_ACTION,
     QUOTA_UPDATE_ACTION,
     REPLAY_ACTION,
     TOPIC_CREATE_ACTION,
@@ -278,3 +280,71 @@ async def test_emit_access_denied_failure_is_swallowed() -> None:
         )
         is False
     )
+
+
+@pytest.mark.kiwi_id(2509)
+def test_partition_resync_action_is_sensitive_but_not_strong() -> None:
+    """分区重建登记为敏感类、非强审计：写失败只告警，不阻断重建。"""
+    assert PARTITION_RESYNC_ACTION == "msg:partition.resync"
+    audit_class = audit_class_for(PARTITION_RESYNC_ACTION, ACTION_CLASSES)
+    assert audit_class.class_key == AUDIT_CLASS_SENSITIVE
+    assert audit_class.strong is False
+
+
+class _SessionSink:
+    """带同事务写入的审计替身（`emit_in_session` 优先于 `emit`）。"""
+
+    def __init__(self) -> None:
+        self.sessions: list[object] = []
+        self.events: list[EventEnvelope] = []
+        self.direct = 0
+
+    async def emit(self, event: EventEnvelope, *, required: bool = False) -> bool:
+        """自开事务写入（本替身不应被调用）。
+
+        Args:
+            event: 审计事件。
+            required: 强审计开关。
+
+        Returns:
+            bool: 恒 True。
+        """
+        del event, required
+        self.direct += 1
+        return True
+
+    async def emit_in_session(self, session: object, event: EventEnvelope, *, required: bool = False) -> bool:
+        """与业务同事务写入。
+
+        Args:
+            session: 业务会话。
+            event: 审计事件。
+            required: 强审计开关。
+
+        Returns:
+            bool: 恒 True。
+        """
+        del required
+        self.sessions.append(session)
+        self.events.append(event)
+        return True
+
+
+async def test_emit_sensitive_prefers_session_bound_write() -> None:
+    """给出业务会话且出口支持同事务时，走 `emit_in_session`（不另开事务）。"""
+    sink = _SessionSink()
+    session = cast("DbSession", object())
+    assert (
+        await emit_sensitive(
+            sink,
+            action=TOPIC_CREATE_ACTION,
+            tenant_id=7001,
+            params={"namespace": "ns"},
+            method="POST",
+            path="/api/v1/msg/admin/topics",
+            session=session,
+        )
+        is True
+    )
+    assert sink.direct == 0
+    assert sink.sessions == [session]

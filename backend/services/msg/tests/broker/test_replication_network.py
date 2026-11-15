@@ -713,3 +713,43 @@ async def test_fetch_diverged_carries_leader_start() -> None:
     await garbage.aclose()
     assert captured_garbage.value.leader_leo is None
     assert captured_garbage.value.leader_start is None
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_control_snapshot_carries_resync_state() -> None:
+    """控制通道快照透传重建状态：对端给出时原样映射，缺字段时按正常处理（老节点兼容）。"""
+
+    def _body(extra: dict[str, object]) -> dict[str, object]:
+        base: dict[str, object] = {
+            "protocol_version": 1,
+            "leader": "msg-2",
+            "epoch": 2,
+            "leo": 10,
+            "hw": 8,
+            "isr": ["msg-2"],
+            "replicas": ["msg-2", "msg-3"],
+            "switch_state": "idle",
+            "writable": True,
+            "last_known_hw": 8,
+            "last_known_isr": ["msg-2"],
+            "last_known_at": 1.0,
+            "start_offset": 0,
+        }
+        base.update(extra)
+        return base
+
+    async def _read(body: dict[str, object]) -> str:
+        transport = HttpLeaderControlTransport(
+            config=_config(),
+            tokens=ServiceTokenProvider(cast("object", FakeIssuer())),  # type: ignore[arg-type]
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)),
+        )
+        try:
+            snapshot = await transport.snapshot(node_id="msg-2", topic_id=9, partition_no=0)
+        finally:
+            await transport.aclose()
+        assert snapshot is not None
+        return snapshot.resync_state
+
+    assert await _read(_body({"resync_state": "resyncing"})) == "resyncing"
+    assert await _read(_body({})) == "in_sync"

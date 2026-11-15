@@ -4911,6 +4911,19 @@
             "description": "分区号（0 起）",
             "title": "Partition",
             "type": "integer"
+          },
+          "resync_state": {
+            "default": "in_sync",
+            "description": "全量重建状态（五值闭集；复制关闭时恒为正常）",
+            "enum": [
+              "in_sync",
+              "diverged",
+              "resyncing",
+              "catching_up",
+              "blocked"
+            ],
+            "title": "Resync State",
+            "type": "string"
           }
         },
         "required": [

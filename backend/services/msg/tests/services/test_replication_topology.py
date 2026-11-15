@@ -79,6 +79,30 @@ class _Repo:
         return ConcurrentStableList(type(self).rows)
 
 
+class _TopicRow:
+    """主题行替身（只带身份字段）。"""
+
+    def __init__(self, *, tenant_id: int, namespace: str, name: str) -> None:
+        self.tenant_id = tenant_id
+        self.namespace = namespace
+        self.name = name
+
+
+class _TopicRepo:
+    """主题仓储替身（按主键返回固定行，记录调用次数）。"""
+
+    calls = 0
+    row: _TopicRow | None = None
+
+    def __init__(self, session: object) -> None:
+        del session
+
+    async def get_by_id_unscoped(self, topic_id: int) -> _TopicRow | None:
+        del topic_id
+        type(self).calls += 1
+        return type(self).row
+
+
 def _uow_factory() -> UowFactory:
     """构造工作单元工厂替身。
 
@@ -103,7 +127,10 @@ def _patched_repo(monkeypatch: pytest.MonkeyPatch) -> type[_Repo]:
         type[_Repo]: 替身仓储类。
     """
     monkeypatch.setattr(replication_topology, "PartitionRepository", _Repo)
+    monkeypatch.setattr(replication_topology, "TopicRepository", _TopicRepo)
     _Repo.calls = 0
+    _TopicRepo.calls = 0
+    _TopicRepo.row = _TopicRow(tenant_id=1001, namespace="ns-a", name="orders")
     _Repo.rows = ConcurrentStableList(
         (
             _Row(
@@ -130,7 +157,11 @@ async def test_load_returns_topology_and_caches(_patched_repo: type[_Repo]) -> N
     assert topology.epoch == 3
     assert topology.leader == "n2"
     assert topology.switch_state == "switching"
+    assert topology.tenant_id == 1001
+    assert topology.namespace == "ns-a"
+    assert topology.topic == "orders"
     assert _patched_repo.calls == 1
+    assert _TopicRepo.calls == 1
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     assert _patched_repo.calls == 1
 
@@ -143,6 +174,8 @@ async def test_ttl_expiry_and_forget_reload(_patched_repo: type[_Repo]) -> None:
     clock.value = 1_000
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
     assert _patched_repo.calls == 2
+    # 身份与分区行同一条缓存：一起重查，不会出现只刷一边
+    assert _TopicRepo.calls == 2
     await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO, force=True)
     assert _patched_repo.calls == 3
     loader.forget(topic_id=TOPIC_ID)
@@ -170,3 +203,31 @@ async def test_default_clock_is_used(_patched_repo: type[_Repo]) -> None:
     assert await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO) is not None
     assert await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO) is not None
     assert _patched_repo.calls == 1
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_topic_row_missing_keeps_identity_empty(_patched_repo: type[_Repo]) -> None:
+    """主题行取不到（已删 / 清理中）：身份留默认值，复制行为不变（审计据此跳过）。"""
+    _TopicRepo.row = None
+    loader = DbReplicaTopologyLoader(uow_factory=_uow_factory(), ttl_ms=1_000, clock=_Clock())
+    topology = await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert topology is not None
+    assert topology.tenant_id == 0
+    assert topology.namespace == ""
+    assert topology.topic == ""
+
+
+@pytest.mark.kiwi_id(2509)
+async def test_identity_comes_from_same_snapshot(_patched_repo: type[_Repo]) -> None:
+    """缓存命中时身份与分区行同批返回：改仓储行后未过期前都看不到新值。"""
+    clock = _Clock()
+    loader = DbReplicaTopologyLoader(uow_factory=_uow_factory(), ttl_ms=1_000, clock=clock)
+    first = await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert first is not None and first.namespace == "ns-a"
+    _TopicRepo.row = _TopicRow(tenant_id=2002, namespace="ns-b", name="orders-v2")
+    cached = await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert cached is not None
+    assert (cached.tenant_id, cached.namespace, cached.topic) == (1001, "ns-a", "orders")
+    refreshed = await loader.load(topic_id=TOPIC_ID, partition_no=PARTITION_NO, force=True)
+    assert refreshed is not None
+    assert (refreshed.tenant_id, refreshed.namespace, refreshed.topic) == (2002, "ns-b", "orders-v2")

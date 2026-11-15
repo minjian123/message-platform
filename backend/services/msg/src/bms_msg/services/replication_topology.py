@@ -83,7 +83,9 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
         self._uow_factory = uow_factory
         self._ttl_ms = ttl_ms
         self._clock = clock if clock is not None else _monotonic_ms
-        self._rows: ConcurrentStableDict[int, tuple[float, ConcurrentStableList[MsgPartition]]] = ConcurrentStableDict()
+        self._rows: ConcurrentStableDict[
+            int, tuple[float, ConcurrentStableList[MsgPartition], tuple[int, str, str]]
+        ] = ConcurrentStableDict()
 
     async def load(self, *, topic_id: int, partition_no: int, force: bool = False) -> PartitionTopology | None:
         """加载分区拓扑（行缺失返回 None，由协调器走配置兜底）。
@@ -96,7 +98,7 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
         Returns:
             PartitionTopology | None: 拓扑；行不存在返回 None。
         """
-        rows = await self._topic_rows(topic_id=int(topic_id), force=force)
+        rows, identity = await self._topic_snapshot(topic_id=int(topic_id), force=force)
         for row in rows:
             if int(row.partition_no) != int(partition_no):
                 continue
@@ -106,6 +108,9 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
                 epoch=int(row.epoch or 0),
                 leader=str(getattr(row, "leader", "") or ""),
                 switch_state=str(getattr(row, "switch_state", "") or "idle"),
+                tenant_id=identity[0],
+                namespace=identity[1],
+                topic=identity[2],
             )
         return None
 
@@ -155,24 +160,37 @@ class DbReplicaTopologyLoader(ReplicaTopologyLoader, ReplicaMountSource):
             )
         return assignments
 
-    async def _topic_rows(self, *, topic_id: int, force: bool = False) -> ConcurrentStableList[MsgPartition]:
-        """取某主题的分区行（缓存命中且未过期即复用；`force` 绕过缓存）。
+    async def _topic_snapshot(
+        self, *, topic_id: int, force: bool = False
+    ) -> tuple[ConcurrentStableList[MsgPartition], tuple[int, str, str]]:
+        """取某主题的分区行与主题身份（同一次会话、同一条缓存；`force` 绕过缓存）。
+
+        主题身份（租户 / 命名空间 / 名称）随分区行一起取回并一起过期：02-11-1 的重建审计需要它，
+        分开取会出现「分配已变、身份还是旧的」这类撕裂。
 
         Args:
             topic_id: 主题主键。
             force: 是否强制重载（02-5 刷新循环）。
 
         Returns:
-            ConcurrentStableList[MsgPartition]: 分区行（按分区号升序）。
+            tuple[ConcurrentStableList[MsgPartition], tuple[int, str, str]]: 分区行（按分区号升序）与主题身份；
+            主题行取不到时身份为 `(0, "", "")`（审计据此跳过，不写零租户记录）。
         """
         cached = self._rows.get(topic_id)
         now = self._clock()
         if not force and cached is not None and now - cached[0] <= self._ttl_ms:
-            return cached[1]
+            return cached[1], cached[2]
         async with self._uow_factory() as uow:
-            rows = await PartitionRepository(cast("DbSession", uow.session)).list_by_topic(topic_id)
-        self._rows.set(topic_id, (now, rows))
-        return rows
+            session = cast("DbSession", uow.session)
+            rows = await PartitionRepository(session).list_by_topic(topic_id)
+            topic_row = await TopicRepository(session).get_by_id_unscoped(int(topic_id))
+        identity: tuple[int, str, str] = (
+            (int(topic_row.tenant_id), str(topic_row.namespace), str(topic_row.name))
+            if topic_row is not None
+            else (0, "", "")
+        )
+        self._rows.set(topic_id, (now, rows, identity))
+        return rows, identity
 
 
 def _monotonic_ms() -> float:

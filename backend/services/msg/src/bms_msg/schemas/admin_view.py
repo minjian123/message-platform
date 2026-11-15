@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.schemas.base import CONTRACT_COLLECTION, BaseSchema
@@ -39,6 +39,9 @@ class PartitionItem(BaseSchema):
     committed: int | None = Field(description="已提交位点；未指定消费组时为 null")
     lag: int | None = Field(description="积压（leo - committed）；未指定消费组时为 null")
     owner: str | None = Field(description="分区持有者；未指定消费组或组无分配时为 null")
+    resync_state: Literal["in_sync", "diverged", "resyncing", "catching_up", "blocked"] = Field(
+        default="in_sync", description="全量重建状态（五值闭集；复制关闭时恒为正常）"
+    )
 
 
 class PartitionPage(BaseSchema):

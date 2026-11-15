@@ -23,7 +23,7 @@ from bms_msg.broker.delay import DelayRecord, DelayStore
 from bms_msg.broker.group import GroupStore
 from bms_msg.broker.log import MessageHeaderView, MessageStore
 from bms_msg.broker.offset import OffsetStore
-from bms_msg.broker.replication import ReplicationView
+from bms_msg.broker.replication import RESYNC_STATE_IN_SYNC, ReplicationView, ResyncState
 from bms_msg.broker.router import TopicRouter
 from bms_msg.broker.watermark import StorageMetrics
 from bms_msg.core.config import DELAY_QUOTA_PER_TENANT
@@ -69,6 +69,7 @@ class PartitionView(BaseValueObject):
     hw: int | None = None
     isr: ConcurrentStableList[str] = field(default_factory=lambda: ConcurrentStableList[str]())
     epoch: int = 0
+    resync_state: ResyncState = RESYNC_STATE_IN_SYNC
 
 
 @dataclass(frozen=True)
@@ -280,6 +281,7 @@ class PartitionInspector(BaseFrameworkObject):
                 hw=snapshot.hw if snapshot is not None else None,
                 isr=ConcurrentStableList(snapshot.isr) if snapshot is not None else ConcurrentStableList(),
                 epoch=snapshot.epoch if snapshot is not None else epochs.get(number, 0),
+                resync_state=snapshot.resync_state if snapshot is not None else RESYNC_STATE_IN_SYNC,
             )
 
         views = await asyncio.gather(*(_view(number) for number in numbers))

@@ -202,6 +202,7 @@ async def snapshot(topic_id: int, partition_no: int, request: Request, _: Servic
         last_known_isr=ConcurrentStableList(state.last_known_isr),
         last_known_at=state.last_known_at,
         start_offset=state.start_offset,
+        resync_state=state.resync_state,
     )
 
 

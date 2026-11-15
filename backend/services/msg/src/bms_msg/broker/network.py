@@ -699,6 +699,7 @@ class HttpLeaderControlTransport(LeaderControlTransport):
             last_known_isr=ConcurrentStableFrozenList(body.last_known_isr),
             last_known_at=body.last_known_at,
             start_offset=body.start_offset,
+            resync_state=body.resync_state,
         )
 
     async def demote(

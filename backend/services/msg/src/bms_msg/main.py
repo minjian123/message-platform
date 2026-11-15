@@ -350,6 +350,8 @@ class ApplicationFactory(BaseServiceApplicationFactory):
             directory=PartitionDirectoryBinder(app.state.partition_directory),
             waiter=waiter,
             metrics=replication_metrics,
+            # 02-11-1：重建是破坏性动作，审计出口随协调器装配（普通审计，写失败不阻断重建）。
+            audit=sink,
         )
         if isinstance(replication_transport, InProcessReplicaTransport):
             replication_transport.register(replica_config.node_id, replication)
