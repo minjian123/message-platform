@@ -268,6 +268,19 @@ class _FailingMessageStore(MessageStore):
         """
         return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """转调真实实现（全量重同步不在本用例链路，仅满足端口）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端。
+
+        Returns:
+            int: 重置后的 LEO。
+        """
+        return await self._inner.reset_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """转调真实实现（管理面检索不在本用例链路，仅满足端口）。
 

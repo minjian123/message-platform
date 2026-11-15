@@ -154,7 +154,7 @@ async def fetch(payload: FetchRequest, request: Request, _: ServiceIdentity) -> 
     except StaleLeaderError as exc:
         _fail(409, "stale_epoch", detail=str(exc))
     except ReplicationDivergedError as exc:
-        _fail(410, "diverged", detail=str(exc), leader_leo=exc.leader_leo)
+        _fail(410, "diverged", detail=str(exc), leader_leo=exc.leader_leo, leader_start=exc.leader_start)
     except ReplicaUnavailableError as exc:
         _fail(503, exc.reason, detail=str(exc))
     records: ConcurrentStableList[InternalMessage] = ConcurrentStableList(

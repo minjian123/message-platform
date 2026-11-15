@@ -555,14 +555,17 @@ class PartitionMigrationService(BaseFrameworkObject):
             if snapshot is None:
                 return MigrationBlock(reason="target_unreachable", detail=f"目标副本 {node} 不可达", **where)
             if snapshot.leo < leader_snapshot.start_offset:
-                return MigrationBlock(
-                    reason="needs_full_resync",
-                    detail=(
-                        f"目标 {node} LEO={snapshot.leo} 早于 leader 起点 {leader_snapshot.start_offset}"
-                        "（保留期已裁剪，全量重同步不在本任务范围）"
-                    ),
-                    **where,
+                # 02-11：目标落后于 leader 起点不再阻断迁移——目标挂载后会自行做全量重同步
+                # （丢弃本地数据、按该起点重建再追平），迁移在追平后继续；这里只留痕备查。
+                _LOGGER.warning(
+                    "msg_migration_target_needs_resync",
+                    node=node,
+                    topic_id=partition.topic_id,
+                    partition_no=partition.partition_no,
+                    target_leo=snapshot.leo,
+                    leader_start=leader_snapshot.start_offset,
                 )
+                continue
             if snapshot.leo > leader_snapshot.leo:
                 return MigrationBlock(
                     reason="stale_data",

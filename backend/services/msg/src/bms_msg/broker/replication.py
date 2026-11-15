@@ -30,6 +30,7 @@ from enum import StrEnum
 
 from bms_core.core.concurrent import (
     ConcurrentStableDict,
+    ConcurrentStableFrozenDict,
     ConcurrentStableFrozenList,
     ConcurrentStableList,
     ConcurrentStableSet,
@@ -120,6 +121,24 @@ __all__ = [
 _LOGGER = get_logger("bms_msg.replication")
 
 _FAILURE_LOG_WINDOW_MS = 60_000
+
+REPLICATION_RESYNC_MAX_FAILURES = 5
+"""全量重同步连续失败上限（达到即转 `blocked`，停止自动重试，只告警一次）。"""
+
+RESYNC_STATE_IN_SYNC = "in_sync"
+"""重同步状态：正常（无需重建）。"""
+
+RESYNC_STATE_DIVERGED = "diverged"
+"""重同步状态：已发现落后于 leader 起点，等退避窗口。"""
+
+RESYNC_STATE_RESYNCING = "resyncing"
+"""重同步状态：正在重置本地存储（此期间读一律拒绝，避免半初始化视图）。"""
+
+RESYNC_STATE_CATCHING_UP = "catching_up"
+"""重同步状态：重置完成、正在追赶。"""
+
+RESYNC_STATE_BLOCKED = "blocked"
+"""重同步状态：连续失败达上限，交人工。"""
 """拉取失败日志的抑制窗口（毫秒）：同一分区 60s 内只记一条。"""
 
 _REFRESH_LOAD_TIMEOUT_SEC = 2.0
@@ -183,17 +202,23 @@ class StaleLeaderError(ReplicationError):
 
 
 class ReplicationDivergedError(ReplicationError):
-    """副本位点不连续 / 起点不匹配：停止拉取；可修复时按 `leader_leo` 截断本地发散尾部（02-5）。"""
+    """副本位点不连续 / 起点不匹配：停止拉取；可修复时按 `leader_leo` 截断本地发散尾部（02-5）。
 
-    def __init__(self, message: str, *, leader_leo: int | None = None) -> None:
+    `leader_start` 由 leader 侧在「follower 位点早于日志起点」时给出（02-11）：本地 LEO 低于它
+    时必须走全量重建，光截断是修不回来的。
+    """
+
+    def __init__(self, message: str, *, leader_leo: int | None = None, leader_start: int | None = None) -> None:
         """初始化。
 
         Args:
             message: 错误说明。
             leader_leo: 新 leader 的权威末端（可空；给出时调用方可据此截断本地尾部）。
+            leader_start: leader 的日志起点（可空；给出且本地 LEO 更低时触发全量重同步）。
         """
         super().__init__(message)
         self.leader_leo = leader_leo
+        self.leader_start = leader_start
 
 
 @dataclass(frozen=True)
@@ -624,6 +649,11 @@ class ReplicationMetricsSnapshot(BaseValueObject):
     mounted_partitions: int = 0
     """本节点已挂载（且本节点在副本集内）的分区数（02-10）。"""
 
+    resync_total: ConcurrentStableFrozenDict[str, int] = field(
+        default_factory=lambda: ConcurrentStableFrozenDict[str, int]()
+    )
+    """全量重同步计数（02-11；结果 → 次数，闭集）。"""
+
 
 class ReplicationMetrics(BaseFrameworkObject):
     """复制指标采集点（进程内；Prometheus 出口由 06-3 的 Collector 负责）。"""
@@ -638,6 +668,7 @@ class ReplicationMetrics(BaseFrameworkObject):
         self._shrink_total = 0
         self._mounted = 0
         self._rows: ConcurrentStableDict[ReplicaKey, tuple[int, int]] = ConcurrentStableDict()
+        self._resync: ConcurrentStableDict[str, int] = ConcurrentStableDict()
         self._warned = False
 
     @property
@@ -670,6 +701,23 @@ class ReplicationMetrics(BaseFrameworkObject):
     def record_shrink(self) -> None:
         """记一次 ISR 收缩。"""
         self._shrink_total += 1
+
+    def record_resync(self, result: str) -> None:
+        """记一次全量重同步结果（02-11；`result` 闭集 `created` / `succeeded` / `error` / `blocked`）。
+
+        Args:
+            result: 结果标签。
+        """
+        self._resync.set(result, self._resync.get(result, 0) + 1)
+
+    @property
+    def resync_counts(self) -> ConcurrentStableDict[str, int]:
+        """各结果的全量重同步累计次数（插入序）。
+
+        Returns:
+            ConcurrentStableDict[str, int]: 结果 → 次数。
+        """
+        return ConcurrentStableDict(self._resync)
 
     def update(self, *, topic_id: int, partition_no: int, isr_size: int, lag_records: int) -> None:
         """更新一个分区的 ISR 大小与副本延迟。
@@ -722,6 +770,7 @@ class ReplicationMetrics(BaseFrameworkObject):
             shrink_total=self._shrink_total,
             rows=ConcurrentStableFrozenList(rows),
             mounted_partitions=self._mounted,
+            resync_total=ConcurrentStableFrozenDict(self._resync),
         )
 
 
@@ -826,6 +875,9 @@ class PartitionReplication:
         self.last_reported_leader_hw = hw
         self.last_reported_leader_leo = 0
         self.switch_state = switch_state
+        self.resync_state = RESYNC_STATE_IN_SYNC
+        self.resync_failures = 0
+        self.resync_due_at = 0.0
         self.last_known_hw = int(last_known_hw)
         self.last_known_isr: ConcurrentStableSet[str] = ConcurrentStableSet(
             last_known_isr if last_known_isr is not None else ()
@@ -1380,6 +1432,9 @@ class ReplicationCoordinator(ReplicationView):
         if not self._config.enabled:
             return None
         state = await self.attach_partition(topic_id=topic_id, partition_no=partition_no)
+        if state.resync_state == RESYNC_STATE_RESYNCING:
+            # 重建中：本地段正在被删除重建，不给任何可读区间（02-11 可见性契约）
+            return 0
         return min(state.hw, state.local_leo)
 
     async def snapshot(self, *, topic_id: int, partition_no: int) -> ReplicationSnapshot | None:
@@ -1483,7 +1538,8 @@ class ReplicationCoordinator(ReplicationView):
         start = await self._store.start_offset(topic_id=state.topic_id, partition_no=state.partition_no)
         if request.from_offset < start:
             raise ReplicationDivergedError(
-                f"follower 位点早于日志起点：{request.from_offset} < {start}（分区 {state.key}）"
+                f"follower 位点早于日志起点：{request.from_offset} < {start}（分区 {state.key}）",
+                leader_start=start,
             )
         if request.from_offset > state.leader_leo:
             raise ReplicationDivergedError(
@@ -1634,6 +1690,8 @@ class ReplicationCoordinator(ReplicationView):
             try:
                 result = await self._transport.fetch(request)
             except ReplicationDivergedError as exc:
+                if exc.leader_start is not None and await self.resync_if_behind(state, leader_start=exc.leader_start):
+                    return 0
                 if exc.leader_leo is None or not await self._truncate_to_leader(state, leader_leo=exc.leader_leo):
                     raise
                 return 0
@@ -1686,8 +1744,103 @@ class ReplicationCoordinator(ReplicationView):
             state.last_known_hw = result.high_watermark
             state.last_known_isr = ConcurrentStableSet(result.leader_isr)
             state.last_known_at = self._clock()
+            if state.resync_state != RESYNC_STATE_IN_SYNC:
+                state.resync_state = (
+                    RESYNC_STATE_IN_SYNC if state.local_leo >= result.leader_leo else RESYNC_STATE_CATCHING_UP
+                )
+                state.resync_failures = 0
             self._update_metrics(state)
             return len(result.records)
+
+    async def resync_if_behind(self, state: PartitionReplication, *, leader_start: int) -> bool:
+        """本地落后于 leader 起点时按 leader 起点重建分区（02-11 全量重同步）。
+
+        **判定**：本节点是该分区 follower，且本地 LEO 严格小于 leader 起点——此时「截断」修不回来
+        （缺的记录 leader 已经没有），只能丢弃本地数据、从 leader 起点重新拉取。
+
+        **退避**：首次发现立即尝试；失败按 `拉取间隔 × 2^失败次数` 退避，上限两倍空闲拉取间隔；
+        连续失败达 `REPLICATION_RESYNC_MAX_FAILURES` 转 `blocked` 并只告警一次。
+
+        Args:
+            state: 分区运行态。
+            leader_start: leader 的日志起点。
+
+        Returns:
+            bool: True 表示本轮已消化（重建成功 / 退避中 / 已 blocked）；False 表示不适用。
+        """
+        if state.role is not ReplicaRole.FOLLOWER or state.hosted is False:
+            return False
+        if state.local_leo >= leader_start:
+            return False
+        if state.resync_state == RESYNC_STATE_BLOCKED:
+            return True
+        now = self._clock()
+        if now < state.resync_due_at:
+            return True
+        if state.resync_state in (RESYNC_STATE_IN_SYNC, RESYNC_STATE_CATCHING_UP):
+            state.resync_state = RESYNC_STATE_DIVERGED
+            self._metrics.record_resync("created")
+            _LOGGER.warning(
+                "msg_replica_resync_created",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                local_leo=state.local_leo,
+                leader_start=leader_start,
+            )
+        if state.resync_failures >= REPLICATION_RESYNC_MAX_FAILURES:
+            state.resync_state = RESYNC_STATE_BLOCKED
+            self._metrics.record_resync("blocked")
+            _LOGGER.error(
+                "msg_replica_resync_blocked",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                failures=state.resync_failures,
+                detail="全量重同步连续失败达上限，转人工处理",
+            )
+            return True
+        discarded = max(state.local_leo - leader_start, 0)
+        state.resync_state = RESYNC_STATE_RESYNCING
+        started = now
+        try:
+            await self._store.reset_to(topic_id=state.topic_id, partition_no=state.partition_no, offset=leader_start)
+        except Exception as exc:
+            state.resync_failures += 1
+            base = float(self._config.fetch_interval_ms)
+            idle = float(self._config.idle_fetch_interval_ms)
+            delay = min(base * (2 ** (state.resync_failures - 1)), max(idle * 2, base))
+            state.resync_due_at = now + delay
+            state.resync_state = RESYNC_STATE_DIVERGED
+            self._metrics.record_resync("error")
+            _LOGGER.warning(
+                "msg_replica_resync_failed",
+                topic_id=state.topic_id,
+                partition=state.partition_no,
+                reason=type(exc).__name__,
+                failures=state.resync_failures,
+                backoff_ms=int(delay),
+            )
+            return True
+        state.local_leo = leader_start
+        state.leader_leo = 0
+        state.hw = 0
+        state.isr = ConcurrentStableSet((state.leader,))
+        state.resync_failures = 0
+        state.resync_due_at = 0.0
+        state.resync_state = RESYNC_STATE_CATCHING_UP
+        self._metrics.record_resync("succeeded")
+        _LOGGER.info(
+            "msg_replica_resync_succeeded",
+            topic_id=state.topic_id,
+            partition=state.partition_no,
+            leader=state.leader,
+            leader_start=leader_start,
+            discarded_records=discarded,
+            elapsed_ms=int(self._clock() - started),
+        )
+        if self._waiter is not None:
+            self._waiter.notify((state.topic_id, state.partition_no))
+        self._update_metrics(state)
+        return True
 
     async def _truncate_diverged_tail(self, state: PartitionReplication) -> None:
         """拉取前按最后已知 leader LEO 截断本地发散尾部（旧 leader 降级后的多余记录）。
@@ -2554,6 +2707,25 @@ class ReplicatedMessageStore(MessageStore):
             int: 截断后的 LEO。
         """
         return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
+
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把分区重置为「从 `offset` 起的空日志」（02-11 全量重同步；原样委托）。
+
+        **调用约束**：只由协调器在 `resyncing` 状态下调用——本节点非 leader 且判据成立时才允许；
+        委托前不额外加锁，重建的串行由协调器的分区锁保证。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端（= leader 的 `start_offset`）。
+
+        Returns:
+            int: 重置后的 LEO。
+
+        Raises:
+            ParamError: `offset < 0`（10001）。
+        """
+        return await self._inner.reset_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
     async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
         """追加墓碑标记（原样委托；副本通过拉取同一条墓碑同步删除集合）。

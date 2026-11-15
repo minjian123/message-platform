@@ -325,6 +325,28 @@ class MessageStore(BaseFrameworkObject, ABC):
         """
 
     @abstractmethod
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把分区重置为「从 `offset` 起的空日志」（02-11 全量重同步）。
+
+        **与另两个边界原语的分工**：`truncate_before` 只推起点（要求 `offset <= leo`），
+        `truncate_to` 只退末端（要求 `offset >= start`）；本方法把**起点与末端同时**置到
+        `offset`，并删除此前的段与索引——用于副本落后于 leader 起点时按 leader 起点重建。
+
+        调用方须持分区锁，且只能对**非 leader** 分区调用（重建会丢弃本地数据）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端（= leader 的 `start_offset`）。
+
+        Returns:
+            int: 重置后的 LEO（= `offset`）。
+
+        Raises:
+            ParamError: `offset < 0`（10001）。
+        """
+
+    @abstractmethod
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:
         """按记录身份取只读头视图（管理面精确检索入口）。
 
@@ -613,6 +635,28 @@ class InMemoryMessageStore(MessageStore):
         if offset >= leo:
             return leo
         del log[offset - start :]
+        return offset
+
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把分区重置为「从 `offset` 起的空日志」（内存替身）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端。
+
+        Returns:
+            int: 重置后的 LEO。
+
+        Raises:
+            ParamError: `offset < 0`（10001）。
+        """
+        if offset < 0:
+            raise ParamError(f"重置位点非法：{offset}")
+        bucket: PartitionKey = (topic_id, partition_no)
+        self._logs[bucket] = []
+        self._starts[bucket] = offset
+        self._deleted.pop(bucket, None)
         return offset
 
     async def find_by_log_id(self, *, log_id: str) -> MessageHeaderView | None:

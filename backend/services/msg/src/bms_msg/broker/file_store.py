@@ -808,6 +808,53 @@ class _PartitionLog:
         )
         return target
 
+    def reset_to(self, *, offset: int) -> int:
+        """把分区重置为「从 `offset` 起的空日志」（02-11 全量重同步；调用方须持分区锁）。
+
+        删段与索引 → 起点与末端同置 `offset` → 建一个 base=offset 的空段承载起点
+        （起点由首段 base 推导，重启后仍以 `offset` 为起点）→ 回写恢复点。
+
+        Args:
+            offset: 新起点与末端（= leader 的 `start_offset`）。
+
+        Returns:
+            int: 重置后的 LEO。
+
+        Raises:
+            ParamError: `offset < 0`（10001）。
+        """
+        if offset < 0:
+            raise ParamError(f"重置位点非法：{offset}")
+        if (
+            self._start == offset
+            and self._leo == offset
+            and len(self._segments) == 1
+            and self._segments[0].base_offset == offset
+        ):
+            return offset
+        deleted_bytes = 0
+        for segment in self._segments:
+            deleted_bytes += segment.size_bytes
+            self._stamps.pop(segment.base_offset, None)
+            segment.delete()
+        self._segments = []
+        self._start = offset
+        self._leo = offset
+        self._unflushed = 0
+        self._corrupted.clear()
+        self._deleted = ConcurrentStableSet()
+        self._log_index = None
+        self._log_index_path.unlink(missing_ok=True)
+        self._open_segment(base_offset=offset)
+        self.persist_recovery_point()
+        _LOGGER.warning(
+            "msg_partition_reset",
+            partition_path=str(self._directory),
+            start_offset=offset,
+            deleted_bytes=deleted_bytes,
+        )
+        return offset
+
     def truncate_to(self, *, offset: int) -> int:
         """截掉 `offset` 及之后的记录（02-5 切换截断；调用方须持分区锁）。
 
@@ -1663,6 +1710,33 @@ class FileMessageStore(MessageStore):
         self._pending_alignment.pop(key, None)
         for log_id, (owner, part, cached_offset) in list(self._log_ids.items()):
             if owner == int(topic_id) and part == int(partition_no) and cached_offset >= target:
+                self._log_ids.pop(log_id, None)
+        return target
+
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把分区重置为「从 `offset` 起的空日志」（02-11 全量重同步）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端（= leader 的 `start_offset`）。
+
+        Returns:
+            int: 重置后的 LEO。
+
+        Raises:
+            PartitionNotBoundError: 主题目录未登记。
+            ParamError: `offset < 0`（10001）。
+        """
+        self._require_location(topic_id)
+        partition = await self._open(topic_id=topic_id, partition_no=partition_no)
+        async with partition.lock:
+            target = partition.reset_to(offset=offset)
+        key = (int(topic_id), int(partition_no))
+        self._pending_alignment.pop(key, None)
+        # 全量重建删掉了该分区所有记录，`log_id` 缓存不分位点一并清空（否则冷记录会被误判命中）
+        for log_id, (owner, part, _cached_offset) in list(self._log_ids.items()):
+            if owner == int(topic_id) and part == int(partition_no):
                 self._log_ids.pop(log_id, None)
         return target
 

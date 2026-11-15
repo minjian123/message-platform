@@ -259,8 +259,8 @@ async def test_plan_rejects_bad_arguments() -> None:
         await service.plan(nodes=NODES, factor=2, min_insync=3)
 
 
-async def test_preflight_blocks_leader_unreachable_and_resync() -> None:
-    """预检：leader 不可达 / 目标落后起点 / 目标超前 leader 都阻断。"""
+async def test_preflight_blocks_leader_unreachable_and_stale_target() -> None:
+    """预检：leader 不可达 / 目标超前 leader 阻断；目标落后起点不再阻断（02-11 交自动重建）。"""
     topology = FakeTopology(ConcurrentStableList([_partition(replicas=("msg-1",))]))
     control = FakeControl(
         ConcurrentStableDict(
@@ -279,8 +279,10 @@ async def test_preflight_blocks_leader_unreachable_and_resync() -> None:
 
     control.snapshots.set("msg-1", _snapshot(node="msg-1", leo=10, hw=10, start=5))
     control.snapshots.set("msg-2", _snapshot(node="msg-2", leo=1, isr=("msg-1",)))
+    # 目标落后于 leader 起点：02-11 起不再阻断（挂载后自动全量重同步），只留日志
+    control.snapshots.set("msg-3", _snapshot(node="msg-3", leo=10, isr=("msg-1",)))
     resync = await service.plan(nodes=NODES, factor=2, min_insync=1)
-    assert any(block.reason in ("needs_full_resync", "stale_data") for block in resync.blocks)
+    assert "needs_full_resync" not in [block.reason for block in resync.blocks]
 
 
 async def test_apply_expand_succeeds_and_writes_union() -> None:

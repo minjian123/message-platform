@@ -318,6 +318,24 @@ class NotifyingMessageStore(MessageStore):
         """
         return await self._inner.truncate_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
 
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """把分区重置为空日志（02-11；委托后唤醒该分区的等待者）。
+
+        起点前移会让挂起的长轮询所依赖的可见范围失效，必须唤醒重算；
+        与 `truncate_to` 不同——后者只退末端，不改变「有没有新消息」的判定基础。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端。
+
+        Returns:
+            int: 重置后的 LEO。
+        """
+        target = await self._inner.reset_to(topic_id=topic_id, partition_no=partition_no, offset=offset)
+        self._waiter.notify((topic_id, partition_no))
+        return target
+
     async def delete(self, *, topic_id: int, partition_no: int, log_id: str) -> bool:
         """追加墓碑标记（原样委托）。
 

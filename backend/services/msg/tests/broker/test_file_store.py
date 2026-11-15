@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.core.exceptions import ParamError
 
 from bms_msg.broker.file_store import (
     FileMessageStore,
@@ -500,3 +501,31 @@ async def test_close_tenant_skips_unmapped_partition(tmp_path: Path) -> None:
     assert store._partitions
     for partition in store._partitions.values():
         partition.close()
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_reset_to_rebuilds_log_from_offset(tmp_path: Path) -> None:
+    """02-11：重置到指定位点——段与索引全删、起点与 LEO 同置该位点、重启后不变、重复调用幂等。"""
+    store = _store(tmp_path, segment_max_bytes=200)
+    for index in range(4):
+        await _append(store, index=index, payload=b"r" * 150)
+
+    target = 2
+    assert await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=target) == target
+
+    assert await store.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION) == target
+    assert await store.leo(topic_id=TOPIC_ID, partition_no=PARTITION) == target
+    assert list(await store.segments(topic_id=TOPIC_ID, partition_no=PARTITION)) == []
+    fetched = await store.fetch(topic_id=TOPIC_ID, partition_no=PARTITION, from_offset=target, max_messages=5)
+    assert list(fetched) == []
+    empty = _only_log(tmp_path)
+    assert empty.name == f"{target:020d}{LOG_SUFFIX}"
+    assert empty.stat().st_size == 0
+
+    reopened = _store(tmp_path)
+    assert await reopened.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION) == target
+    assert await reopened.leo(topic_id=TOPIC_ID, partition_no=PARTITION) == target
+
+    assert await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=target) == target
+    with pytest.raises(ParamError):
+        await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=-1)

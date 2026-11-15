@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 from bms_core.core.concurrent import ConcurrentStableDict
+from bms_core.core.exceptions import ParamError
 
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
 from bms_msg.core.trace import TraceContext
@@ -106,3 +107,19 @@ async def test_start_offset_is_zero_before_cleanup(message_store: InMemoryMessag
     """未清理时分区的起点为 0（前移入口与段边界见 `test_retention.py`）。"""
     await _append(message_store)
     assert await message_store.start_offset(topic_id=1, partition_no=0) == 0
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_reset_to_drops_records_and_moves_both_bounds(message_store: InMemoryMessageStore) -> None:
+    """02-11：内存实现重置——记录清空、起点与末端同置于指定位点、负值拒绝。"""
+    await _append(message_store, offset_hint="m1")
+    await _append(message_store, offset_hint="m2")
+
+    assert await message_store.reset_to(topic_id=1, partition_no=0, offset=7) == 7
+
+    assert await message_store.start_offset(topic_id=1, partition_no=0) == 7
+    assert await message_store.leo(topic_id=1, partition_no=0) == 7
+    fetched = await message_store.fetch(topic_id=1, partition_no=0, from_offset=7, max_messages=5)
+    assert list(fetched) == []
+    with pytest.raises(ParamError):
+        await message_store.reset_to(topic_id=1, partition_no=0, offset=-1)

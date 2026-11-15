@@ -29,6 +29,11 @@ from bms_core.db.tenant import TenantContext
 from bms_msg.broker.log import InMemoryMessageStore, StoredMessage
 from bms_msg.broker.offset import InMemoryOffsetStore
 from bms_msg.broker.replication import (
+    REPLICATION_RESYNC_MAX_FAILURES,
+    RESYNC_STATE_BLOCKED,
+    RESYNC_STATE_CATCHING_UP,
+    RESYNC_STATE_IN_SYNC,
+    RESYNC_STATE_RESYNCING,
     InProcessReplicaTransport,
     PartitionTopology,
     ReplicaConfig,
@@ -45,7 +50,7 @@ from bms_msg.broker.replication import (
     ReplicaUnavailableError,
     StaleLeaderError,
 )
-from bms_msg.broker.waiter import DeliveryWaiter
+from bms_msg.broker.waiter import DeliveryWaiter, NotifyingMessageStore
 from bms_msg.core.trace import EMPTY_TRACE
 from bms_msg.errors import MsgError, MsgErrorCode, MsgInsufficientReplicasError, MsgNotLeaderError
 
@@ -182,11 +187,12 @@ class _Cluster:
         lag_records: int = 10_000,
         commit_timeout_ms: int = 100,
         clock: _Clock | None = None,
+        follower_store: InMemoryMessageStore | None = None,
     ) -> None:
         self.clock = clock if clock is not None else _Clock()
         self.transport = InProcessReplicaTransport()
         self.leader_store = InMemoryMessageStore()
-        self.follower_store = InMemoryMessageStore()
+        self.follower_store = follower_store if follower_store is not None else InMemoryMessageStore()
         self.waiter = DeliveryWaiter()
         self.metrics = ReplicationMetrics()
         base = _config(
@@ -208,12 +214,14 @@ class _Cluster:
             metrics=self.metrics,
             clock=self.clock,
         )
+        self.follower_metrics = ReplicationMetrics()
         self.follower = ReplicationCoordinator(
             config=replace(base, node_id=nodes[1]),
             store=self.follower_store,
             transport=self.transport,
             topology_loader=cast("ReplicaTopologyLoader", topology),
-            metrics=ReplicationMetrics(),
+            metrics=self.follower_metrics,
+            waiter=self.waiter,
             clock=self.clock,
         )
         self.transport.register(nodes[0], self.leader)
@@ -1224,3 +1232,126 @@ async def test_mounted_partition_keys_is_read_only_snapshot() -> None:
     with pytest.raises(TypeError):
         snapshot.clear()
     assert list(coordinator.mounted_partition_keys()) == [(TOPIC_ID, PARTITION_NO)]
+
+
+class _FailingResetStore(InMemoryMessageStore):
+    """重置必失败的内存存储（02-11：验证重建失败的退避与 blocked）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reset_calls = 0
+
+    async def reset_to(self, *, topic_id: int, partition_no: int, offset: int) -> int:
+        """恒抛错（模拟磁盘只读 / 文件被占用）。
+
+        Args:
+            topic_id: 主题主键。
+            partition_no: 分区号。
+            offset: 新起点与末端。
+
+        Raises:
+            RuntimeError: 恒抛。
+        """
+        del topic_id, partition_no, offset
+        self.reset_calls += 1
+        raise RuntimeError("磁盘只读，无法重建")
+
+
+async def _trim_leader(cluster: _Cluster, *, start: int) -> None:
+    """把 leader 的保留期起点推进到 `start`（模拟裁剪已生效）。
+
+    Args:
+        cluster: 两节点簇。
+        start: 新的日志起点。
+    """
+    await cluster.leader_store.truncate_before(topic_id=TOPIC_ID, partition_no=PARTITION_NO, offset=start)
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_resync_rebuilds_follower_when_behind_leader_start() -> None:
+    """保留期裁剪后 follower 落后于 leader 起点：自动重建到起点，再拉取追平并回 in_sync。"""
+    cluster = _Cluster()
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert state.resync_state == RESYNC_STATE_CATCHING_UP
+    assert state.local_leo == 3
+    assert await cluster.follower_store.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 3
+    assert cluster.follower_metrics.resync_counts.get("created") == 1
+    assert cluster.follower_metrics.resync_counts.get("succeeded") == 1
+    assert await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 2
+    assert state.resync_state == RESYNC_STATE_IN_SYNC
+    assert state.local_leo == 5
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_resync_is_noop_when_not_behind() -> None:
+    """本地 LEO 不低于 leader 起点：不重建（幂等）。"""
+    cluster = _Cluster()
+    await _append(cluster.writer, seq=0)
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    state.local_leo = 5
+    assert await cluster.follower.resync_if_behind(state, leader_start=3) is False
+    assert state.resync_state == RESYNC_STATE_IN_SYNC
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_resync_skips_leader_role() -> None:
+    """本节点是 leader：永不重建（只对 follower 生效）。"""
+    cluster = _Cluster()
+    leader_state = await cluster.leader.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert await cluster.leader.resync_if_behind(leader_state, leader_start=3) is False
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_resync_blocks_after_repeated_failures() -> None:
+    """重建连续失败：退避重试，达上限转 blocked，并只记一次 blocked 计数。"""
+    store = _FailingResetStore()
+    cluster = _Cluster(follower_store=store)
+    for seq in range(5):
+        await _append(cluster.writer, seq=seq)
+    await _trim_leader(cluster, start=3)
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    for _ in range(REPLICATION_RESYNC_MAX_FAILURES):
+        await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+        # 退避窗口内：同一轮内再拉一次不重复尝试重建
+        await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+        cluster.clock.advance(60_000)
+    # 第 N+1 轮：失败数已达上限，转 blocked（本轮不再尝试重建）
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert store.reset_calls == REPLICATION_RESYNC_MAX_FAILURES
+    assert state.resync_state == RESYNC_STATE_BLOCKED
+    assert cluster.follower_metrics.resync_counts.get("error") == REPLICATION_RESYNC_MAX_FAILURES
+    assert cluster.follower_metrics.resync_counts.get("blocked") == 1
+    # blocked 之后不再尝试重建（只告警一次、不刷屏）
+    cluster.clock.advance(60_000)
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    assert store.reset_calls == REPLICATION_RESYNC_MAX_FAILURES
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_store_wrappers_delegate_reset_to() -> None:
+    """02-11：复制门面与唤醒包装都原样透传重置（起点与末端同置）。"""
+    inner = InMemoryMessageStore()
+    coordinator = ReplicationCoordinator(config=_config(nodes=("n1",), factor=1, min_insync=1), store=inner)
+    replicated = ReplicatedMessageStore(inner, replication=coordinator)
+    assert await replicated.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION_NO, offset=3) == 3
+    assert await inner.leo(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 3
+    notifying = NotifyingMessageStore(inner, waiter=DeliveryWaiter())
+    assert await notifying.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION_NO, offset=5) == 5
+    assert await inner.start_offset(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 5
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_visible_limit_is_zero_while_resyncing() -> None:
+    """重建期间不给可读区间（不暴露半初始化视图）。"""
+    cluster = _Cluster()
+    await _append(cluster.writer, seq=0)
+    await cluster.follower.pull_once(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    state = await cluster.follower.attach_partition(topic_id=TOPIC_ID, partition_no=PARTITION_NO)
+    state.hw = state.local_leo = 1
+    assert await cluster.follower.visible_limit(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 1
+    state.resync_state = RESYNC_STATE_RESYNCING
+    assert await cluster.follower.visible_limit(topic_id=TOPIC_ID, partition_no=PARTITION_NO) == 0

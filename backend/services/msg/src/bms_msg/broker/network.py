@@ -479,6 +479,22 @@ def _error_detail(response: httpx.Response) -> ConcurrentStableDict[str, object]
     return ConcurrentStableDict()
 
 
+def _int_or_none(value: object) -> int | None:
+    """把内部错误体里的数字证据转成 int（非数字一律丢弃）。
+
+    Args:
+        value: 原始值（JSON 里可能是 int 或数字字符串）。
+
+    Returns:
+        int | None: 转换结果；不可转换返回 None。
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def _raise_for_status(response: httpx.Response, *, operation: str, metrics: TransportErrorMetrics | None) -> None:
     """把非 2xx 的内部响应映射成复制领域异常。
 
@@ -499,10 +515,10 @@ def _raise_for_status(response: httpx.Response, *, operation: str, metrics: Tran
     if response.status_code == 409:
         raise StaleLeaderError(str(detail.get("detail") or "leader 任期过期"))
     if response.status_code == 410:
-        leader_leo = detail.get("leader_leo")
         raise ReplicationDivergedError(
             str(detail.get("detail") or "副本位点发散"),
-            leader_leo=int(leader_leo) if isinstance(leader_leo, int | str) and str(leader_leo).isdigit() else None,
+            leader_leo=_int_or_none(detail.get("leader_leo")),
+            leader_start=_int_or_none(detail.get("leader_start")),
         )
     if metrics is not None:
         metrics.record(operation=operation, reason="protocol" if response.status_code == 400 else "http")

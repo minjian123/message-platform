@@ -685,3 +685,31 @@ def test_internal_channel_multi_instance_success(monkeypatch: pytest.MonkeyPatch
     )
     assert config.port == 8001
     assert config.endpoints["msg-2"] == "http://msg-2:8001"
+
+
+@pytest.mark.kiwi_id(2507)
+async def test_fetch_diverged_carries_leader_start() -> None:
+    """02-11：410 透传 leader_start——数字字符串转 int，不可解析置 None。"""
+    metrics = TransportErrorMetrics()
+
+    def run(detail: dict[str, object]) -> HttpReplicaTransport:
+        return HttpReplicaTransport(
+            config=_config(),
+            tokens=ServiceTokenProvider(cast("object", FakeIssuer())),  # type: ignore[arg-type]
+            metrics=metrics,
+            transport=httpx.MockTransport(lambda _request: httpx.Response(410, json={"detail": detail})),
+        )
+
+    numeric = run({"reason": "diverged", "leader_leo": "7", "leader_start": "5"})
+    with pytest.raises(ReplicationDivergedError) as captured:
+        await numeric.fetch(_fetch_request())
+    await numeric.aclose()
+    assert captured.value.leader_leo == 7
+    assert captured.value.leader_start == 5
+
+    garbage = run({"reason": "diverged", "leader_leo": "x", "leader_start": "y"})
+    with pytest.raises(ReplicationDivergedError) as captured_garbage:
+        await garbage.fetch(_fetch_request())
+    await garbage.aclose()
+    assert captured_garbage.value.leader_leo is None
+    assert captured_garbage.value.leader_start is None
