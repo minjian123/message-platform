@@ -527,5 +527,9 @@ async def test_reset_to_rebuilds_log_from_offset(tmp_path: Path) -> None:
     assert await reopened.leo(topic_id=TOPIC_ID, partition_no=PARTITION) == target
 
     assert await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=target) == target
+    # 别的分区的 log_id 不进本轮清理（同主题其它分区的缓存必须原样保留）
+    await _append(store, index=99, partition_no=1)
+    assert await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=target) == target
+    assert await store.find_by_log_id(log_id="l-99") is not None
     with pytest.raises(ParamError):
         await store.reset_to(topic_id=TOPIC_ID, partition_no=PARTITION, offset=-1)
