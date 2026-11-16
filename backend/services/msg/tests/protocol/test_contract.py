@@ -49,8 +49,12 @@ def test_contract_lists_all_frame_types_and_reserved_ranges() -> None:
     assert contract["frame_types"]["5"] == "nack"
     # 03-5 新增 message=6（帧式推送）：数据面预留顺延到 7 起，否则契约自相矛盾。
     assert contract["frame_types"]["6"] == "message"
+    # 03-6-2 新增 join=7 / leave=8 / member_heartbeat=9：数据面预留顺延到 10 起。
+    assert contract["frame_types"]["7"] == "join"
+    assert contract["frame_types"]["8"] == "leave"
+    assert contract["frame_types"]["9"] == "member_heartbeat"
     data_plane = next(item for item in contract["reserved_types"] if item["name"] == "data-plane-reserved")
-    assert data_plane["range"] == "7-15"
+    assert data_plane["range"] == "10-15"
 
 
 def test_contract_declares_payload_rules() -> None:

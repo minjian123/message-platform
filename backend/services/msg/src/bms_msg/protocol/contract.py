@@ -88,7 +88,7 @@ def frame_contract() -> ConcurrentStableDict[str, Any]:
             "frame_types": ConcurrentStableDict({str(int(member)): member.name.lower() for member in FrameType}),
             "reserved_types": ConcurrentStableList(
                 [
-                    {"range": "7-15", "name": "data-plane-reserved"},
+                    {"range": "10-15", "name": "data-plane-reserved"},
                     {"range": "18-31", "name": "control-plane-reserved"},
                     {"range": "32-47", "name": "admin"},
                     {"range": "48-63", "name": "rpc"},

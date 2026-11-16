@@ -18,6 +18,7 @@ from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
 
 from bms_msg.errors import ErrorCategory
+from bms_msg.schemas.group import LeaveResult, MemberAssignment
 from bms_msg.schemas.message import AckResult, ConsumeResult, MessageItem, NackResult, PublishResult
 from bms_msg.schemas.transport import ConnectionInfo, StreamOpen
 
@@ -219,6 +220,48 @@ def error_frame(
     )
 
 
+def _member_assignment_fields(result: MemberAssignment) -> ConcurrentStableDict[str, Any]:
+    """成员分配的帧头字段（九项，与客户端 `Assignment` 同名同义）。
+
+    `partitions` 转成内置列表：帧头由 MessagePack 编码，插入序并发集合类不是序列化边界。
+
+    Args:
+        result: 加入 / 成员心跳的结果。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 待平铺进帧头的字段。
+    """
+    fields: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    fields.set("group", result.group)
+    fields.set("topic", result.topic)
+    fields.set("consumer_id", result.consumer_id)
+    fields.set("generation", result.generation)
+    fields.set("state", result.state)
+    fields.set("partitions", list(result.partitions))
+    fields.set("member_count", result.member_count)
+    fields.set("heartbeat_interval_ms", result.heartbeat_interval_ms)
+    fields.set("session_timeout_ms", result.session_timeout_ms)
+    return fields
+
+
+def _leave_fields(result: LeaveResult) -> ConcurrentStableDict[str, Any]:
+    """离开结果的帧头字段（五项；客户端只用于排障，不参与状态判定）。
+
+    Args:
+        result: 离开结果。
+
+    Returns:
+        ConcurrentStableDict[str, Any]: 待平铺进帧头的字段。
+    """
+    fields: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    fields.set("group", result.group)
+    fields.set("topic", result.topic)
+    fields.set("consumer_id", result.consumer_id)
+    fields.set("generation", result.generation)
+    fields.set("state", result.state)
+    return fields
+
+
 def result_frame(*, frame_type: int, request_id: str | None, result: object) -> bytes:
     """编码成功结果帧（同 type + response 位）。
 
@@ -258,6 +301,14 @@ def result_frame(*, frame_type: int, request_id: str | None, result: object) -> 
             header.set(name, value)
         header.set("request_id", request_id)
         header.set("protocol_version", PROTOCOL_VERSION)
+    elif frame_type in (int(FrameType.JOIN), int(FrameType.MEMBER_HEARTBEAT)) and isinstance(result, MemberAssignment):
+        # 加入与成员心跳返回同一份分配：九个字段平铺，客户端按同名键还原成 `Assignment`。
+        for name, value in _member_assignment_fields(result).items():
+            header.set(name, value)
+    elif frame_type == int(FrameType.LEAVE) and isinstance(result, LeaveResult):
+        # 离开结果只有五项（组 / 主题 / 成员 / 世代 / 状态），客户端只用于排障。
+        for name, value in _leave_fields(result).items():
+            header.set(name, value)
     else:
         raise TypeError(f"帧类型 {frame_type} 与结果类型 {type(result).__name__} 不匹配")
     return encode_frame(

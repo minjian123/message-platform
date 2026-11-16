@@ -3,6 +3,8 @@
 四件事：
 
 1. **复用数据面端点**：`/msg/publish`、`/msg/consume`、`/msg/ack`、`/msg/nack` 直接调 `mount_data_plane()` 挂载，
+   成员三端点 `/msg/join`、`/msg/heartbeat`、`/msg/leave` 调 `mount_member_plane()` 挂载
+   （两者都是「同一实现、两种承载」），
    与 `/api/v1/msg/*` **同一个实现、同一份错误码声明**——HTTP/2 下先跑通同一套语义，03-2 再把 body
    换成二进制帧（路径与网关口径此后不再动）。
 2. **`GET /msg/subscribe`**：SSE 长驻流（server streaming）。内部逐批调用 `DeliveryService.consume`，
@@ -44,6 +46,7 @@ from fastapi.responses import StreamingResponse
 
 from bms_msg.acl.keys import ACL_ACTION_SUBSCRIBE
 from bms_msg.acl.service import TopicAclService
+from bms_msg.api.data.groups import mount_member_plane
 from bms_msg.api.data.messages import (
     CONSUME_ERROR_CODES,
     CONSUME_PERMISSION,
@@ -76,7 +79,7 @@ from bms_msg.api.deps import (
     UowFactoryDep,
     WaiterDep,
 )
-from bms_msg.api.frame.gate import build_frame_gate
+from bms_msg.api.frame.gate import build_frame_gate, build_member_frame_gate
 from bms_msg.api.frame.guard import (
     CONNECTION_GUARD,
     CONNECTION_INFO_GUARD,
@@ -170,6 +173,25 @@ def _frame_gate(spec: DataPlaneRoute) -> params.Depends:
 
 mount_data_plane(router, frame_gate=_frame_gate)
 """复用数据面端点（与 `/api/v1/msg/*` 同一规格），并挂 `application/x-msg-frame` 帧形态。"""
+
+
+def _member_frame_gate(spec: DataPlaneRoute) -> params.Depends:
+    """把成员帧闸门适配成路由依赖（只有根路径 `/msg/*` 挂；`/api/v1` 保持纯 JSON）。
+
+    Args:
+        spec: 成员端点规格（提供帧类型与请求模型）。
+
+    Returns:
+        params.Depends: 该端点的帧闸门依赖。
+    """
+    return Depends(build_member_frame_gate(frame_type=spec.frame_type, request_model=spec.request_model))
+
+
+mount_member_plane(router, frame_gate=_member_frame_gate)
+"""成员三端点补挂根路径（`/msg/{join,heartbeat,leave}`）：与 `/api/v1` 同一实现，另加帧形态。
+
+03-6-2 之前成员端点只有 `/api/v1/msg/*` 一处——SDK 按 `/msg/join` 调用会 404，帧形态也无处可落。
+"""
 
 _CONSUME = Depends(require_permission(CONSUME_PERMISSION))
 """长驻流权限依赖（与拉取 / 确认同码：消费即持有 `msg:consume`）。"""

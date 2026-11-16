@@ -11663,6 +11663,304 @@
         ]
       }
     },
+    "/msg/heartbeat": {
+      "post": {
+        "description": "成员心跳（独立于业务处理：处理慢不会因心跳断而被误判死亡）。\n\n需要 msg:consume 权限；顺带清理同组超时成员，必要时重算分配并返回新 `generation`。\n组不存在 350013，成员不在组内或已超时失效 350014。",
+        "operationId": "heartbeat_msg_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MemberAssignment_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Heartbeat",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350014,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/msg/join": {
+      "post": {
+        "description": "加入消费组（服务端主导分配）。\n\n需要 msg:consume 权限；组按 `(namespace, topic)` 维度建，同 `consumer_id` 再次加入视为重连\n（刷新存活、不递增世代、分配不变）。返回 `generation` 与 `partitions`，客户端按分配拉取。\n主题不存在 350001，命名空间非已启用 module_key 返回 350010，组数配额已满返回 350026。",
+        "operationId": "join_msg_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_MemberAssignment_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Join",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350010,
+          350026,
+          350011,
+          350012
+        ]
+      }
+    },
+    "/msg/leave": {
+      "post": {
+        "description": "主动离开消费组（幂等：未注册成员也返回成功）。\n\n需要 msg:consume 权限；离开后若组内仍有他人则立即重算分配，最后一名成员离开则组转 `empty`\n（组记录与位点保留）。组不存在 350013。",
+        "operationId": "leave_msg_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_LeaveResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "未认证"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "无权限"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "资源不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "限流"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "服务异常"
+          }
+        },
+        "summary": "Leave",
+        "tags": [
+          "msg-frame"
+        ],
+        "x-error-codes": [
+          350001,
+          350013,
+          350010,
+          350011,
+          350012
+        ]
+      }
+    },
     "/msg/nack": {
       "post": {
         "description": "拒绝一条消息（转死信 + 位点前移；03-3 详细设计 §5.2）。\n\n需要 msg:consume 权限（拿消息的人才能拒消息）；须是该分区的当前持有者（组不存在 350013，\n成员失效或分区已易主 350014）。位点越界 350002，消息不在投递中 350003。\n已死信的 offset 重复上报**幂等**（返回当前位点，不重复入队），因此本端点不声明 `350007`。",
@@ -12649,7 +12947,10 @@
       "4": "subscribe",
       "48": "rpc",
       "5": "nack",
-      "6": "message"
+      "6": "message",
+      "7": "join",
+      "8": "leave",
+      "9": "member_heartbeat"
     },
     "known_unsupported": {},
     "limits": {
@@ -12691,7 +12992,7 @@
     "reserved_types": [
       {
         "name": "data-plane-reserved",
-        "range": "7-15"
+        "range": "10-15"
       },
       {
         "name": "control-plane-reserved",

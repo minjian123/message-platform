@@ -10,8 +10,12 @@
 FastAPI 的依赖先于请求体校验执行，因此「在依赖里判定帧形态、自己处理、用异常短路端点」既保住单路由，
 也让 JSON 分支零改动。
 
-**职责边界**：只做「解码 → 组装入参模型 → 调 `api/data/messages.py` 的同一批函数 → 编码结果」。
-业务语义（保留清理 / 成员守卫 / 投递 / 停等 / 延迟）仍然只有一份，闸门里一行不写。
+**职责边界**：只做「解码 → 组装入参模型 → 调业务函数 → 编码结果」。业务语义（保留清理 / 成员守卫 /
+投递 / 停等 / 延迟 / 成员分配）仍然只有一份，闸门里一行不写。
+
+**两族端点共用一份核心**（03-6-2）：数据面四端点与成员三端点的依赖集不同（成员用不到存储 / 限流 /
+水位 / 延迟区），因此 `_handle_frame` 只收「租户 + 调用回调」，由两个闸门工厂各自声明依赖集并组装
+回调——解码 / 类型匹配 / 必填头 / 租户一致性 / 未知类型忽略 / 错误帧装配 / 日志六段仍只有一份。
 """
 
 from __future__ import annotations
@@ -21,6 +25,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from bms_core.api.errors import build_error_response
+from bms_core.core.concurrent import (
+    ConcurrentStableDict,
+    ConcurrentStableFrozenDict,
+    ConcurrentStableFrozenList,
+    ConcurrentStableFrozenSet,
+)
 from bms_core.core.exceptions import BizError, ParamError
 from bms_core.core.logging import get_logger
 from bms_core.db.unit_of_work import UnitOfWork
@@ -43,6 +53,15 @@ from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel, ValidationError
 
 from bms_msg.acl.service import TopicAclService
+from bms_msg.api.data.groups import (
+    heartbeat as member_heartbeat,
+)
+from bms_msg.api.data.groups import (
+    join as member_join,
+)
+from bms_msg.api.data.groups import (
+    leave as member_leave,
+)
 from bms_msg.api.data.messages import (
     PlatformUowDep,
     ack,
@@ -100,6 +119,7 @@ from bms_msg.errors import (
     MsgVersionUnsupportedError,
 )
 from bms_msg.quota.service import QuotaService
+from bms_msg.schemas.group import MemberRequest
 from bms_msg.schemas.message import AckRequest, ConsumeRequest, NackRequest, PublishRequest
 from bms_msg.tenant.context import CurrentTenant
 from bms_msg.usage.counter import DeliveryCounter
@@ -108,6 +128,7 @@ from bms_msg.usage.snapshot import UsageSnapshotService
 __all__ = [
     "FrameHandled",
     "build_frame_gate",
+    "build_member_frame_gate",
     "ensure_frame_tenant",
     "is_frame_request",
     "register_frame_handlers",
@@ -264,10 +285,16 @@ def _ensure_frame_type(frame: Frame, expected: int) -> None:
         raise MsgFrameInvalidError(f"心跳帧请发到 /msg/connection/heartbeat；{_FRAME_MISMATCH_HINT}")
     if frame.frame_type == int(FrameType.NACK):
         raise MsgFrameInvalidError(f"nack 帧请发到 /msg/nack；{_FRAME_MISMATCH_HINT}")
+    if frame.frame_type == int(FrameType.JOIN):
+        raise MsgFrameInvalidError(f"加入帧请发到 /msg/join；{_FRAME_MISMATCH_HINT}")
+    if frame.frame_type == int(FrameType.LEAVE):
+        raise MsgFrameInvalidError(f"离开帧请发到 /msg/leave；{_FRAME_MISMATCH_HINT}")
+    if frame.frame_type == int(FrameType.MEMBER_HEARTBEAT):
+        raise MsgFrameInvalidError(f"成员心跳帧请发到 /msg/heartbeat；{_FRAME_MISMATCH_HINT}")
     raise MsgFrameInvalidError(f"{_FRAME_MISMATCH_HINT}（收到 {frame.frame_type}，期望 {expected}）")
 
 
-def _ensure_required(header: Mapping[str, Any], required: tuple[str, ...]) -> None:
+def _ensure_required(header: ConcurrentStableFrozenDict[str, Any], required: ConcurrentStableFrozenList[str]) -> None:
     """校验必填头（缺**键**属协议层 `350018`；键在而值非法属契约层 `10001`）。
 
     Args:
@@ -316,7 +343,11 @@ def _payload_of(frame: Frame) -> bytes:
     return payload
 
 
-def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: bytes) -> dict[str, Any]:
+def _model_input(
+    header: ConcurrentStableFrozenDict[str, Any],
+    allowed: ConcurrentStableFrozenSet[str],
+    payload: bytes,
+) -> ConcurrentStableDict[str, Any]:
     """按「已知键白名单」把帧头转成模型入参（未知键忽略 = 铁律 2）。
 
     **payload 段不进模型**：原始字节走模型的私有通道（`set_raw_payload`），`payload` 字段保持空串，
@@ -328,7 +359,7 @@ def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: by
         payload: 帧 payload（publish 的消息体；本函数不使用，由调用方走私有通道）。
 
     Returns:
-        dict[str, Any]: 模型入参。
+        ConcurrentStableDict[str, Any]: 模型入参。
 
     Raises:
         MsgFrameInvalidError: 头里出现 `payload` 键（消息体必须走 body，`350018`）。
@@ -336,9 +367,12 @@ def _model_input(header: Mapping[str, Any], allowed: frozenset[str], payload: by
     del payload
     if "payload" in header:
         raise MsgFrameInvalidError("消息体必须放在 payload 段，不得写进 header")
-    values = {key: header[key] for key in header if key in allowed and key != "payload"}
+    values: ConcurrentStableDict[str, Any] = ConcurrentStableDict()
+    for key in header:
+        if key in allowed and key != "payload":
+            values.set(key, header[key])
     if "payload" in allowed:
-        values["payload"] = ""
+        values.set("payload", "")
     return values
 
 
@@ -504,35 +538,19 @@ async def _invoke(
     return cast("ApiResponse[Any]", response).data
 
 
+FrameInvoke = Callable[[BaseModel], Awaitable[object]]
+"""闸门的调用回调：入参是已校验的请求模型，返回值是业务结果（结果帧据帧类型装配）。"""
+
+
 async def _handle_frame(
     *,
     request: Request,
     frame_type: int,
     request_model: type[BaseModel],
-    required: tuple[str, ...],
-    allowed: frozenset[str],
+    required: ConcurrentStableFrozenList[str],
+    allowed: ConcurrentStableFrozenSet[str],
     tenant: CurrentTenant,
-    uow: UnitOfWork,
-    store: MessageStore,
-    offsets: OffsetStore,
-    dead_letters: DeadLetterQueue,
-    state: DeliveryState,
-    groups: GroupStore,
-    delay_store: DelayStore,
-    delay_scheduler: DelayScheduler,
-    waiter: DeliveryWaiter,
-    backpressure: BackpressureTuning,
-    limiter: RateLimiter,
-    metrics: BackpressureMetrics,
-    cache: TopicCache,
-    throttle: RetentionThrottle,
-    directory: PartitionDirectory,
-    gate: StorageGate | None,
-    quota: QuotaService,
-    usage: UsageSnapshotService,
-    counter: DeliveryCounter,
-    acl: TopicAclService,
-    replication: ReplicationView | None,
+    invoke: FrameInvoke,
 ) -> Response:
     """处理一个帧请求（解码 → 校验 → 调用 → 编码）。
 
@@ -543,23 +561,7 @@ async def _handle_frame(
         required: 必填头键（模型必填字段）。
         allowed: 模型字段白名单。
         tenant: 当前租户。
-        uow: 平台库工作单元。
-        store: 消息存储。
-        offsets: 位点存储。
-        dead_letters: 死信队列。
-        state: 投递状态。
-        groups: 组存储。
-        delay_store: 延迟区。
-        delay_scheduler: 到期推进器。
-        waiter: 分区唤醒器。
-        backpressure: inflight 双阈值。
-        limiter: 生产限流器。
-        metrics: 背压指标收集器。
-        cache: 进程内主题快照缓存（01-7）。
-        throttle: 保留清理节流窗口表（01-7）。
-        directory: 分区目录登记表（02-1）。
-        gate: 存储水位闸门（02-6；None 表示未装配，不判）。
-        replication: 复制运行态视图（02-4；None 表示复制关闭）。
+        invoke: 调用回调（数据面 / 成员面各自组装，本函数不管业务语义）。
 
     Returns:
         Response: 帧响应（成功或错误帧，均为 200）。
@@ -579,11 +581,12 @@ async def _handle_frame(
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="ignored")
         return Response(status_code=200, content=b"", media_type=FRAME_MEDIA_TYPE)
     try:
+        header: ConcurrentStableFrozenDict[str, Any] = ConcurrentStableFrozenDict(frame.header)
         _ensure_frame_type(frame, frame_type)
-        _ensure_required(frame.header, required)
+        _ensure_required(header, required)
         ensure_frame_tenant(frame.header, tenant)
         payload = _payload_of(frame)
-        model = request_model.model_validate(_model_input(frame.header, allowed, payload))
+        model = request_model.model_validate(_model_input(header, allowed, payload))
         if isinstance(model, PublishRequest):
             model.set_raw_payload(payload)
         _normalize_payload_marks(frame, model)
@@ -613,32 +616,7 @@ async def _handle_frame(
             request=request,
         ) from exc
     try:
-        result = await _invoke(
-            frame_type=frame_type,
-            model=model,
-            tenant=tenant,
-            uow=uow,
-            store=store,
-            offsets=offsets,
-            dead_letters=dead_letters,
-            state=state,
-            groups=groups,
-            delay_store=delay_store,
-            delay_scheduler=delay_scheduler,
-            waiter=waiter,
-            backpressure=backpressure,
-            limiter=limiter,
-            metrics=metrics,
-            cache=cache,
-            throttle=throttle,
-            directory=directory,
-            gate=gate,
-            quota=quota,
-            usage=usage,
-            counter=counter,
-            acl=acl,
-            replication=replication,
-        )
+        result = await invoke(model)
     except MsgError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
         message = exc.message or str(exc)
@@ -675,6 +653,48 @@ async def _handle_frame(
     return _response(result_frame(frame_type=frame_type, request_id=request_id, result=result))
 
 
+async def _run_frame(
+    request: Request,
+    *,
+    frame_type: int,
+    request_model: type[BaseModel],
+    required: ConcurrentStableFrozenList[str],
+    allowed: ConcurrentStableFrozenSet[str],
+    tenant: CurrentTenant,
+    invoke: FrameInvoke,
+) -> None:
+    """两族闸门共用的尾巴：帧形态整单处理并短路端点，非帧形态直接放行。
+
+    抽出来是为了让「非帧放行 + 处理后短路」只有一处实现——两族各写一遍时，改一侧容易漏另一侧，
+    覆盖率判定也会随「哪族用例被选测」而漂移。
+
+    Args:
+        request: 当前请求。
+        frame_type: 该路径期望的帧类型。
+        request_model: 请求模型。
+        required: 必填头键（模型必填字段）。
+        allowed: 模型字段白名单。
+        tenant: 当前租户。
+        invoke: 调用回调（各端点族组装）。
+
+    Raises:
+        FrameHandled: 帧请求已处理完毕（携带响应）。
+        MsgError: 帧不可解析（4xx JSON）。
+    """
+    if not is_frame_request(request):
+        return
+    response = await _handle_frame(
+        request=request,
+        frame_type=frame_type,
+        request_model=request_model,
+        required=required,
+        allowed=allowed,
+        tenant=tenant,
+        invoke=invoke,
+    )
+    raise FrameHandled(response)
+
+
 def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Callable[..., Awaitable[None]]:
     """构造某端点专用的帧闸门依赖（必填键与白名单取自请求模型，不另维护一份字段表）。
 
@@ -685,8 +705,10 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
     Returns:
         Callable[..., Awaitable[None]]: 可直接 `Depends(...)` 的闸门函数。
     """
-    required = ("request_id", *(name for name, field in request_model.model_fields.items() if field.is_required()))
-    allowed = frozenset(request_model.model_fields)
+    required: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+        ("request_id", *(name for name, field in request_model.model_fields.items() if field.is_required()))
+    )
+    allowed: ConcurrentStableFrozenSet[str] = ConcurrentStableFrozenSet(request_model.model_fields)
 
     async def gate(
         request: Request,
@@ -740,37 +762,186 @@ def build_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Call
             FrameHandled: 帧请求已处理完毕（携带响应）。
             MsgError: 帧不可解析（4xx JSON）。
         """
-        if not is_frame_request(request):
-            return
-        response = await _handle_frame(
-            request=request,
+
+        async def _call(model: BaseModel) -> object:
+            """把数据面的一整组依赖注入同一批业务函数（语义唯一出处仍在 `api/data/messages.py`）。
+
+            Args:
+                model: 已校验的请求模型。
+
+            Returns:
+                object: 业务结果模型。
+            """
+            return await _invoke(
+                frame_type=frame_type,
+                model=model,
+                tenant=tenant,
+                uow=uow,
+                store=store,
+                offsets=offsets,
+                dead_letters=dead_letters,
+                state=state,
+                groups=groups,
+                delay_store=delay_store,
+                delay_scheduler=delay_scheduler,
+                waiter=waiter,
+                backpressure=backpressure,
+                limiter=limiter,
+                metrics=metrics,
+                cache=cache,
+                throttle=throttle,
+                directory=directory,
+                gate=gate,
+                quota=quota,
+                usage=usage,
+                counter=counter,
+                acl=topic_acl,
+                replication=replication,
+            )
+
+        await _run_frame(
+            request,
             frame_type=frame_type,
             request_model=request_model,
             required=required,
             allowed=allowed,
             tenant=tenant,
-            uow=uow,
-            store=store,
-            offsets=offsets,
-            dead_letters=dead_letters,
-            state=state,
-            groups=groups,
-            delay_store=delay_store,
-            delay_scheduler=delay_scheduler,
-            waiter=waiter,
-            backpressure=backpressure,
-            limiter=limiter,
-            metrics=metrics,
-            cache=cache,
-            throttle=throttle,
-            directory=directory,
-            gate=gate,
-            quota=quota,
-            usage=usage,
-            counter=counter,
-            acl=topic_acl,
-            replication=replication,
+            invoke=_call,
         )
-        raise FrameHandled(response)
+
+    return gate
+
+
+async def _member_invoke(
+    *,
+    frame_type: int,
+    model: BaseModel,
+    tenant: CurrentTenant,
+    uow: UnitOfWork,
+    groups: GroupStore,
+    delivery: DeliveryState,
+    cache: TopicCache,
+    quota: QuotaService,
+    acl: TopicAclService,
+) -> object:
+    """按帧类型调用成员三端点的同一批函数（语义唯一出处仍在 `api/data/groups.py`）。
+
+    Args:
+        frame_type: 帧类型（加入 / 成员心跳 / 离开）。
+        model: 请求模型（`MemberRequest`）。
+        tenant: 当前租户。
+        uow: 平台库工作单元（取主题仓储会话）。
+        groups: 组存储。
+        delivery: 投递状态（撤销易主分区时清在途）。
+        cache: 进程内主题快照缓存。
+        quota: 配额服务（加入时新建组要判组数配额）。
+        acl: 主题 ACL 服务（加入时判订阅权限；心跳与离开不再判）。
+
+    Returns:
+        object: 结果模型（`MemberAssignment` / `LeaveResult`）。
+
+    Raises:
+        TypeError: 帧类型未知（装配错误）。
+    """
+    request = cast("MemberRequest", model)
+    if frame_type == int(FrameType.JOIN):
+        response = await member_join(
+            req=request,
+            tenant=tenant,
+            uow=uow,
+            groups=groups,
+            delivery=delivery,
+            cache=cache,
+            quota=quota,
+            acl=acl,
+        )
+    elif frame_type == int(FrameType.MEMBER_HEARTBEAT):
+        response = await member_heartbeat(
+            req=request, tenant=tenant, uow=uow, groups=groups, delivery=delivery, cache=cache
+        )
+    elif frame_type == int(FrameType.LEAVE):
+        response = await member_leave(
+            req=request, tenant=tenant, uow=uow, groups=groups, delivery=delivery, cache=cache
+        )
+    else:  # pragma: no cover - 类型在挂载期已固定为三种之一
+        raise TypeError(f"未支持的成员帧类型：{frame_type}")
+    return cast("ApiResponse[Any]", response).data
+
+
+def build_member_frame_gate(*, frame_type: int, request_model: type[BaseModel]) -> Callable[..., Awaitable[None]]:
+    """构造成员端点专用的帧闸门依赖（依赖集只有成员语义需要的那几项）。
+
+    与 `build_frame_gate` 共用 `_handle_frame` 的解码 / 校验 / 编码与错误帧装配，差别只在依赖集与
+    调用回调——成员端点用不到存储 / 限流 / 水位 / 延迟区，硬套数据面那一整套会让依赖装配变成假前置。
+
+    Args:
+        frame_type: 该路径期望的帧类型（7 / 8 / 9）。
+        request_model: 请求模型（`MemberRequest`）。
+
+    Returns:
+        Callable[..., Awaitable[None]]: 可直接 `Depends(...)` 的闸门函数。
+    """
+    required: ConcurrentStableFrozenList[str] = ConcurrentStableFrozenList(
+        ("request_id", *(name for name, field in request_model.model_fields.items() if field.is_required()))
+    )
+    allowed: ConcurrentStableFrozenSet[str] = ConcurrentStableFrozenSet(request_model.model_fields)
+
+    async def gate(
+        request: Request,
+        tenant: DataPlaneTenantDep,
+        uow: PlatformUowDep,
+        groups: GroupStoreDep,
+        delivery: DeliveryStateDep,
+        cache: TopicCacheDep,
+        quota: QuotaServiceDep,
+        topic_acl: TopicAclServiceDep,
+    ) -> None:
+        """帧形态则整单处理并短路端点；非帧形态直接放行（JSON 路径零改动）。
+
+        Args:
+            request: 当前请求。
+            tenant: 当前租户。
+            uow: 平台库工作单元。
+            groups: 组存储。
+            delivery: 投递状态。
+            cache: 进程内主题快照缓存。
+            quota: 配额服务。
+            topic_acl: 主题 ACL 服务。
+
+        Raises:
+            FrameHandled: 帧请求已处理完毕（携带响应）。
+            MsgError: 帧不可解析（4xx JSON）。
+        """
+
+        async def _call(model: BaseModel) -> object:
+            """把成员端点需要的依赖注入同一批业务函数。
+
+            Args:
+                model: 已校验的请求模型。
+
+            Returns:
+                object: 业务结果模型。
+            """
+            return await _member_invoke(
+                frame_type=frame_type,
+                model=model,
+                tenant=tenant,
+                uow=uow,
+                groups=groups,
+                delivery=delivery,
+                cache=cache,
+                quota=quota,
+                acl=topic_acl,
+            )
+
+        await _run_frame(
+            request,
+            frame_type=frame_type,
+            request_model=request_model,
+            required=required,
+            allowed=allowed,
+            tenant=tenant,
+            invoke=_call,
+        )
 
     return gate

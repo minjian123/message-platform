@@ -1,4 +1,7 @@
-"""消费组数据面接口（`/api/v1/msg/join`、`/msg/heartbeat`、`/msg/leave`；详细设计 §7.1、§7.2）。
+"""消费组数据面接口（加入 / 心跳 / 离开；详细设计 §7.1、§7.2；帧形态见 03-6-2）。
+
+- **两处挂载、一份规格**：端点实现只定义一次，由 `MEMBER_ROUTES` + `mount_member_plane()` 挂到
+  `/api/v1/msg/*`（纯 JSON）与根路径 `/msg/*`（JSON + 帧，03-6-2）——与数据面四端点同一套做法。
 
 - **权限码**：三端点一律 `msg:consume`（成员身份属消费能力，不单开权限码）。
 - **租户**：数据面唯一出口 `get_data_plane_tenant()`（内部 `frame_tenant()`）；请求体不接收 `tenant`。
@@ -13,11 +16,13 @@ from bms_core.api.base import BaseRouter
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.db.session import DbSession, get_platform_uow
 from bms_core.db.unit_of_work import UnitOfWork
+from bms_core.msgclient.frame import FrameType
 from bms_core.permission.base import require_permission
 from bms_core.schemas.common import ApiResponse
-from fastapi import Depends
+from fastapi import Depends, params
 
 from bms_msg.acl.keys import ACL_ACTION_SUBSCRIBE
+from bms_msg.api.data.messages import DataPlaneRoute, FrameGateFactory
 from bms_msg.api.deps import (
     DataPlaneTenantDep,
     DeliveryStateDep,
@@ -37,7 +42,7 @@ from bms_msg.quota.service import QuotaService
 from bms_msg.repositories.topic import TopicRepository
 from bms_msg.schemas.group import LeaveResult, MemberAssignment, MemberRequest
 
-__all__ = ["router"]
+__all__ = ["MEMBER_ROUTES", "mount_member_plane", "router"]
 
 _CONSUME = Depends(require_permission("msg:consume"))
 
@@ -133,7 +138,6 @@ def _assignment(state: MemberState, request: MemberRequest) -> MemberAssignment:
     )
 
 
-@router.post("/join", dependencies=[_CONSUME], openapi_extra={"x-error-codes": _JOIN_ERRORS})
 async def join(
     req: MemberRequest,
     tenant: DataPlaneTenantDep,
@@ -162,7 +166,6 @@ async def join(
     return ApiResponse.ok(_assignment(state, req))
 
 
-@router.post("/heartbeat", dependencies=[_CONSUME], openapi_extra={"x-error-codes": _HEARTBEAT_ERRORS})
 async def heartbeat(
     req: MemberRequest,
     tenant: DataPlaneTenantDep,
@@ -182,7 +185,6 @@ async def heartbeat(
     return ApiResponse.ok(_assignment(state, req))
 
 
-@router.post("/leave", dependencies=[_CONSUME], openapi_extra={"x-error-codes": _LEAVE_ERRORS})
 async def leave(
     req: MemberRequest,
     tenant: DataPlaneTenantDep,
@@ -208,3 +210,63 @@ async def leave(
             state=record.state,
         )
     )
+
+
+MEMBER_ROUTES: ConcurrentStableList[DataPlaneRoute] = ConcurrentStableList(
+    [
+        DataPlaneRoute(
+            path="/join",
+            endpoint=join,
+            dependencies=[_CONSUME],
+            error_codes=ConcurrentStableList(_JOIN_ERRORS),
+            frame_type=int(FrameType.JOIN),
+            request_model=MemberRequest,
+        ),
+        DataPlaneRoute(
+            path="/heartbeat",
+            endpoint=heartbeat,
+            dependencies=[_CONSUME],
+            error_codes=ConcurrentStableList(_HEARTBEAT_ERRORS),
+            frame_type=int(FrameType.MEMBER_HEARTBEAT),
+            request_model=MemberRequest,
+        ),
+        DataPlaneRoute(
+            path="/leave",
+            endpoint=leave,
+            dependencies=[_CONSUME],
+            error_codes=ConcurrentStableList(_LEAVE_ERRORS),
+            frame_type=int(FrameType.LEAVE),
+            request_model=MemberRequest,
+        ),
+    ]
+)
+"""成员端点规格（**唯一出处**：路径 / 方法 / 权限 / 错误码 / 帧类型只在这里写一次）。
+
+`/api/v1/msg/*` 与根路径 `/msg/*` 两处挂载都读它；新增成员端点或调整错误码时只改这里。
+成员心跳的帧类型是 9（成员心跳），**不是** 17（连接心跳）——两者同名不同义，端点也分开。
+"""
+
+
+def mount_member_plane(target: BaseRouter, *, frame_gate: FrameGateFactory | None = None) -> None:
+    """把成员端点挂到给定聚合路由（`/api/v1/msg/*` 与根路径 `/msg/*` 共用）。
+
+    Args:
+        target: 目标聚合路由（其 `prefix` 决定最终路径）。
+        frame_gate: 帧闸门依赖工厂（只有根路径 `/msg/*` 传；`/api/v1` 保持纯 JSON）。
+            传 None 时行为与 03-6-1 完全一致。
+    """
+    for spec in MEMBER_ROUTES:
+        dependencies: ConcurrentStableList[params.Depends] = ConcurrentStableList(spec.dependencies)
+        if frame_gate is not None:
+            dependencies.add(frame_gate(spec))
+        target.add_api_route(
+            spec.path,
+            spec.endpoint,
+            methods=["POST"],
+            dependencies=dependencies,
+            openapi_extra={"x-error-codes": list(spec.error_codes)},
+        )
+
+
+mount_member_plane(router)
+"""本模块路由（挂 `/api/v1` 后即 `/api/v1/msg/{join,heartbeat,leave}`；纯 JSON，无帧闸门）。"""
