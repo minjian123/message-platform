@@ -36,19 +36,18 @@ ruff_cmd = "uv run --project backend ruff"
 ruff_config = "backend/pyproject.toml"
 
 # ---- 特殊路径 → 必跑测试（按《测试规范》§2.1.1「目录同构 + 导入关系」之外的第三类依据）----
-# 帧网关一族源码在 `api/frame/`，用例却按用途散在 `tests/api/test_frame_*.py`（数据面 / 入口 /
-# 载荷 / 错误帧 / 成员面 / 订阅流），文件名与源模块名不同构。只按「同名测试优先」推导时，改
-# `api/frame/gate.py` 选不到 `test_frame_data_plane.py`，推送环的模块级 100% 覆盖率门禁会误判缺行
-# （2026-11-16 实测：gate.py 缺 19 行 / 12 分支，扩圈也补不上，因为扩圈只能找已执行测试的导入关系）。
-# 故声明「改 api/frame/ 任一文件 ⇒ 并入该帧用例全族」；规则只认首条命中，此处每条前缀互不重叠。
+# `tests/api/` 是**端点级**用例，按「承载面 + 业务行为」命名（`test_frame_*` / `test_data_*` /
+# `test_rate_limit` / `test_quota_*` / `test_admin_*`），与 `src/bms_msg/api/` 下的模块名不同构；
+# 且每个文件普遍横跨 api 与 broker 两层（端点级用例直接打应用，判的是路由、闸门、错误映射的组合行为）。
+# 只按「同名测试优先」推导会静默漏选，推送环的模块级 100% 覆盖率门禁据此误判缺行：
+#   2026-11-16 实测——改 `api/frame/gate.py` 时 `test_frame_data_plane.py`（数据面四端点）与
+#   `test_rate_limit.py`（429 + `Retry-After` 三行）双双落选，gate.py 报缺 22 行 / 8 分支；
+#   扩圈也补不上，因为扩圈只能沿「已执行测试的导入关系」找，找不到「本该执行却没执行」的文件。
+# 故声明「改 api/ 任一文件 ⇒ 并入整个端点级用例目录」，与 bms 仓按服务粒度并入测试目录的既有做法一致。
+# 规则只认首条命中，此处仅此一条覆盖 `api/` 全族，不再按 frame / admin 细分（细分仍会漏横跨两侧的用例）。
 [[rules.backend.extra_tests]]
-match_prefix = "backend/services/msg/src/bms_msg/api/frame/"
-test_dir_suffix = "/tests/api/test_frame_"
-
-# 管理面同款：`api/admin/` 的用例按页面 / 用途命名，与源模块名不同构。
-[[rules.backend.extra_tests]]
-match_prefix = "backend/services/msg/src/bms_msg/api/admin/"
-test_dir_suffix = "/tests/api/test_admin_"
+match_prefix = "backend/services/msg/src/bms_msg/api/"
+test_dir_suffix = "/tests/api/"
 
 [pytest]
 cmd = "uv run pytest"
