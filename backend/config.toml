@@ -86,8 +86,11 @@ options = {}
 
 [audit_log]
 # 操作审计中间件（bms 06_01）：写方法全记；这里显式排除数据面高频路径与已由业务显式审计的端点。
-# - 排除数据面：需求 05-6「普通读写不逐条留痕」，publish / consume / ack / 成员心跳 / 订阅流 /
-#   连接心跳 / RPC 逐条写会洪泛；这些路径的 401/403/429 由 msg 访问异常中间件补记；
+# - 排除数据面：需求 05-6「普通读写不逐条留痕」，publish / consume / ack / nack / 成员心跳 /
+#   订阅流 / 连接心跳 / RPC 逐条写会洪泛；这些路径的 401/403/429 由 msg 访问异常中间件补记；
+# - **两处挂载都要登**：数据面与成员面同时挂在 `/api/v1/msg/*` 与根路径 `/msg/*` 上（后者是帧入口），
+#   中间件按「路径相等或前缀」匹配，只登一处等于另一边照旧逐条落审计——台账 #48 即由此而来。
+#   护栏用例 `tests/test_audit_config_paths.py` 会从路由表自动推导应有条目，漏登即失败；
 # - 排除重放：重放由 msg 自身写「创建 + 终态」两条结果级审计（含范围与首末 log_id），
 #   中间件那条只有请求体，留着就是同一操作两条留痕；
 # - 排除管理写端点：建主题 / 配额 / 延迟处置 / 位点重置由 msg 显式动作审计（含强审计与 record_ref），
@@ -102,14 +105,21 @@ exclude_paths = [
   "/api/v1/msg/publish",
   "/api/v1/msg/consume",
   "/api/v1/msg/ack",
+  "/api/v1/msg/nack",
   "/api/v1/msg/join",
   "/api/v1/msg/heartbeat",
   "/api/v1/msg/leave",
+  "/api/v1/msg/subscribe",
+  "/api/v1/msg/connection/heartbeat",
+  "/msg/publish",
+  "/msg/consume",
+  "/msg/ack",
+  "/msg/nack",
   "/msg/join",
   "/msg/heartbeat",
   "/msg/leave",
-  "/api/v1/msg/subscribe",
-  "/api/v1/msg/connection/heartbeat",
+  "/msg/subscribe",
+  "/msg/connection/heartbeat",
   "/rpc",
   "/api/v1/msg/admin/replay",
   "/api/v1/msg/admin/topics",
@@ -117,4 +127,7 @@ exclude_paths = [
   "/api/v1/msg/admin/delayed",
   "/api/v1/msg/admin/acls",
   "/api/v1/msg/admin/offsets",
+  "/api/v1/msg/admin/dlq",
+  "/api/v1/msg/admin/groups",
+  "/api/v1/msg/admin/messages",
 ]
