@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from bms_core.core.concurrent import ConcurrentStableDict, ConcurrentStableList
 from bms_core.msgclient.frame import FRAME_CONTENT_TYPE, PROTOCOL_VERSION, FrameFlags, FrameType, encode_frame
@@ -29,6 +29,16 @@ __all__ = [
     "result_frame",
     "stream_open_frame",
 ]
+
+_MSGPACK_INT_MIN = -(2**63)
+"""帧头整数下限（MessagePack 的 `int64`）。"""
+
+_MSGPACK_INT_MAX = 2**64 - 1
+"""帧头整数上限（MessagePack 的 `uint64`）。
+
+**注意不是 `2**63-1`**：MessagePack 规范把整数分成 `uint64` 与 `int64` 两段，正数可用满
+`2**64-1`。基座雪花 ID 是 **126 位**（48 时间 + 40 机器 + 38 序列，`DECIMAL(38,0)`），
+必然越过该上限，故一律转十进制字符串下发（与 JSON 的雪花 ID 字符串口径一致）。"""
 
 _RETRYABLE_BUSINESS = frozenset({350005, 350015, 350020, 350021, 350025, 350026})
 """业务层里「等一会儿再试有意义」的码：限流 / 背压、延迟区已满、连接数 / 单连接流数超限、
@@ -144,6 +154,35 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _frame_safe(value: object) -> object:
+    """把随附数据规整成帧头可编码的形态（超 `uint64` / `int64` 两段的整数转十进制字符串）。
+
+    **为什么必须做**：帧头是 MessagePack，整数只有 `uint64`（≤ `2**64-1`）与 `int64`（≥ `-2**63`）
+    两段，没有更大的整数类型；基座雪花 ID 是 **126 位**（`DECIMAL(38,0)`），直接写入会
+    `OverflowError` → 整个错误帧装配失败（比丢字段更糟：500）。转字符串与 JSON 路径的
+    「雪花 ID 以字符串输出」同口径，客户端按需自行转换。
+
+    Args:
+        value: 任意随附数据（异常 `data` 通常是普通 dict，可能嵌套）。
+
+    Returns:
+        object: 可编码形态（映射与序列递归处理；其他类型原样返回，让编码期暴露装配问题）。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value if _MSGPACK_INT_MIN <= value <= _MSGPACK_INT_MAX else str(value)
+    if isinstance(value, float | str) or value is None:
+        return value
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        return {str(key): _frame_safe(item) for key, item in mapping.items()}
+    if isinstance(value, list | tuple):
+        sequence = cast("list[object] | tuple[object, ...]", value)
+        return [_frame_safe(item) for item in sequence]
+    return value
+
+
 def error_frame(
     *,
     code: int,
@@ -171,7 +210,7 @@ def error_frame(
     header.set("retryable", retryable)
     header.set("layer", layer)
     header.set("category", str(category))
-    header.set("detail", detail)
+    header.set("detail", _frame_safe(detail))
     header.set("retry_after_ms", retry_after_ms)
     return encode_frame(
         frame_type=int(FrameType.ERROR),

@@ -572,7 +572,7 @@ async def _handle_frame(
         frame = decode_frame(body)
     except MsgVersionUnsupportedError as exc:
         _log(frame_type=frame_type, request_id=None, request=request, outcome="transport_error")
-        raise FrameHandled(_response(error_frame(code=exc.code, message=str(exc)))) from exc
+        raise FrameHandled(_response(error_frame(code=exc.code, message=str(exc), detail=exc.data))) from exc
     request_id = _request_id(frame.header)
     if frame.frame_type not in _KNOWN_TYPES and not frame.flags & FrameFlags.NEED_RESPONSE:
         # 未知类型且不要求响应：按铁律「忽略」——不回错误帧，回一个空 200（客户端据此判定「已被忽略」）
@@ -643,8 +643,18 @@ async def _handle_frame(
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
         message = exc.message or str(exc)
         retry_ms = exc.retry_after_ms if isinstance(exc, MsgRateLimitedError) else None
+        # `data` 必须随帧下发：350022 的水位读数、350033 的 leader / epoch 都是客户端行动依据
+        # （350022 的 `_payload` 与本处注释均写明「JSON 与帧 detail 共用一份结构」，此前只兑现了 JSON 一侧）。
         raise FrameHandled(
-            _response(error_frame(code=exc.code, message=message, request_id=request_id, retry_after_ms=retry_ms))
+            _response(
+                error_frame(
+                    code=exc.code,
+                    message=message,
+                    request_id=request_id,
+                    detail=exc.data,
+                    retry_after_ms=retry_ms,
+                )
+            )
         ) from exc
     except BizError as exc:
         _log(frame_type=frame_type, request_id=request_id, request=request, outcome="business_error")
@@ -652,7 +662,14 @@ async def _handle_frame(
         # （如 82013 → 350027），避免两形态同码承诺落空。
         mapped = apply_error_mapper(exc)
         raise FrameHandled(
-            _response(error_frame(code=mapped.code, message=mapped.message or str(mapped), request_id=request_id))
+            _response(
+                error_frame(
+                    code=mapped.code,
+                    message=mapped.message or str(mapped),
+                    request_id=request_id,
+                    detail=mapped.data,
+                )
+            )
         ) from exc
     _log(frame_type=frame_type, request_id=request_id, request=request, outcome="ok")
     return _response(result_frame(frame_type=frame_type, request_id=request_id, result=result))
