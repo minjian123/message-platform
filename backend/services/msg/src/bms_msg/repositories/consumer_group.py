@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from bms_core.core.concurrent import ConcurrentStableList
 from bms_core.repositories.base_db_repository import BaseDbRepository
@@ -20,6 +20,25 @@ from bms_msg.broker.group import ConsumerGroup, GroupMember
 from bms_msg.models.consumer_group import GROUP_STATE_DEAD, GROUP_STATE_EMPTY, MsgConsumerGroup, MsgGroupMember
 
 __all__ = ["ConsumerGroupRepository"]
+
+
+def _as_utc(value: datetime) -> datetime:
+    """把库内时刻还原为带 UTC 时区的时刻（列类型 `DateTime` 无时区，读回是 naive）。
+
+    写入侧存的是 UTC 时刻（`member.joined_at` / `last_seen` 由协调器按 UTC 生成），
+    MySQL / SQLite 的 `DateTime` 列不保留时区，读回即 naive；直接与 `datetime.now(UTC)`
+    相减会抛 `TypeError: can't subtract offset-naive and offset-aware datetimes`
+    —— 表现为重启后首次 `ensure_member` 即 10000 `server_bug`。
+
+    Args:
+        value: 库内读出的时刻。
+
+    Returns:
+        datetime: 带 UTC 时区的时刻（naive 按 UTC 解释；已带时区则换算到 UTC）。
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class ConsumerGroupRepository(BaseDbRepository[MsgConsumerGroup]):
@@ -287,8 +306,8 @@ class ConsumerGroupRepository(BaseDbRepository[MsgConsumerGroup]):
             members=ConcurrentStableList(
                 GroupMember(
                     consumer_id=member.member_id,
-                    joined_at=member.joined_at,
-                    last_seen=member.last_heartbeat,
+                    joined_at=_as_utc(member.joined_at),
+                    last_seen=_as_utc(member.last_heartbeat),
                     partitions=ConcurrentStableList(sorted(int(item) for item in member.partitions)),
                 )
                 for member in members

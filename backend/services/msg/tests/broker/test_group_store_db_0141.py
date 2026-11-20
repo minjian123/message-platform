@@ -8,7 +8,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import cast
 
 import pytest
@@ -27,7 +27,7 @@ from bms_msg.broker.group import (
 )
 from bms_msg.broker.group_db import DatabaseGroupStore
 from bms_msg.models.consumer_group import MsgConsumerGroup, MsgGroupMember
-from bms_msg.repositories.consumer_group import ConsumerGroupRepository
+from bms_msg.repositories.consumer_group import ConsumerGroupRepository, _as_utc
 
 pytestmark = pytest.mark.kiwi_id(2496)
 
@@ -74,6 +74,15 @@ def _record(*members: str, state: str = GROUP_STATE_STABLE) -> ConsumerGroup:
     )
 
 
+def test_as_utc_normalises_naive_and_converts_aware() -> None:
+    """库内 naive 时刻按 UTC 解释；已带时区的换算到 UTC（会话超时判据须能直接相减）。"""
+    naive = datetime(2026, 11, 13, 12, 0)
+    assert _as_utc(naive) == NOW
+    assert _as_utc(NOW) == NOW
+    offset = datetime(2026, 11, 13, 20, 0, tzinfo=timezone(timedelta(hours=8)))
+    assert _as_utc(offset) == NOW
+
+
 async def test_save_and_load_round_trip(db_session: AsyncSession) -> None:
     """保存后能取回同快照：成员、分区、世代、命名空间一致，实例标识落库。"""
     store = _store(db_session)
@@ -88,6 +97,11 @@ async def test_save_and_load_round_trip(db_session: AsyncSession) -> None:
         ("c1", [0]),
         ("c2", [1]),
     ]
+    # 会话超时判据要能直接与 `datetime.now(UTC)` 相减：列无时区，读回须补回 UTC
+    # （否则重启后首次 `ensure_member` 抛 naive / aware 相减的 TypeError → 10000 server_bug）
+    assert [item.joined_at for item in loaded.members] == [NOW, NOW]
+    assert [item.last_seen for item in loaded.members] == [NOW, NOW]
+    assert all(item.last_seen.tzinfo is not None for item in loaded.members)
 
     instance = (await db_session.execute(select(MsgGroupMember.instance_id))).scalars().all()
     assert set(instance) == {"n1"}
