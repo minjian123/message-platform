@@ -32,6 +32,10 @@ x-service-env: &service-env
   # 归档库（部署态必须显式注入，否则归档链落回配置缺省的本地文件——容器重建即丢）
   BMS_DATABASE__ARCHIVE__URL: ${BMS_DATABASE__ARCHIVE__URL:?}
   BMS_DATABASE__ARCHIVE__PASSWORD: ${BMS_DATABASE__ARCHIVE__PASSWORD:-}
+  # 连接池（数据面长轮询在挂起期间持有数据库会话：缺省 5+10 会被空闲消费单元占满，
+  # 心跳 / join / 发布排队超时、`/readyz` 的库探针 30s 超时）；按消费单元规模放大
+  BMS_DATABASE__PLATFORM__POOL__POOL_SIZE: ${BMS_DATABASE__PLATFORM__POOL__POOL_SIZE:-20}
+  BMS_DATABASE__PLATFORM__POOL__MAX_OVERFLOW: ${BMS_DATABASE__PLATFORM__POOL__MAX_OVERFLOW:-40}
   # 外部依赖端点只经 .env 注入，编排内不写死任何地址 / 账号 / 端口
   BMS_REDIS__URL: ${BMS_REDIS__URL:?}
   BMS_TRACER__OTLP_ENDPOINT: ${BMS_TRACER__OTLP_ENDPOINT:?}
